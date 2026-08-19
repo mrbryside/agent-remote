@@ -197,60 +197,59 @@ if (process.env.AGENT_REMOTE_GRAPHICS === '1' || (!opensBrowser && !opensTab && 
   runReal();
 } else {
   const session = detectTmuxSession();
-  const shouldRoute = process.env.AGENT_REMOTE_WEB === '1' || Boolean(session);
-  if (!shouldRoute) {
-    runReal();
-  } else {
-    if (proxiesAction) {
-      const target = await browserTarget(session);
-      if (target?.browserKey) runReal(['action', '--browser', target.browserKey, ...args.slice(1)]);
-      else runReal();
-    } else if (opensTab) {
-      const url = newTabUrl();
-      const payload = { action: 'new-tab' };
-      if (url) payload.url = url;
-      if (session) payload.session = session;
-      else payload.cwd = process.cwd();
-      const delivered = await deliverToBackend('/api/control/browser-tab', payload);
-      if (delivered) {
-        process.stdout.write(delivered.payload?.reused
-          ? '\r\nFocused the existing agent-remote browser tab.\r\n'
-          : '\r\nOpened a new tab in the existing agent-remote browser pane.\r\n');
-      } else {
-        const argv = ['terminal-browser', 'open', ...(url ? [url] : [])];
-        const splitPayload = { argv };
-        if (session) splitPayload.session = session;
-        else splitPayload.cwd = process.cwd();
-        const opened = await deliverToBackend('/api/control/split', splitPayload);
-        if (opened || (process.env.AGENT_REMOTE_WEB === '1' && process.env.AGENT_REMOTE_ACP !== '1')) {
-          if (!opened) deliverOscFallback(argv);
-          process.stdout.write('\r\nOpened terminal-browser in the agent-remote right pane.\r\n');
-        } else if (process.env.AGENT_REMOTE_ACP === '1') {
-          console.error('terminal-browser: no active agent-remote chat matches this project folder');
-          process.exitCode = 1;
-        } else {
-          runReal();
-        }
-      }
+  // Agent tool subprocesses may intentionally strip tmux and AGENT_REMOTE_*
+  // variables. Always give the local backend one chance to match the current
+  // project directory; commands outside agent-remote still fall back to the
+  // real terminal-browser when no matching backend is available.
+  if (proxiesAction) {
+    const target = await browserTarget(session);
+    if (target?.browserKey) runReal(['action', '--browser', target.browserKey, ...args.slice(1)]);
+    else runReal();
+  } else if (opensTab) {
+    const url = newTabUrl();
+    const payload = { action: 'new-tab' };
+    if (url) payload.url = url;
+    if (session) payload.session = session;
+    else payload.cwd = process.cwd();
+    const delivered = await deliverToBackend('/api/control/browser-tab', payload);
+    if (delivered) {
+      process.stdout.write(delivered.payload?.reused
+        ? '\r\nFocused the existing agent-remote browser tab.\r\n'
+        : '\r\nOpened a new tab in the existing agent-remote browser pane.\r\n');
     } else {
-      const argv = browserArguments();
-      const payload = { argv };
-      if (session) payload.session = session;
-      else payload.cwd = process.cwd();
-      const delivered = await deliverToBackend('/api/control/split', payload);
-      if (delivered) {
+      const argv = ['terminal-browser', 'open', ...(url ? [url] : [])];
+      const splitPayload = { argv };
+      if (session) splitPayload.session = session;
+      else splitPayload.cwd = process.cwd();
+      const opened = await deliverToBackend('/api/control/split', splitPayload);
+      if (opened || (process.env.AGENT_REMOTE_WEB === '1' && process.env.AGENT_REMOTE_ACP !== '1')) {
+        if (!opened) deliverOscFallback(argv);
         process.stdout.write('\r\nOpened terminal-browser in the agent-remote right pane.\r\n');
-      } else if (process.env.AGENT_REMOTE_WEB === '1') {
-        if (process.env.AGENT_REMOTE_ACP === '1') {
-          console.error('terminal-browser: no active agent-remote chat matches this project folder');
-          process.exitCode = 1;
-        } else {
-          deliverOscFallback(argv);
-          process.stdout.write('\r\nOpened terminal-browser in the agent-remote right pane.\r\n');
-        }
+      } else if (process.env.AGENT_REMOTE_ACP === '1') {
+        console.error('terminal-browser: no active agent-remote chat matches this project folder');
+        process.exitCode = 1;
       } else {
         runReal();
       }
+    }
+  } else {
+    const argv = browserArguments();
+    const payload = { argv };
+    if (session) payload.session = session;
+    else payload.cwd = process.cwd();
+    const delivered = await deliverToBackend('/api/control/split', payload);
+    if (delivered) {
+      process.stdout.write('\r\nOpened terminal-browser in the agent-remote right pane.\r\n');
+    } else if (process.env.AGENT_REMOTE_WEB === '1') {
+      if (process.env.AGENT_REMOTE_ACP === '1') {
+        console.error('terminal-browser: no active agent-remote chat matches this project folder');
+        process.exitCode = 1;
+      } else {
+        deliverOscFallback(argv);
+        process.stdout.write('\r\nOpened terminal-browser in the agent-remote right pane.\r\n');
+      }
+    } else {
+      runReal();
     }
   }
 }

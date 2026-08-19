@@ -2,7 +2,17 @@
 
 The integrated terminal browser is not rendered inside the agent's tmux pane. The routing shim sends an owning-session request to `src/server.js`, which starts a separate graphics PTY and connects to the browser daemon through CDP. This avoids Kitty placeholder output in the main terminal.
 
-The Grok ACP leader is also outside tmux, so the server gives it an explicit `AGENT_REMOTE_URL`, web-routing flag, and project-local dispatcher on `PATH`. When no tmux session is available, the dispatcher sends its cwd. The server resolves that cwd only against connected managed chats, preferring the single working conversation and rejecting ambiguous matches instead of broadcasting a browser command to unrelated sessions. A failed ACP route exits with an actionable error; it never falls back to the host terminal's Kitty renderer or prints a false success message.
+The Grok ACP leader and its tool subprocesses may run outside tmux or strip the
+`AGENT_REMOTE_*` environment. The project-local dispatcher therefore attempts
+backend routing for every implicit `open`, `new-tab`, and `action` command. It
+uses an explicit session when one can be proven and otherwise sends its cwd.
+The server resolves that cwd only against connected managed chats, preferring
+the single working conversation and rejecting ambiguous matches instead of
+broadcasting a browser command to unrelated sessions. Commands outside an
+agent-remote project still fall back to the real host binary when the backend
+has no matching chat. An explicitly identified ACP route instead exits with an
+actionable error; it never falls back to the host terminal's Kitty renderer or
+prints a false success message.
 
 Each session owns one keyed renderer and one UI split state. The browser toolbar reflects the daemon's real tabs, while back/forward/reload, tab changes, Inspect, and Record are routed to that renderer. Refresh and session switching reattach to the same backend renderer; closing the final tab, split, session, or project must clean up the renderer and daemon.
 

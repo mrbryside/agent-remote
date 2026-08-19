@@ -2,7 +2,7 @@
 
 Local persistent agent workspace with browser terminals, native mobile conversations, tmux, SQLite, Cloudflare Remote access, and a macOS Tauri wrapper.
 
-`Last documented commit: 48e576fcd3368a6c15546898f9ab2c9ab4d25dbb`
+`Last documented commit: 9a08be002d0de565b9a64a5ac19021e18687954b`
 
 ## Project structure
 

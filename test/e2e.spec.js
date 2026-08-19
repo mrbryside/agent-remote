@@ -273,7 +273,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   );
   const subagentItem = {
     id: 'subagent-call-spawn-1', type: 'subagent',
-    title: 'Inspect mobile behavior', role: 'explore', phase: 'calling', status: 'working',
+    title: 'Inspect mobile behavior', role: 'explore', capabilityMode: 'read-only',
+    phase: 'calling', status: 'working',
   };
   const secondSubagentItem = {
     id: 'subagent-call-spawn-2', type: 'subagent',
@@ -325,7 +326,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   });
   const childConversation = (text = 'Subagent findings') => ({
     provider: { id: 'grok', label: 'Grok' },
-    thread: { id: 'child-thread', title: 'Inspect mobile behavior', agentName: 'explore', status: 'idle' },
+    // The child transport can expose the root tmux title/status. The mobile
+    // sheet must keep using the authoritative root lifecycle card instead.
+    thread: { id: 'child-thread', title: 'build', agentName: 'qwen-local', status: 'working' },
     parent: { id: 'root-thread', title: 'Mobile root' }, rootThreadId: 'root-thread',
     items: [
       { id: 'child-thought', type: 'thought', title: 'Thought', text: 'Inspecting child files', status: 'completed' },
@@ -686,6 +689,15 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const subagentPill = conversation.locator('.mobile-subagent-pill');
   await expect(subagentPill).toHaveCount(1);
   await expect(subagentPill).toContainText('2 agents running');
+  await expect.poll(() => conversation.evaluate((node) => {
+    const pill = node.querySelector('.mobile-subagent-pill').getBoundingClientRect();
+    const composer = node.querySelector('#mobile-conversation-composer').getBoundingClientRect();
+    const scrollShell = node.querySelector('.mobile-conversation-scroll-shell').getBoundingClientRect();
+    return {
+      clearsComposer: pill.bottom <= composer.top - 8,
+      staysInHistory: pill.bottom <= scrollShell.bottom,
+    };
+  })).toEqual({ clearsComposer: true, staysInHistory: true });
   await expect(conversation.locator('.mobile-subagent-card')).toHaveCount(0);
   await page.evaluate(() => {
     class MockGraphicsSocket extends EventTarget {
@@ -714,6 +726,14 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   });
   await expect(conversation.locator('.mobile-browser-pill')).toBeVisible();
   await expect(conversation.locator('.mobile-activity-pill-cluster > button')).toHaveCount(2);
+  await page.setViewportSize({ width: 320, height: 568 });
+  await expect.poll(() => conversation.evaluate((node) => {
+    const jump = node.querySelector('#mobile-conversation-jump').getBoundingClientRect();
+    const cluster = node.querySelector('.mobile-activity-pill-cluster').getBoundingClientRect();
+    return jump.bottom <= cluster.top || jump.top >= cluster.bottom
+      || jump.right <= cluster.left || jump.left >= cluster.right;
+  })).toBe(true);
+  await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator('#graphics-split')).toBeVisible();
   await expect(page.locator('#graphics-mobile-agents')).toBeVisible();
   await page.locator('#graphics-mobile-agents').click();
@@ -915,6 +935,15 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const queuedRows = conversation.locator('.mobile-conversation-queue-item');
   await expect(queuedRows).toHaveCount(2);
   const firstQueuedRow = queuedRows.filter({ hasText: 'queued follow up' });
+  await firstQueuedRow.evaluate((row) => { row.dataset.renderIdentity = 'preserved'; });
+  currentActivity = { ...currentActivity, label: 'Streaming while a message is queued' };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(firstQueuedRow).toHaveAttribute('data-render-identity', 'preserved');
+  await expect(firstQueuedRow).toHaveCSS('opacity', '1');
   const steerButton = firstQueuedRow.getByRole('button', { name: /Steer/ });
   const deleteButton = firstQueuedRow.getByRole('button', { name: 'Delete queued message' });
   expect((await steerButton.boundingBox()).height).toBeGreaterThanOrEqual(44);
@@ -1250,6 +1279,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(sheet.getByRole('button', { name: /Review the test coverage/ })).toContainText('Running');
   await sheet.getByRole('button', { name: /Inspect mobile behavior/ }).click();
   await expect(sheet.locator('.mobile-subagent-sheet-header strong')).toHaveText('Inspect mobile behavior');
+  await expect(sheet.locator('.mobile-subagent-sheet-header small')).toHaveText('explore · read-only');
+  await expect(sheet.locator('.mobile-subagent-sheet-state')).toHaveText('Done');
   await expect(sheet.getByText('Subagent findings')).toBeVisible();
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', {

@@ -48,6 +48,7 @@ export function createMobileConversationView({
   const menu = document.querySelector('#mobile-conversation-menu');
   const back = document.querySelector('#mobile-conversation-back');
   const messages = document.querySelector('#mobile-conversation-messages');
+  const scrollShell = messages.closest('.mobile-conversation-scroll-shell');
   const jumpToLatest = document.querySelector('#mobile-conversation-jump');
   const interactionDock = document.querySelector('#mobile-conversation-interaction');
   const queue = document.querySelector('#mobile-conversation-queue');
@@ -83,6 +84,7 @@ export function createMobileConversationView({
   let pendingAcceptanceTimer;
   let lastConversation;
   let queueMutationPending = false;
+  let queueRenderSignature = '';
   let rootThreadId;
   let rootConversation;
   let sheet;
@@ -468,6 +470,24 @@ export function createMobileConversationView({
     return (conversation.items || []).filter((item) => item.type === 'subagent');
   }
 
+  function subagentForThread(nextThreadId) {
+    return subagents(rootConversation || {}).find((item) => item.threadId === nextThreadId);
+  }
+
+  function renderChildSheetHeader(conversation) {
+    if (!sheet) return;
+    const lifecycle = subagentForThread(conversation.thread.id) || subagentForThread(selectedChildId);
+    const lifecycleState = lifecycle ? subagentState(lifecycle) : conversation.thread.status;
+    sheetTitle.textContent = lifecycle?.title || conversation.thread.title;
+    sheetMeta.textContent = [
+      lifecycle?.role || conversation.thread.agentName,
+      lifecycle?.model || conversation.thread.model,
+      lifecycle?.capabilityMode,
+    ].filter(Boolean).join(' · ');
+    sheetState.textContent = statusLabel(lifecycleState);
+    sheetState.dataset.state = lifecycleState;
+  }
+
   function ensureSheet() {
     if (sheet) return;
     sheet = element('section', 'mobile-subagent-sheet');
@@ -588,7 +608,7 @@ export function createMobileConversationView({
   function renderSubagentPill(conversation) {
     if (!subagentPillHost) {
       subagentPillHost = element('div', 'mobile-subagent-pill-host');
-      root.append(subagentPillHost);
+      scrollShell.append(subagentPillHost);
     }
     const items = subagents(conversation);
     onSubagentAvailabilityChange(items.length > 0);
@@ -649,13 +669,16 @@ export function createMobileConversationView({
 
   function openChild(nextThreadId) {
     selectedChildId = nextThreadId;
+    const lifecycle = subagentForThread(nextThreadId);
     sheetMode = 'child';
     sheetList.hidden = true;
     sheetMessages.hidden = false;
     sheetBack.hidden = false;
-    sheetTitle.textContent = 'Opening subagent…';
-    sheetMeta.textContent = '';
-    sheetState.textContent = 'Loading';
+    sheetTitle.textContent = lifecycle?.title || 'Opening subagent…';
+    sheetMeta.textContent = [lifecycle?.role, lifecycle?.model, lifecycle?.capabilityMode]
+      .filter(Boolean).join(' · ');
+    sheetState.textContent = lifecycle ? statusLabel(subagentState(lifecycle)) : 'Loading';
+    sheetState.dataset.state = lifecycle ? subagentState(lifecycle) : 'loading';
     closeStream();
     threadId = nextThreadId;
     renderedSignature = '';
@@ -1748,6 +1771,9 @@ export function createMobileConversationView({
 
   function renderQueue(conversation) {
     const entries = Array.isArray(conversation.queue) ? conversation.queue : [];
+    const nextSignature = `${sessionName}:${JSON.stringify(entries)}`;
+    if (nextSignature === queueRenderSignature) return;
+    queueRenderSignature = nextSignature;
     queue.hidden = entries.length === 0;
     if (!entries.length) {
       queue.replaceChildren();
@@ -1901,10 +1927,7 @@ export function createMobileConversationView({
       renderChoiceControls(conversation);
       renderQueue(conversation);
     } else if (sheet) {
-      sheetTitle.textContent = conversation.thread.title;
-      sheetMeta.textContent = [conversation.thread.agentName, conversation.thread.model].filter(Boolean).join(' · ');
-      sheetState.textContent = statusLabel(conversation.thread.status);
-      sheetState.dataset.state = conversation.thread.status;
+      renderChildSheetHeader(conversation);
     }
     parentId = conversation.parent?.id;
     back.hidden = true;

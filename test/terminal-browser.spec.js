@@ -74,7 +74,8 @@ test('agent terminal-browser command opens a rendered web split on the right', a
     await page.locator('#terminal').click();
     await page.keyboard.type(
       `env -u AGENT_REMOTE_WEB -u AGENT_REMOTE_SESSION -u TMUX -u TMUX_PANE ` +
-      `TERM=dumb AGENT_REMOTE_URL=${origin} ${terminalBrowserCommand} open ${origin}/health --split right`,
+      `TERM=dumb TMUX_COMMAND=/usr/bin/false AGENT_REMOTE_URL=${origin} ` +
+      `${terminalBrowserCommand} open ${origin}/health --split right`,
     );
     await page.keyboard.press('Enter');
 

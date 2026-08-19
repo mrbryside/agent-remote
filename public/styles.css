@@ -407,7 +407,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-markdown img { display: block; max-width: 100%; height: auto; margin: 14px 0; border: 1px solid var(--color-border-strong); border-radius: 12px; }
   .mobile-markdown hr { height: 1px; margin: 20px 0; border: 0; background: var(--color-border-subtle); }
   .mobile-markdown input[type="checkbox"] { width: 15px; height: 15px; margin: 0 6px 0 -21px; accent-color: var(--color-accent); vertical-align: -2px; }
-  .mobile-subagent-pill-host { position: absolute; z-index: 4; right: max(14px, env(safe-area-inset-right)); bottom: calc(68px + env(safe-area-inset-bottom)); left: max(14px, env(safe-area-inset-left)); display: flex; justify-content: center; pointer-events: none; }
+  .mobile-subagent-pill-host { position: absolute; z-index: 4; right: max(14px, env(safe-area-inset-right)); bottom: 12px; left: max(14px, env(safe-area-inset-left)); display: flex; justify-content: center; pointer-events: none; }
   .mobile-subagent-pill-host[hidden] { display: none; }
   .mobile-conversation[data-interaction="true"] .mobile-subagent-pill-host { display: none; }
   .mobile-activity-pill-cluster { display: flex; max-width: 100%; overflow: hidden; border: 1px solid var(--color-border-strong); border-radius: 999px; background: color-mix(in srgb, var(--color-surface-raised) 96%, transparent); box-shadow: 0 8px 24px color-mix(in srgb, #000 24%, transparent); pointer-events: auto; }
@@ -798,6 +798,9 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
 @media (hover: none) {
   .project-actions { visibility: visible; opacity: 1; transform: none; }
   .session-row.active .session-close { opacity: .8; }
+}
+@media (max-width: 350px) {
+  .mobile-conversation-scroll-shell:has(.mobile-subagent-pill-host:not([hidden])) .mobile-conversation-jump:not([hidden]) { bottom: 66px; }
 }
 @media (max-height: 620px) {
   :root { --header-height: 40px; }
