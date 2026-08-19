@@ -105,22 +105,65 @@ function toolPayload(update) {
         /^image\/(?:png|jpeg|webp|gif)$/.test(block.content.mimeType || '')) {
       images.push({ mimeType: block.content.mimeType, data: block.content.data });
     } else if (block?.type === 'diff') {
+      const detail = Array.isArray(block._meta?.details) ? block._meta.details[0] : undefined;
       diffs.push({
         path: shortText(block.path, 'Changed file', 1024),
         oldText: boundedText(block.oldText),
         newText: boundedText(block.newText),
+        oldLine: finiteTokenCount(block._meta?.old_line ?? detail?.old_line),
+        newLine: finiteTokenCount(block._meta?.new_line ?? detail?.new_line),
       });
     }
   }
   const raw = update.rawOutput;
-  const preferredRaw = raw && typeof raw === 'object'
-    ? raw.output_for_prompt ?? raw.output ?? raw.stdout ?? raw.text ?? raw.content
-    : raw;
+  const preferredRaw = raw && typeof raw === 'object' ? (
+    raw.output_for_prompt ?? raw.output ?? raw.stdout ?? raw.text ?? raw.content ??
+    raw.FileContent?.content ?? raw.ListDir?.Content?.content ??
+    raw.Content?.content ?? raw.EditsApplied?.tool_output_for_prompt ??
+    raw.TodosUpdated?.summary_for_prompt ??
+    (raw.type === 'GrepSearch' && Number.isFinite(Number(raw.match_count))
+      ? `Found ${Number(raw.match_count)} ${Number(raw.match_count) === 1 ? 'match' : 'matches'}` : undefined)
+  ) : raw;
+  const rawImage = raw?.ImageContent;
+  if (typeof rawImage?.data === 'string' && rawImage.data.length <= 4 * 1024 * 1024 &&
+      /^image\/(?:png|jpeg|webp|gif)$/.test(rawImage.mimeType || rawImage.mime_type || '')) {
+    images.push({ mimeType: rawImage.mimeType || rawImage.mime_type, data: rawImage.data });
+  }
   return {
-    output: texts.filter(Boolean).join('\n') || serialized(preferredRaw || raw),
+    output: texts.filter(Boolean).join('\n') || serialized(preferredRaw),
     diffs,
     images,
   };
+}
+
+function toolFile(update) {
+  const file = update.rawOutput?.FileContent;
+  if (!file || typeof file !== 'object') return undefined;
+  const input = update.rawInput ?? update._meta?.['x.ai/tool']?.input ?? {};
+  const path = shortText(file.absolute_path || input.target_file || input.file_path || input.path, '', 2_000);
+  if (!path) return undefined;
+  const numbered = typeof file.content === 'string' ? file.content : '';
+  const firstNumber = numbered.match(/^(\d+)→/)?.[1];
+  const offset = finiteTokenCount(file.offset);
+  return {
+    path,
+    content: boundedText(file.raw_output ?? numbered.replace(/^\d+→/gm, ''), 64 * 1024),
+    startLine: offset === undefined ? Number(firstNumber) || 1 : offset + 1,
+    totalLines: finiteTokenCount(file.total_lines),
+  };
+}
+
+function toolMatches(update) {
+  const search = update.rawOutput?.type === 'GrepSearch'
+    ? update.rawOutput : update.rawOutput?.GrepSearch;
+  if (!search || typeof search !== 'object') return [];
+  return (Array.isArray(search.file_matches) ? search.file_matches : []).flatMap((file) =>
+    (Array.isArray(file?.matches) ? file.matches : []).flatMap((match) => {
+      const path = shortText(file.path, '', 2_000);
+      const line = finiteTokenCount(match?.line_number);
+      if (!path || line === undefined) return [];
+      return [{ path, line, text: boundedText(match.content, 4_000) }];
+    })).slice(0, 500);
 }
 
 function toolSubject(update) {
@@ -130,6 +173,22 @@ function toolSubject(update) {
   if (typeof path === 'string' && path) return basename(path);
   const value = input.description ?? input.query ?? input.pattern ?? input.url ?? input.command;
   return shortText(value, '', 180);
+}
+
+function isPlanArtifactTool(update) {
+  const meta = toolMeta(update);
+  const input = subagentInput(update);
+  const name = shortText(meta.name || update?.name, '', 100);
+  if (['exit_plan_mode', 'enter_plan_mode'].includes(name) ||
+      ['plan', 'enter_plan', 'exit_plan'].includes(meta.kind)) return true;
+  const paths = [
+    input.target_file, input.file_path, input.path,
+    ...((Array.isArray(update?.locations) ? update.locations : []).map((location) => location?.path)),
+    ...((Array.isArray(update?.content) ? update.content : [])
+      .filter((block) => block?.type === 'diff').map((block) => block.path)),
+  ];
+  return paths.some((path) => typeof path === 'string' &&
+    /(?:^|[/\\])\.grok[/\\]sessions[/\\].*[/\\]plan\.md$/i.test(path));
 }
 
 function activityLabel(value, fallback) {
@@ -297,6 +356,7 @@ function timeline(updates) {
   const permissions = new Map();
   const executedToolCallIds = new Set();
   const questions = new Map();
+  const planReviews = new Map();
   let plan;
   let recap;
   let status = 'idle';
@@ -431,6 +491,12 @@ function timeline(updates) {
         }
         return;
       }
+      if (isPlanArtifactTool(update)) {
+        removeTool(id);
+        status = 'working';
+        activity = { phase: 'working', label: 'Updating plan…' };
+        return;
+      }
       let subagent = subagentsByTool.get(id);
       const isSpawn = isSubagentSpawn(update);
       const taskId = subagentTaskId(update);
@@ -497,6 +563,15 @@ function timeline(updates) {
       // so never expose a second generic tool (or fold it into a tool group).
       if (questions.has(id)) return;
 
+      // Grok emits dedicated plan snapshots immediately after todo updates.
+      // Rendering the underlying mode/todo tools duplicates the visible plan
+      // and exposes protocol mechanics that the native UI keeps hidden.
+      if (toolName === 'todo_write' || ['plan', 'enter_plan', 'exit_plan'].includes(meta?.kind)) {
+        status = 'working';
+        activity = { phase: 'working', label: 'Updating plan…' };
+        return;
+      }
+
       let item = tools.get(id);
       if (!item) {
         item = {
@@ -532,6 +607,10 @@ function timeline(updates) {
       if (payload.output) item.output = payload.output;
       if (payload.diffs.length) item.diffs = payload.diffs;
       if (payload.images.length) item.images = payload.images;
+      const file = toolFile(update);
+      if (file) item.file = file;
+      const matches = toolMatches(update);
+      if (matches.length) item.matches = matches;
       if (typeof update.status === 'string') item.status = normalizedStatus(update.status, item.status);
       status = 'working';
       return;
@@ -803,6 +882,38 @@ function timeline(updates) {
       activity = { phase: 'waiting', label: 'Waiting for response…' };
       return;
     }
+    if (kind === 'plan_review_request') {
+      const id = shortText(update.reviewId || update.toolCallId, `plan-review-${index}`, 160);
+      removeTool(update.toolCallId || id);
+      let review = planReviews.get(id);
+      if (!review) {
+        review = {
+          id: `plan-review-${id}`, type: 'plan_review', reviewId: id,
+          toolCallId: shortText(update.toolCallId, id, 160),
+          planContent: boundedText(update.planContent, 512 * 1024),
+          status: 'pending', timestamp: record.timestamp,
+        };
+        planReviews.set(id, review);
+        items.push(review);
+      } else {
+        review.planContent = boundedText(update.planContent, 512 * 1024);
+        review.status = 'pending';
+      }
+      status = 'working';
+      activity = { phase: 'plan_review', label: 'Waiting for plan review…' };
+      return;
+    }
+    if (kind === 'plan_review_resolved') {
+      const id = String(update.reviewId || update.toolCallId || '');
+      const review = planReviews.get(id);
+      if (review) {
+        review.status = 'completed';
+        review.outcome = shortText(update.outcome, 'cancelled', 40);
+        review.feedback = boundedText(update.feedback, 32 * 1024);
+      }
+      activity = { phase: 'waiting', label: 'Waiting for response…' };
+      return;
+    }
     if (kind === 'turn_completed') {
       status = 'idle';
       activity = undefined;
@@ -907,7 +1018,9 @@ export function createGrokConversationProvider({
     // the parent card describes the lifecycle request that created it. Keep
     // the latter intact so concurrent cards do not change identity or copy
     // when descendant metadata loads (or races with the spawn event).
-    const items = selected.items;
+    const items = selected.items.map((item) => item.type === 'plan_review'
+      ? { ...item, threadId }
+      : item);
     return {
       thread: selected.thread,
       items,
@@ -1018,6 +1131,17 @@ export function createGrokConversationProvider({
         questionId: input.questionId,
         answers: input.answers,
         ...(input.outcome === undefined ? {} : { outcome: input.outcome }),
+      });
+    },
+    async respondPlanReview(handle, input) {
+      const threadId = input.threadId ?? handle.rootThreadId;
+      const relationship = await graph(handle.cwd, handle.rootThreadId);
+      if (!relationship.threads.has(threadId)) throw new Error('Thread is not part of this conversation');
+      return acpClient.respondPlanReview({
+        sessionId: threadId,
+        reviewId: input.reviewId,
+        outcome: input.outcome,
+        ...(input.feedback === undefined ? {} : { feedback: input.feedback }),
       });
     },
     close: () => acpClient.close(),

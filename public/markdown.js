@@ -65,6 +65,31 @@ function decorateTasks(root) {
   }
 }
 
+function fileReference(value) {
+  const match = String(value || '').trim().match(
+    /^((?:\/|\.{1,2}\/)?(?:[\w@.+-]+\/)*[\w@.+-]+\.[\w.+-]+)(?::(\d+)(?:[-–](\d+))?)?$/,
+  );
+  if (!match) return undefined;
+  const startLine = match[2] ? Number(match[2]) : undefined;
+  const endLine = match[3] ? Number(match[3]) : startLine;
+  return { path: match[1], startLine, endLine };
+}
+
+function decorateFileReferences(root, onFileReference) {
+  if (typeof onFileReference !== 'function') return;
+  for (const code of [...root.querySelectorAll('code:not(pre code)')]) {
+    const reference = fileReference(code.textContent);
+    if (!reference) continue;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'mobile-file-reference';
+    button.textContent = code.textContent;
+    button.setAttribute('aria-label', `Open ${reference.path}${reference.startLine ? ` at line ${reference.startLine}` : ''}`);
+    button.addEventListener('click', () => onFileReference(reference));
+    code.replaceWith(button);
+  }
+}
+
 function copyButton(code) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -112,7 +137,7 @@ function decorateTables(root) {
   }
 }
 
-export function markdownNode(source) {
+export function markdownNode(source, { onFileReference } = {}) {
   const root = document.createElement('div');
   root.className = 'mobile-message-content mobile-markdown';
   const markdown = String(source ?? '').replace(/^[\u200B-\u200F\uFEFF]/, '');
@@ -126,6 +151,7 @@ export function markdownNode(source) {
   decorateLinks(root);
   decorateImages(root);
   decorateTasks(root);
+  decorateFileReferences(root, onFileReference);
   decorateCode(root);
   decorateTables(root);
   return root;

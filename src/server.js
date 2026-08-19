@@ -16,7 +16,7 @@ import { createGrokConversationProvider } from './conversations/grok.js';
 import { createGrokAcpClient } from './conversations/acp-client.js';
 import { createConversationRegistry } from './conversations/registry.js';
 import { createConversationAttachmentStore, maxAttachmentBytes } from './conversations/attachments.js';
-import { resolveProjectFiles, searchProjectFiles } from './conversations/files.js';
+import { readProjectFile, resolveProjectFiles, searchProjectFiles } from './conversations/files.js';
 import { createProjectStore } from './projects.js';
 import { createRemoteAuth } from './remote/auth.js';
 import { createCloudflareClient } from './remote/cloudflare.js';
@@ -1536,6 +1536,24 @@ export function createTerminalServer(options = {}) {
           if (!session) return json(response, 404, { error: 'Managed session not found' });
           return json(response, 200, { files: await searchProjectFiles(session.cwd, query) });
         }
+        const conversationFilePreviewMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/files$/);
+        if (request.method === 'GET' && conversationFilePreviewMatch) {
+          const name = decodeURIComponent(conversationFilePreviewMatch[1]);
+          const path = url.searchParams.get('path') || '';
+          const session = await conversationSession(name);
+          if (!session) return json(response, 404, { error: 'Managed session not found' });
+          try {
+            return json(response, 200, { file: await readProjectFile(session.cwd, path) });
+          } catch (error) {
+            if (error?.code === 'FILE_MENTION_INVALID') {
+              return json(response, 400, { error: 'File path must stay inside the project' });
+            }
+            if (error?.code === 'ENOENT') return json(response, 404, { error: 'File not found' });
+            if (error?.code === 'FILE_PREVIEW_TOO_LARGE') return json(response, 413, { error: error.message });
+            if (error?.code === 'FILE_PREVIEW_BINARY') return json(response, 415, { error: error.message });
+            throw error;
+          }
+        }
         const conversationModelMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/model$/);
         if (request.method === 'POST' && conversationModelMatch) {
           const name = decodeURIComponent(conversationModelMatch[1]);
@@ -1614,6 +1632,34 @@ export function createTerminalServer(options = {}) {
           return json(response, 202, { accepted: true });
         }
         const conversationPermissionMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/permission$/);
+        const conversationPlanReviewMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/plan-review$/);
+        if (request.method === 'POST' && conversationPlanReviewMatch) {
+          const name = decodeURIComponent(conversationPlanReviewMatch[1]);
+          const body = await readJson(request);
+          if (typeof body.threadId !== 'string' || !body.threadId || body.threadId.length > 160 ||
+              typeof body.reviewId !== 'string' || !body.reviewId || body.reviewId.length > 160 ||
+              !['approved', 'cancelled', 'abandoned'].includes(body.outcome) ||
+              (body.feedback !== undefined && (typeof body.feedback !== 'string' || body.feedback.length > 32 * 1024)) ||
+              (body.outcome === 'abandoned' && body.feedback?.trim())) {
+            return json(response, 400, {
+              error: 'threadId/reviewId, a valid outcome, and optional bounded feedback are required',
+            });
+          }
+          const session = await conversationSession(name);
+          if (!session) return json(response, 404, { error: 'Managed session not found' });
+          try {
+            await conversationRegistry.respondPlanReview(session, {
+              threadId: body.threadId, reviewId: body.reviewId, outcome: body.outcome,
+              ...(body.feedback === undefined ? {} : { feedback: body.feedback }),
+            });
+          } catch (error) {
+            if (error?.code === 'GROK_ACP_PLAN_EXPIRED') {
+              return json(response, 409, { error: error.message, code: error.code });
+            }
+            return conversationFailure(response, error);
+          }
+          return json(response, 202, { accepted: true, outcome: body.outcome });
+        }
         if (request.method === 'POST' && conversationPermissionMatch) {
           const name = decodeURIComponent(conversationPermissionMatch[1]);
           const body = await readJson(request);

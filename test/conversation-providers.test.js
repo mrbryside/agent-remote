@@ -61,6 +61,7 @@ async function fixture() {
   const listeners = new Map();
   const prompts = [];
   const questionResponses = [];
+  const planReviewResponses = [];
   const modelChanges = [];
   const cancellations = [];
   const acpClient = {
@@ -82,13 +83,17 @@ async function fixture() {
     },
     async cancel(input) { cancellations.push(input); return { accepted: true, active: true }; },
     async respondQuestion(input) { questionResponses.push(input); },
+    async respondPlanReview(input) { planReviewResponses.push(input); },
     append(sessionId, record) {
       snapshots.get(sessionId).events.push(record);
       for (const listener of listeners.get(sessionId) || []) listener(snapshots.get(sessionId));
     },
     close: async () => {},
   };
-  return { cwd, parentId, childId, acpClient, prompts, questionResponses, modelChanges, cancellations, snapshots };
+  return {
+    cwd, parentId, childId, acpClient, prompts, questionResponses, planReviewResponses,
+    modelChanges, cancellations, snapshots,
+  };
 }
 
 test('Grok provider maps a managed tmux process to messages and subagents', async () => {
@@ -213,6 +218,86 @@ test('Grok provider groups adjacent mixed tools across resolved permissions and 
   assert.equal(result.items[2].toolCallId, 'read-1');
   assert.equal(result.items[2].status, 'working');
   assert.ok(!result.items.some((item) => item.type === 'permission'));
+});
+
+test('Grok provider preserves native file, search, and diff locations without plan protocol noise', async () => {
+  const data = await fixture();
+  const snapshot = await data.acpClient.loadSession({ sessionId: data.parentId });
+  snapshot.events = [
+    { timestamp: 1, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'read-file', title: 'read_file',
+      rawInput: { target_file: 'src/profile.js' },
+      _meta: { 'x.ai/tool': { name: 'read_file', kind: 'read', label: 'Read' } },
+    } } },
+    { timestamp: 1.1, params: { update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'read-file', status: 'completed',
+      rawOutput: { type: 'ReadFile', FileContent: {
+        content: '8→export function displayName(profile) {\n  return profile.firstName;\n}\n',
+        raw_output: 'export function displayName(profile) {\n  return profile.firstName;\n}\n',
+        absolute_path: '/tmp/project/src/profile.js', offset: 7, total_lines: 21,
+      } },
+    } } },
+    { timestamp: 2, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'grep-file', title: 'grep',
+      rawInput: { pattern: 'displayName' },
+      _meta: { 'x.ai/tool': { name: 'grep', kind: 'search', label: 'Search' } },
+    } } },
+    { timestamp: 2.1, params: { update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'grep-file', status: 'completed',
+      rawOutput: { type: 'GrepSearch', match_count: 1, file_matches: [{
+        path: '/tmp/project/src/profile.js',
+        matches: [{ line_number: 8, content: 'export function displayName(profile) {' }],
+      }] },
+    } } },
+    { timestamp: 3, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'todo', title: 'todo_write',
+      _meta: { 'x.ai/tool': { name: 'todo_write', kind: 'plan', label: 'Plan' } },
+    } } },
+    { timestamp: 3.1, params: { update: {
+      sessionUpdate: 'plan', entries: [{ content: 'Fix display name', status: 'in_progress' }],
+    } } },
+    { timestamp: 3.2, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'exit-plan', title: 'exit_plan_mode',
+      _meta: { 'x.ai/tool': { name: 'exit_plan_mode', kind: 'exit_plan', label: 'Exit Plan Mode' } },
+    } } },
+    { timestamp: 4, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'edit-file', title: 'search_replace',
+      rawInput: { file_path: 'src/profile.js' },
+      _meta: { 'x.ai/tool': { name: 'search_replace', kind: 'edit', label: 'Edit' } },
+    } } },
+    { timestamp: 4.1, params: { update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'edit-file', status: 'completed', content: [{
+        type: 'diff', path: '/tmp/project/src/profile.js',
+        oldText: 'return profile.firstName;', newText: 'return profile.lastName ? `${profile.firstName} ${profile.lastName}` : profile.firstName;',
+        _meta: { old_line: 9, new_line: 9 },
+      }],
+    } } },
+  ];
+  const registry = createConversationRegistry({
+    providers: [createGrokConversationProvider({ acpClient: data.acpClient })],
+  });
+  const result = await registry.read({
+    name: 'ar-chat', cwd: data.cwd,
+    command: `grok --leader --session-id ${data.parentId}`, conversationThreadId: data.parentId,
+  });
+  const tools = result.items.flatMap((item) => item.type === 'tool_group' ? item.tools : item.type === 'tool' ? [item] : []);
+  const read = tools.find((item) => item.toolCallId === 'read-file');
+  const search = tools.find((item) => item.toolCallId === 'grep-file');
+  const edit = tools.find((item) => item.toolCallId === 'edit-file');
+  assert.deepEqual(read.file, {
+    path: '/tmp/project/src/profile.js',
+    content: 'export function displayName(profile) {\n  return profile.firstName;\n}\n',
+    startLine: 8,
+    totalLines: 21,
+  });
+  assert.deepEqual(search.matches, [{
+    path: '/tmp/project/src/profile.js', line: 8, text: 'export function displayName(profile) {',
+  }]);
+  assert.equal(search.output, 'Found 1 match');
+  assert.equal(edit.diffs[0].oldLine, 9);
+  assert.equal(edit.diffs[0].newLine, 9);
+  assert.ok(result.items.some((item) => item.type === 'plan'));
+  assert.ok(!tools.some((item) => ['todo', 'exit-plan'].includes(item.toolCallId)));
 });
 
 test('Grok provider only opens descendants of the mapped root thread', async () => {
@@ -586,6 +671,56 @@ test('Grok provider keeps questions separate from tool groups and answers descen
     }),
     /not part of this conversation/i,
   );
+});
+
+test('Grok provider exposes one plan review interaction and hides its internal plan tools', async () => {
+  const data = await fixture();
+  const snapshot = await data.acpClient.loadSession({ sessionId: data.parentId });
+  snapshot.events.splice(-1, 0,
+    { timestamp: 7.1, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'write-plan', title: 'Edit plan.md',
+      rawInput: { target_file: `/Users/test/.grok/sessions/project/${data.parentId}/plan.md` },
+      _meta: { 'x.ai/tool': { name: 'search_replace', kind: 'edit' } },
+    } } },
+    { timestamp: 7.2, params: { update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'write-plan', status: 'completed',
+      locations: [{ path: `/Users/test/.grok/sessions/project/${data.parentId}/plan.md` }],
+    } } },
+    { timestamp: 7.3, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'exit-plan', title: 'Exit plan mode',
+      _meta: { 'x.ai/tool': { name: 'exit_plan_mode', kind: 'other' } },
+    } } },
+    { timestamp: 7.4, params: { update: {
+      sessionUpdate: 'plan_review_request', reviewId: 'exit-plan', toolCallId: 'exit-plan',
+      planContent: '# Plan\n\n1. Inspect\n2. Implement',
+    } } },
+  );
+  const registry = createConversationRegistry({
+    providers: [createGrokConversationProvider({ acpClient: data.acpClient })],
+  });
+  const session = {
+    cwd: data.cwd, command: `grok --leader --session-id ${data.parentId}`,
+    conversationThreadId: data.parentId,
+  };
+  const conversation = await registry.read(session);
+  assert.deepEqual(conversation.items.filter((item) => item.type === 'plan_review'), [{
+    id: 'plan-review-exit-plan', type: 'plan_review', reviewId: 'exit-plan', toolCallId: 'exit-plan',
+    planContent: '# Plan\n\n1. Inspect\n2. Implement', status: 'pending', timestamp: 7.4,
+    threadId: data.parentId,
+  }]);
+  assert.ok(!conversation.items.some((item) =>
+    (item.type === 'tool' || item.type === 'tool_group') && JSON.stringify(item).includes('plan.md')));
+  assert.ok(!conversation.items.some((item) =>
+    (item.type === 'tool' || item.type === 'tool_group') && JSON.stringify(item).includes('Exit plan mode')));
+
+  await registry.respondPlanReview(session, {
+    threadId: data.parentId, reviewId: 'exit-plan', outcome: 'cancelled',
+    feedback: '@plan.md:3\nExplain this step.',
+  });
+  assert.deepEqual(data.planReviewResponses, [{
+    sessionId: data.parentId, reviewId: 'exit-plan', outcome: 'cancelled',
+    feedback: '@plan.md:3\nExplain this step.',
+  }]);
 });
 
 test('Grok provider keeps completed question cards when replaying history', async () => {

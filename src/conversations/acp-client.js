@@ -6,6 +6,8 @@ const maxQuestionCount = 20;
 const maxQuestionOptions = 30;
 const maxQuestionText = 4_000;
 const maxAnswerText = 4_000;
+const maxPlanText = 512 * 1024;
+const maxPlanFeedback = 32 * 1024;
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,79}$/;
 const conversationModes = new Set(['default', 'plan']);
 const permissionModes = new Set(['default', 'auto', 'bypassPermissions']);
@@ -75,6 +77,24 @@ function subagentSignature(update) {
 
 function questionError(message, code = 'GROK_ACP_QUESTION_INVALID') {
   return rpcError(message, code);
+}
+
+function planError(message, code = 'GROK_ACP_PLAN_INVALID') {
+  return rpcError(message, code);
+}
+
+function normalizePlanReview(params) {
+  if (!boundedString(params?.sessionId, 160) || !boundedString(params?.toolCallId, 160)) {
+    throw planError('Plan review must include a sessionId and toolCallId');
+  }
+  if (typeof params.planContent !== 'string' || params.planContent.length > maxPlanText) {
+    throw planError('Plan review content must be a string under 512 KiB');
+  }
+  return {
+    sessionId: params.sessionId,
+    toolCallId: params.toolCallId,
+    planContent: params.planContent,
+  };
 }
 
 function normalizeQuestions(params) {
@@ -174,6 +194,7 @@ export function createGrokAcpClient({
         queuedSubagentToolCallIds: new Set(),
         pendingSubagentToolCalls: new Map(),
         questions: new Map(),
+        planReviews: new Map(),
       };
       sessions.set(sessionId, value);
     }
@@ -340,6 +361,24 @@ export function createGrokAcpClient({
           } },
         });
         publish(question.sessionId);
+      } else if (['x.ai/exit_plan_mode', '_x.ai/exit_plan_mode'].includes(message.method)) {
+        let review;
+        try { review = normalizePlanReview(message.params); }
+        catch (error) {
+          send({ jsonrpc: '2.0', id: message.id, error: { code: -32602, message: error.message } });
+          return;
+        }
+        const current = state(review.sessionId);
+        const reviewId = review.toolCallId;
+        current.planReviews.set(reviewId, { rpcId: message.id, ...review });
+        current.events.push({
+          timestamp: Date.now(),
+          params: { update: {
+            sessionUpdate: 'plan_review_request', reviewId, toolCallId: review.toolCallId,
+            planContent: review.planContent,
+          } },
+        });
+        publish(review.sessionId);
       } else if (message.method === 'session/request_permission' && message.params?.sessionId) {
         const current = state(message.params.sessionId);
         const permissionId = String(message.id);
@@ -389,6 +428,7 @@ export function createGrokAcpClient({
       current.queuedSubagentToolCallIds.clear();
       current.pendingSubagentToolCalls.clear();
       current.questions.clear();
+      current.planReviews.clear();
       current.cancelRequested = false;
     }
     if (!closing && exited) logger(error.message);
@@ -693,6 +733,41 @@ export function createGrokAcpClient({
     return { accepted: true };
   }
 
+  async function respondPlanReview({ sessionId, reviewId, outcome, feedback }) {
+    const current = state(sessionId);
+    const review = current.planReviews.get(String(reviewId));
+    if (!review) throw planError('Plan review is no longer active', 'GROK_ACP_PLAN_EXPIRED');
+    if (!['approved', 'cancelled', 'abandoned'].includes(outcome)) {
+      throw planError('Plan outcome must be approved, cancelled, or abandoned');
+    }
+    const normalizedFeedback = typeof feedback === 'string' ? feedback.trim() : '';
+    if (normalizedFeedback.length > maxPlanFeedback) {
+      throw planError('Plan feedback must be under 32 KiB');
+    }
+    if (outcome === 'abandoned' && normalizedFeedback) {
+      throw planError('Abandoning a plan cannot include feedback');
+    }
+    current.planReviews.delete(String(reviewId));
+    let delivery;
+    if (normalizedFeedback) {
+      // Grok drains this interjection only after the blocked plan-exit request
+      // is released. Write it first, but do not await the reply or the two RPCs
+      // would deadlock each other.
+      delivery = request('_x.ai/interject', { sessionId, text: normalizedFeedback });
+    }
+    send({ jsonrpc: '2.0', id: review.rpcId, result: { outcome } });
+    current.events.push({
+      timestamp: Date.now(),
+      params: { update: {
+        sessionUpdate: 'plan_review_resolved', reviewId: String(reviewId), outcome,
+        ...(normalizedFeedback ? { feedback: normalizedFeedback } : {}),
+      } },
+    });
+    publish(sessionId);
+    void delivery?.catch((error) => logger(error.message));
+    return { accepted: true, outcome };
+  }
+
   async function close() {
     closing = true;
     if (!child) return;
@@ -719,6 +794,6 @@ export function createGrokAcpClient({
   return {
     loadSession, prompt, cancel, setModel, setMode,
     removeQueuedPrompt, steerQueuedPrompt, reorderQueuedPrompts,
-    read, watch, respondPermission, respondQuestion, close,
+    read, watch, respondPermission, respondQuestion, respondPlanReview, close,
   };
 }

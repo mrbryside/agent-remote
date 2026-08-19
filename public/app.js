@@ -142,6 +142,10 @@ const mobileConversation = createMobileConversationView({
     const params = new URLSearchParams({ q: query });
     return api(`/api/conversations/${encodeURIComponent(sessionName)}/completions/files?${params}`);
   },
+  async readFile(sessionName, path) {
+    const params = new URLSearchParams({ path });
+    return api(`/api/conversations/${encodeURIComponent(sessionName)}/files?${params}`);
+  },
   async uploadAttachment(sessionName, file) {
     const response = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(sessionName)}/attachments`), {
       method: 'POST',
@@ -189,6 +193,13 @@ const mobileConversation = createMobileConversationView({
     const body = { threadId, questionId, outcome };
     if (outcome !== 'skip_interview') body.answers = answers;
     await api(`/api/conversations/${encodeURIComponent(sessionName)}/question`, {
+      method: 'POST', body: JSON.stringify(body),
+    });
+  },
+  async respondPlanReview(sessionName, threadId, reviewId, outcome, feedback) {
+    const body = { threadId, reviewId, outcome };
+    if (feedback) body.feedback = feedback;
+    await api(`/api/conversations/${encodeURIComponent(sessionName)}/plan-review`, {
       method: 'POST', body: JSON.stringify(body),
     });
   },

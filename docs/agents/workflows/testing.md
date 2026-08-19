@@ -20,6 +20,8 @@ Playwright runs serially because the tmux fixture, browser renderer, SQLite file
 - Session naming, command quoting, and CLI: `test/sessions.test.js`
 - HTTP/WebSocket/PTY/tmux behavior: `test/server.test.js`
 - Project/sidebar/terminal UX and responsive behavior: `test/e2e.spec.js`
+- Grok ACP request/response extensions (permissions, questions, and Plan Review): `test/grok-acp.test.js`
+- Provider-neutral timeline mapping, child-thread ownership, and interaction projection: `test/conversation-providers.test.js`
 - Real terminal-browser tabs, frames, DevTools, Record, cursor, refresh, and cleanup: `test/terminal-browser.spec.js`
 - Remote configuration: `test/config.test.js`
 - Remote SQLite state and device audit lifecycle: `test/remote-store.test.js`

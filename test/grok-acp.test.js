@@ -534,3 +534,57 @@ test('ACP client exposes Grok questions and responds with accepted or skipped ou
   );
   await client.close();
 });
+
+test('ACP client exposes Grok plan review and sends feedback before resolving it', async () => {
+  const fake = harness();
+  const client = createGrokAcpClient({ spawn: fake.spawn });
+  const sessionId = '01a015a9-61df-7052-a5d0-17de77a201fa';
+  const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  const load = await waitForRequest(fake, 'session/load');
+  reply(fake.children[0].child, load.id, {});
+  await loading;
+
+  fake.children[0].child.stdout.write(`${JSON.stringify({
+    jsonrpc: '2.0', id: 790, method: '_x.ai/exit_plan_mode',
+    params: {
+      sessionId, toolCallId: 'exit-plan-1',
+      planContent: '# Plan\n\n1. Inspect the project\n2. Implement the change',
+    },
+  })}\n`);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(client.read(sessionId).events.at(-1).params.update, {
+    sessionUpdate: 'plan_review_request', reviewId: 'exit-plan-1', toolCallId: 'exit-plan-1',
+    planContent: '# Plan\n\n1. Inspect the project\n2. Implement the change',
+  });
+
+  await client.respondPlanReview({
+    sessionId, reviewId: 'exit-plan-1', outcome: 'cancelled',
+    feedback: '@plan.md:3\nExplain why this step is needed.',
+  });
+  const interjectionIndex = fake.requests.findIndex((request) => request.method === '_x.ai/interject');
+  const resolutionIndex = fake.requests.findIndex((request) => request.id === 790 && request.result);
+  assert.ok(interjectionIndex >= 0 && interjectionIndex < resolutionIndex);
+  assert.deepEqual(fake.requests[interjectionIndex].params, {
+    sessionId, text: '@plan.md:3\nExplain why this step is needed.',
+  });
+  assert.deepEqual(fake.requests[resolutionIndex].result, { outcome: 'cancelled' });
+  assert.deepEqual(client.read(sessionId).events.at(-1).params.update, {
+    sessionUpdate: 'plan_review_resolved', reviewId: 'exit-plan-1', outcome: 'cancelled',
+    feedback: '@plan.md:3\nExplain why this step is needed.',
+  });
+
+  fake.children[0].child.stdout.write(`${JSON.stringify({
+    jsonrpc: '2.0', id: 791, method: 'x.ai/exit_plan_mode',
+    params: { sessionId, toolCallId: 'exit-plan-2', planContent: '# Revised plan' },
+  })}\n`);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await client.respondPlanReview({ sessionId, reviewId: 'exit-plan-2', outcome: 'approved' });
+  assert.deepEqual(fake.requests.find((request) => request.id === 791 && request.result).result, {
+    outcome: 'approved',
+  });
+  await assert.rejects(
+    client.respondPlanReview({ sessionId, reviewId: 'exit-plan-2', outcome: 'abandoned' }),
+    { code: 'GROK_ACP_PLAN_EXPIRED' },
+  );
+  await client.close();
+});

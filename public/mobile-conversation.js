@@ -35,8 +35,9 @@ function duration(value) {
 }
 
 export function createMobileConversationView({
-  api, apiUrl, media, send, cancelTurn, uploadAttachment, searchFiles, setModel, setMode,
+  api, apiUrl, media, send, cancelTurn, uploadAttachment, searchFiles, readFile, setModel, setMode,
   removeQueuedInput, steerQueuedInput, reorderQueuedInputs, respondPermission, respondQuestion,
+  respondPlanReview,
   onVisibilityChange, onStatusChange = () => {},
 }) {
   const root = document.querySelector('#mobile-conversation');
@@ -100,6 +101,7 @@ export function createMobileConversationView({
   let subagentPillHost;
   const expandedItems = new Set();
   const pendingQuestions = new Map();
+  const pendingPlanReviews = new Map();
   let questionStateVersion = 0;
   let modelBusy = false;
   let modelOptionsSignature = '';
@@ -117,6 +119,13 @@ export function createMobileConversationView({
   let streamPointerActive = false;
   let deferredStreamRender;
   let deferredStreamRenderTimer;
+  let fileSheet;
+  let fileSheetPanel;
+  let fileSheetTitle;
+  let fileSheetMeta;
+  let fileSheetBody;
+  let fileSheetClose;
+  let filePreviewGeneration = 0;
 
   function setAvailable(next) {
     if (available === next) return;
@@ -676,6 +685,158 @@ export function createMobileConversationView({
     });
   }
 
+  function normalizedFilePath(value) {
+    return String(value || '').replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/{2,}/g, '/');
+  }
+
+  function sameFilePath(candidate, requested) {
+    const left = normalizedFilePath(candidate);
+    const right = normalizedFilePath(requested);
+    return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`);
+  }
+
+  function conversationFiles(conversation) {
+    const files = [];
+    for (const item of conversation?.items || []) {
+      const tools = item.type === 'tool_group' ? item.tools || [] : item.type === 'tool' ? [item] : [];
+      for (const tool of tools) {
+        if (tool.file?.path && tool.file?.content !== undefined) files.push(tool.file);
+        for (const change of tool.diffs || []) {
+          files.push({
+            path: change.path,
+            content: change.newText || change.oldText || '',
+            startLine: change.newLine || change.oldLine || 1,
+            changed: true,
+          });
+        }
+      }
+    }
+    return files;
+  }
+
+  function fileLinesNode(file, { startLine, endLine, streamId = 'file' } = {}) {
+    const viewport = element('div', 'mobile-file-lines');
+    viewport.dataset.streamScroll = streamId;
+    const content = String(file?.content || '').replace(/\n$/, '');
+    const lines = content ? content.split('\n') : ['File content was not captured'];
+    const firstLine = Math.max(1, Number(file?.startLine) || 1);
+    const highlightStart = Math.max(1, Number(startLine) || 0);
+    const highlightEnd = Math.max(highlightStart, Number(endLine) || highlightStart);
+    for (const [index, text] of lines.entries()) {
+      const number = firstLine + index;
+      const row = element('div', 'mobile-file-line');
+      if (highlightStart && number >= highlightStart && number <= highlightEnd) row.dataset.highlighted = 'true';
+      if (file?.changed) row.dataset.changed = 'true';
+      row.append(element('span', '', number), element('code', '', text || ' '));
+      viewport.append(row);
+    }
+    return viewport;
+  }
+
+  function filePreviewNode(file, options = {}) {
+    const section = element('section', 'mobile-event-file');
+    const header = element('header');
+    const lineLabel = file.totalLines ? `${metric(file.totalLines)} lines`
+      : options.startLine ? `Line ${options.startLine}${options.endLine && options.endLine !== options.startLine ? `–${options.endLine}` : ''}` : 'File';
+    header.append(element('strong', '', file.path || options.path || 'File'), element('small', '', lineLabel));
+    section.append(header, fileLinesNode(file, options));
+    return section;
+  }
+
+  function closeFileSheet() {
+    if (!fileSheet || fileSheet.hidden) return;
+    filePreviewGeneration += 1;
+    fileSheet.hidden = true;
+  }
+
+  function ensureFileSheet() {
+    if (fileSheet) return;
+    fileSheet = element('section', 'mobile-file-sheet');
+    fileSheet.hidden = true;
+    fileSheet.tabIndex = -1;
+    fileSheet.setAttribute('role', 'dialog');
+    fileSheet.setAttribute('aria-modal', 'true');
+    fileSheet.setAttribute('aria-label', 'File preview');
+    fileSheetPanel = element('div', 'mobile-file-sheet-panel');
+    const handle = element('div', 'mobile-file-sheet-handle');
+    const header = element('header', 'mobile-file-sheet-header');
+    const copy = element('span');
+    fileSheetTitle = element('strong', '', 'File');
+    fileSheetMeta = element('small');
+    copy.append(fileSheetTitle, fileSheetMeta);
+    fileSheetClose = element('button', '', '×');
+    fileSheetClose.type = 'button';
+    fileSheetClose.setAttribute('aria-label', 'Close file preview');
+    fileSheetClose.addEventListener('click', closeFileSheet);
+    header.append(copy, fileSheetClose);
+    fileSheetBody = element('div', 'mobile-file-sheet-body');
+    fileSheetPanel.append(handle, header, fileSheetBody);
+    fileSheet.append(fileSheetPanel);
+    fileSheet.addEventListener('click', (event) => {
+      if (event.target === fileSheet) closeFileSheet();
+    });
+    fileSheet.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') closeFileSheet();
+    });
+    root.append(fileSheet);
+  }
+
+  async function openFileReference(reference, fallback) {
+    ensureFileSheet();
+    const previewGeneration = ++filePreviewGeneration;
+    const candidates = conversationFiles(lastConversation).filter((file) => sameFilePath(file.path, reference.path));
+    let file = candidates.at(-1) || fallback;
+    fileSheet.hidden = false;
+    fileSheetTitle.textContent = reference.path.split('/').at(-1) || reference.path;
+    fileSheetMeta.textContent = reference.path;
+    fileSheetBody.replaceChildren(element('div', 'mobile-conversation-loading', 'Opening file…'));
+    fileSheet.focus({ preventScroll: true });
+    if (!file && sessionName && typeof readFile === 'function') {
+      try {
+        file = (await readFile(sessionName, reference.path))?.file;
+      } catch (error) {
+        if (previewGeneration !== filePreviewGeneration) return;
+        file = {
+          path: reference.path,
+          content: error.message || 'File content is unavailable.',
+          startLine: reference.startLine || 1,
+        };
+      }
+    }
+    if (previewGeneration !== filePreviewGeneration) return;
+    file ||= {
+      path: reference.path, content: 'File content was not captured in this conversation.', startLine: reference.startLine || 1,
+    };
+    const path = file.path || reference.path;
+    const startLine = reference.startLine || file.startLine || 1;
+    const endLine = reference.endLine || startLine;
+    fileSheetTitle.textContent = path.split('/').at(-1) || path;
+    fileSheetMeta.textContent = `${path}${reference.startLine ? ` · Lines ${startLine}${endLine !== startLine ? `–${endLine}` : ''}` : ''}`;
+    fileSheetBody.replaceChildren(filePreviewNode(file, {
+      path, startLine, endLine, streamId: `file-sheet:${path}`,
+    }));
+  }
+
+  function searchMatchesNode(matches) {
+    const section = element('section', 'mobile-event-matches');
+    section.append(element('small', '', `${matches.length} ${matches.length === 1 ? 'match' : 'matches'}`));
+    const list = element('div');
+    for (const match of matches) {
+      const button = element('button');
+      button.type = 'button';
+      const copy = element('span');
+      copy.append(element('strong', '', match.path), element('code', '', match.text || 'Match'));
+      button.append(element('small', '', `L${match.line}`), copy, element('i', '', '›'));
+      button.addEventListener('click', () => void openFileReference(
+        { path: match.path, startLine: match.line, endLine: match.line },
+        { path: match.path, content: match.text || '', startLine: match.line },
+      ));
+      list.append(button);
+    }
+    section.append(list);
+    return section;
+  }
+
   function detail(panel, label, value, className = '') {
     if (value === undefined || value === null || value === '') return;
     const section = element('section', `mobile-event-detail ${className}`.trim());
@@ -702,6 +863,8 @@ export function createMobileConversationView({
     };
     const before = splitLines(change.oldText);
     const after = splitLines(change.newText);
+    const oldBase = Math.max(1, Number(change.oldLine) || 1);
+    const newBase = Math.max(1, Number(change.newLine) || 1);
     let prefix = 0;
     while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
     let suffix = 0;
@@ -721,23 +884,23 @@ export function createMobileConversationView({
     const contextStart = Math.max(0, prefix - 3);
     if (contextStart > 0) lines.append(changeLine('skip', '', '', '…'));
     for (let index = contextStart; index < prefix; index += 1) {
-      lines.append(changeLine('context', index + 1, index + 1, before[index]));
+      lines.append(changeLine('context', oldBase + index, newBase + index, before[index]));
     }
     removed.forEach((line, index) => {
-      lines.append(changeLine('remove', prefix + index + 1, '', line));
+      lines.append(changeLine('remove', oldBase + prefix + index, '', line));
     });
     added.forEach((line, index) => {
-      lines.append(changeLine('add', '', prefix + index + 1, line));
+      lines.append(changeLine('add', '', newBase + prefix + index, line));
     });
     const contextCount = Math.min(3, suffix);
     for (let index = 0; index < contextCount; index += 1) {
       lines.append(changeLine(
-        'context', before.length - suffix + index + 1, after.length - suffix + index + 1,
+        'context', oldBase + before.length - suffix + index, newBase + after.length - suffix + index,
         before[before.length - suffix + index],
       ));
     }
     if (suffix > contextCount) lines.append(changeLine('skip', '', '', '…'));
-    if (!lines.childNodes.length) lines.append(changeLine('context', 1, 1, before[0] || after[0] || ''));
+    if (!lines.childNodes.length) lines.append(changeLine('context', oldBase, newBase, before[0] || after[0] || ''));
     scroll.append(lines);
     section.append(header, scroll);
     return section;
@@ -750,10 +913,12 @@ export function createMobileConversationView({
     if (item.type === 'permission') detail(panel, 'Request', item.text || item.title);
     if (item.type === 'tool') {
       if (item.command) detail(panel, 'Shell', item.command, 'mobile-event-shell');
-      else if (!item.diffs?.length) detail(panel, 'Input', item.input);
-      detail(panel, 'Locations', item.locations?.join('\n'));
+      else if (!item.diffs?.length && !item.file && !item.matches?.length) detail(panel, 'Input', item.input);
+      if (item.file) panel.append(filePreviewNode(item.file, { streamId: `read:${item.id}` }));
+      if (item.matches?.length) panel.append(searchMatchesNode(item.matches));
+      if (!item.file && !item.matches?.length) detail(panel, 'Locations', item.locations?.join('\n'));
       for (const [index, change] of (item.diffs || []).entries()) panel.append(changeNode(change, index));
-      detail(panel, 'Output', item.output);
+      if (!item.file && !item.matches?.length) detail(panel, 'Output', item.output);
       for (const output of item.images || []) {
         const image = element('img', 'mobile-event-image');
         image.alt = `${item.title || 'Tool'} output`;
@@ -1102,6 +1267,225 @@ export function createMobileConversationView({
     return card;
   }
 
+  function planReviewState(item) {
+    const current = pendingPlanReviews.get(item.reviewId);
+    if (current?.content === item.planContent) return current;
+    const next = {
+      content: item.planContent, selection: undefined, comments: [],
+      status: 'editing', error: '', note: '', commentDraft: '',
+    };
+    pendingPlanReviews.set(item.reviewId, next);
+    return next;
+  }
+
+  function planLineKind(source, fenced) {
+    if (/^\s*```/.test(source)) return 'fence';
+    if (fenced) return 'code';
+    if (/^\s*#{1,6}\s+/.test(source)) return 'heading';
+    if (/^\s*(?:[-*+] |\d+[.)] )/.test(source)) return 'list';
+    return source.trim() ? 'text' : 'blank';
+  }
+
+  function planFeedback(state, outcome, extra) {
+    const blocks = state.comments.map((comment) => {
+      const location = comment.start === comment.end
+        ? `@plan.md:${comment.start}` : `@plan.md:${comment.start}-${comment.end}`;
+      return `${location}\n${comment.text}`;
+    });
+    if (extra.trim()) blocks.push(extra.trim());
+    if (!blocks.length) return '';
+    const lead = outcome === 'cancelled'
+      ? 'The user wants to revise the plan. The user said:'
+      : 'The user approved the plan with these review comments:';
+    return `${lead}\n${blocks.join('\n\n')}`;
+  }
+
+  function planReviewNode(item) {
+    const local = planReviewState(item);
+    const card = element('section', 'mobile-plan-review');
+    card.dataset.reviewId = item.reviewId;
+    card.dataset.state = local.status;
+    const header = element('header', 'mobile-plan-review-header');
+    const copy = element('span');
+    copy.append(
+      element('small', '', 'Plan review'),
+      element('strong', '', 'Review plan.md'),
+      element('p', '', 'Tap one line, then another to select a range and leave a comment.'),
+    );
+    const status = element('span', 'mobile-question-status', local.status === 'submitting' ? 'Sending…' : 'Pending');
+    header.append(copy, status);
+
+    const documentView = element('div', 'mobile-plan-document');
+    documentView.setAttribute('role', 'listbox');
+    documentView.setAttribute('aria-label', 'Plan lines');
+    const lineButtons = [];
+    let fenced = false;
+    const lines = String(item.planContent || '').replace(/\r\n?/g, '\n').split('\n');
+    for (const [index, source] of lines.entries()) {
+      const lineNumber = index + 1;
+      const kind = planLineKind(source, fenced);
+      const line = element('button', 'mobile-plan-line');
+      line.type = 'button';
+      line.dataset.line = String(lineNumber);
+      line.dataset.kind = kind;
+      line.setAttribute('role', 'option');
+      const displayed = kind === 'heading' ? source.replace(/^\s*#{1,6}\s+/, '') : source;
+      line.append(element('span', 'mobile-plan-line-number', String(lineNumber)), element('span', 'mobile-plan-line-text', displayed || ' '));
+      lineButtons.push(line);
+      documentView.append(line);
+      if (/^\s*```/.test(source)) fenced = !fenced;
+    }
+
+    const commentEditor = element('section', 'mobile-plan-comment-editor');
+    commentEditor.hidden = !local.selection;
+    const commentLabel = element('label', '', local.selection
+      ? `Comment on line ${local.selection.start}${local.selection.end !== local.selection.start ? `–${local.selection.end}` : ''}`
+      : 'Comment');
+    const commentInput = element('textarea');
+    commentInput.rows = 2;
+    commentInput.placeholder = 'What should Grok change here?';
+    commentInput.setAttribute('aria-label', commentLabel.textContent);
+    commentInput.value = local.commentDraft;
+    const commentActions = element('div', 'mobile-plan-comment-actions');
+    const cancelComment = element('button', '', 'Clear selection');
+    cancelComment.type = 'button';
+    const saveComment = element('button', '', 'Add comment');
+    saveComment.type = 'button';
+    saveComment.disabled = true;
+    commentActions.append(cancelComment, saveComment);
+    commentEditor.append(commentLabel, commentInput, commentActions);
+
+    const comments = element('div', 'mobile-plan-comments');
+    const notes = element('textarea', 'mobile-plan-review-notes');
+    notes.rows = 2;
+    notes.placeholder = 'Additional feedback (optional)';
+    notes.setAttribute('aria-label', 'Additional plan feedback');
+    notes.value = local.note;
+    const live = element('p', 'mobile-plan-review-live', local.error);
+    live.setAttribute('aria-live', 'polite');
+    const actions = element('div', 'mobile-plan-review-actions');
+    const requestChanges = element('button', 'mobile-plan-request-changes');
+    requestChanges.type = 'button';
+    requestChanges.append(element('strong', '', 'Request changes'), element('small', '', 'Send comments and keep planning'));
+    const approve = element('button', 'mobile-plan-approve');
+    approve.type = 'button';
+    approve.append(element('strong', '', 'Approve plan'), element('small', '', 'Leave Plan mode and start the work'));
+    const quit = element('button', 'mobile-plan-abandon', 'Quit Plan mode');
+    quit.type = 'button';
+    actions.append(requestChanges, approve, quit);
+
+    function paintSelection() {
+      const selection = local.selection;
+      for (const line of lineButtons) {
+        const value = Number(line.dataset.line);
+        const selected = Boolean(selection && value >= selection.start && value <= selection.end);
+        line.setAttribute('aria-selected', String(selected));
+      }
+      commentEditor.hidden = !selection;
+      if (selection) {
+        commentLabel.textContent = `Comment on line ${selection.start}${selection.end !== selection.start ? `–${selection.end}` : ''}`;
+        commentInput.setAttribute('aria-label', commentLabel.textContent);
+      }
+    }
+
+    function paintComments() {
+      comments.replaceChildren();
+      for (const [index, comment] of local.comments.entries()) {
+        const row = element('div', 'mobile-plan-comment');
+        const label = comment.start === comment.end ? `Line ${comment.start}` : `Lines ${comment.start}–${comment.end}`;
+        const remove = element('button', '', 'Remove');
+        remove.type = 'button';
+        remove.addEventListener('click', () => {
+          local.comments.splice(index, 1);
+          paintComments();
+          updateActions();
+        });
+        row.append(element('small', '', label), element('p', '', comment.text), remove);
+        comments.append(row);
+      }
+      comments.hidden = local.comments.length === 0;
+    }
+
+    function updateActions() {
+      const busy = local.status === 'submitting';
+      requestChanges.disabled = busy || (!local.comments.length && !notes.value.trim());
+      approve.disabled = busy;
+      quit.disabled = busy;
+      for (const line of lineButtons) line.disabled = busy;
+    }
+
+    for (const line of lineButtons) line.addEventListener('click', () => {
+      const value = Number(line.dataset.line);
+      if (!local.selection || local.selection.start !== local.selection.end) {
+        local.selection = { start: value, end: value };
+      } else if (value === local.selection.start) {
+        local.selection = undefined;
+      } else {
+        local.selection = {
+          start: Math.min(local.selection.start, value),
+          end: Math.max(local.selection.start, value),
+        };
+      }
+      commentInput.value = '';
+      local.commentDraft = '';
+      saveComment.disabled = true;
+      paintSelection();
+      if (local.selection) commentInput.focus({ preventScroll: true });
+    });
+    commentInput.addEventListener('input', () => {
+      local.commentDraft = commentInput.value;
+      saveComment.disabled = !commentInput.value.trim();
+    });
+    cancelComment.addEventListener('click', () => {
+      local.selection = undefined;
+      commentInput.value = '';
+      local.commentDraft = '';
+      paintSelection();
+    });
+    saveComment.addEventListener('click', () => {
+      if (!local.selection || !commentInput.value.trim()) return;
+      local.comments.push({ ...local.selection, text: commentInput.value.trim() });
+      local.selection = undefined;
+      commentInput.value = '';
+      local.commentDraft = '';
+      paintSelection();
+      paintComments();
+      updateActions();
+    });
+    notes.addEventListener('input', () => { local.note = notes.value; updateActions(); });
+
+    async function submit(outcome) {
+      if (local.status === 'submitting') return;
+      const feedback = planFeedback(local, outcome, notes.value);
+      if (outcome === 'cancelled' && !feedback) return;
+      local.status = 'submitting';
+      local.error = '';
+      card.dataset.state = 'submitting';
+      status.textContent = 'Sending…';
+      live.textContent = '';
+      updateActions();
+      try {
+        await respondPlanReview(sessionName, item.threadId || threadId, item.reviewId, outcome, feedback);
+      } catch (error) {
+        local.status = 'failed';
+        local.error = error.message || 'Could not send plan review. Try again.';
+        card.dataset.state = 'failed';
+        status.textContent = 'Try again';
+        live.textContent = local.error;
+        updateActions();
+        void refresh();
+      }
+    }
+    requestChanges.addEventListener('click', () => void submit('cancelled'));
+    approve.addEventListener('click', () => void submit('approved'));
+    quit.addEventListener('click', () => void submit('abandoned'));
+    paintSelection();
+    paintComments();
+    updateActions();
+    card.append(header, documentView, commentEditor, comments, notes, live, actions);
+    return card;
+  }
+
   function toolGroupNode(item) {
     const group = element('article', 'mobile-tool-group');
     group.dataset.eventId = item.id;
@@ -1140,6 +1524,7 @@ export function createMobileConversationView({
 
   function pendingInteraction(item) {
     if (item.type === 'permission') return item.status === 'pending';
+    if (item.type === 'plan_review') return item.status === 'pending';
     return item.type === 'question' && ['calling', 'pending', 'working'].includes(item.status);
   }
 
@@ -1379,7 +1764,7 @@ export function createMobileConversationView({
     const questionStep = interaction.type === 'question'
       ? pendingQuestions.get(interaction.questionId)?.step || 0
       : 0;
-    const nextMotionKey = `${interaction.type}:${interaction.questionId || interaction.permissionId}:${questionStep}`;
+    const nextMotionKey = `${interaction.type}:${interaction.questionId || interaction.permissionId || interaction.reviewId}:${questionStep}`;
     const motion = interactionMotionKey !== nextMotionKey;
     interactionMotionKey = nextMotionKey;
     root.dataset.interaction = 'true';
@@ -1394,7 +1779,8 @@ export function createMobileConversationView({
     interactionDock.dataset.kind = interaction.type;
     interactionDock.replaceChildren(interaction.type === 'question'
       ? questionNode(interaction, { docked: true })
-      : permissionDockNode(interaction));
+      : interaction.type === 'plan_review' ? planReviewNode(interaction)
+        : permissionDockNode(interaction));
   }
 
   function messageNode(item, conversation, { suppressPendingInteractions = false } = {}) {
@@ -1408,7 +1794,7 @@ export function createMobileConversationView({
       article.append(
         element('span', 'mobile-message-author', author),
         item.role === 'assistant'
-          ? markdownNode(item.text)
+          ? markdownNode(item.text, { onFileReference: (reference) => void openFileReference(reference) })
           : element('div', 'mobile-message-content', item.text),
       );
       return article;
@@ -1416,6 +1802,7 @@ export function createMobileConversationView({
     if (item.type === 'tool_group') return toolGroupNode(item);
     if (suppressPendingInteractions && pendingInteraction(item)) return document.createDocumentFragment();
     if (item.type === 'question') return questionNode(item);
+    if (item.type === 'plan_review') return document.createDocumentFragment();
     if (item.type === 'turn' || item.type === 'recap') return document.createDocumentFragment();
     if (item.type === 'subagent') return document.createDocumentFragment();
     return eventNode(item);
@@ -1455,6 +1842,7 @@ export function createMobileConversationView({
       attachments,
       uploadingAttachments,
       questions: questionStateVersion,
+      planReviews: [...pendingPlanReviews.entries()],
       cancellingTurn,
     });
     if (signature === renderedSignature) return;
@@ -1498,6 +1886,7 @@ export function createMobileConversationView({
       clearTimeout(pendingAcceptanceTimer);
       pendingMessage = undefined;
       pendingQuestions.clear();
+      pendingPlanReviews.clear();
     }
     if (pendingMessage) {
       const pending = messageNode({
@@ -1673,6 +2062,7 @@ export function createMobileConversationView({
       uploadingAttachments = 0;
       renderAttachmentTray();
       pendingQuestions.clear();
+      pendingPlanReviews.clear();
       input.value = text;
       attachments = sentAttachments;
       for (const path of sentFileMentions) mentionedFiles.add(path);
@@ -1796,6 +2186,7 @@ export function createMobileConversationView({
   media.addEventListener('change', () => {
     generation += 1;
     closeStream();
+    closeFileSheet();
     closeAllLists();
     mentionedFiles.clear();
     threadId = undefined;
@@ -1815,6 +2206,7 @@ export function createMobileConversationView({
       generation += 1;
       clearTimeout(refreshTimer);
       closeStream();
+      closeFileSheet();
       sessionName = nextSessionName;
       threadId = undefined;
       rootThreadId = undefined;
@@ -1825,6 +2217,7 @@ export function createMobileConversationView({
       pendingMessage = undefined;
       cancellingTurn = false;
       interactionMotionKey = '';
+      pendingPlanReviews.clear();
       attachments = [];
       mentionedFiles.clear();
       uploadingAttachments = 0;
@@ -1857,6 +2250,7 @@ export function createMobileConversationView({
       generation += 1;
       clearTimeout(refreshTimer);
       closeStream();
+      closeFileSheet();
       sessionName = nextSessionName || undefined;
       threadId = undefined;
       rootThreadId = undefined;
@@ -1867,6 +2261,7 @@ export function createMobileConversationView({
       pendingMessage = undefined;
       cancellingTurn = false;
       interactionMotionKey = '';
+      pendingPlanReviews.clear();
       attachments = [];
       mentionedFiles.clear();
       uploadingAttachments = 0;

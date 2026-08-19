@@ -1,4 +1,4 @@
-import { readdir, realpath, stat } from 'node:fs/promises';
+import { readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 const ignoredDirectories = new Set(['.git', 'node_modules', 'target', 'dist', 'build', '.next']);
@@ -75,4 +75,28 @@ export async function resolveProjectFiles(root, paths) {
     resolved.push({ path: value.split('\\').join('/'), absolutePath: candidate });
   }
   return resolved;
+}
+
+export async function readProjectFile(root, path, { maximumBytes = 512 * 1024 } = {}) {
+  const [resolved] = await resolveProjectFiles(root, [path]);
+  const info = await stat(resolved.absolutePath);
+  if (info.size > maximumBytes) {
+    const error = new Error('File is too large to preview');
+    error.code = 'FILE_PREVIEW_TOO_LARGE';
+    throw error;
+  }
+  const data = await readFile(resolved.absolutePath);
+  if (data.includes(0)) {
+    const error = new Error('Binary files cannot be previewed as text');
+    error.code = 'FILE_PREVIEW_BINARY';
+    throw error;
+  }
+  const content = data.toString('utf8');
+  return {
+    path: resolved.path,
+    content,
+    size: data.length,
+    totalLines: content ? content.replace(/\n$/, '').split('\n').length : 0,
+    startLine: 1,
+  };
 }

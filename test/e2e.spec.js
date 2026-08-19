@@ -228,6 +228,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       '# Markdown response',
       '',
       'This is **bold**, this is `inlineCode()`, and this is a [safe link](https://example.com).',
+      'Review `public/app.js:1-2` before applying the plan.',
       '',
       '- First item',
       '- Second item',
@@ -247,13 +248,19 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }));
   rootItems.push(
     { id: 'thought-1', type: 'thought', title: 'Thought', text: 'I should inspect the provider.', status: 'working' },
-    { id: 'tool-group-1', type: 'tool_group', title: 'Listed 1 dir, Read 2 files, Edited 1 file, Ran 1 command', status: 'completed', tools: [
+    { id: 'tool-group-1', type: 'tool_group', title: 'Listed 1 dir, Read 2 files, Searched 1 time, Edited 1 file, Ran 1 command', status: 'completed', tools: [
       { id: 'tool-list', type: 'tool', title: 'List Files', subject: 'src', kind: 'list', status: 'completed', output: 'Found files' },
-      { id: 'tool-read-agents', type: 'tool', title: 'Read', subject: 'AGENTS.md', kind: 'read', status: 'completed', input: '{"path":"AGENTS.md"}', output: 'Provider instructions loaded', locations: ['AGENTS.md'] },
+      { id: 'tool-read-agents', type: 'tool', title: 'Read', subject: 'AGENTS.md', kind: 'read', status: 'completed', input: '{"path":"AGENTS.md"}', output: 'Provider instructions loaded', locations: ['AGENTS.md'], file: {
+        path: 'AGENTS.md', content: '# Agent guide\nProvider instructions loaded\nKeep tests focused.\n', startLine: 1, totalLines: 3,
+      } },
       { id: 'tool-read-package', type: 'tool', title: 'Read', subject: 'package.json', kind: 'read', status: 'completed', output: 'Package loaded' },
+      { id: 'tool-search-app', type: 'tool', title: 'Search', subject: 'render', kind: 'search', status: 'completed', output: 'Found 1 match', matches: [
+        { path: 'public/app.js', line: 2, text: 'render(status);' },
+      ] },
       { id: 'tool-edit-app', type: 'tool', title: 'Edited', subject: 'app.js', kind: 'edit', status: 'completed', diffs: [{
         path: 'public/app.js', oldText: 'const status = "old";\nrender(status);\n',
         newText: 'const status = "ready";\nrender(status);\n',
+        oldLine: 1, newLine: 1,
       }] },
       { id: 'tool-shell', type: 'tool', title: 'Shell', kind: 'execute', status: 'completed',
         command: `node --test ${'a-very-long-path/'.repeat(12)}test.js`,
@@ -335,6 +342,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const uploads = [];
   const permissionResponses = [];
   const questionResponses = [];
+  const planReviewResponses = [];
   let releaseFirstQuestion;
   let firstQuestion = true;
   let conversationReads = 0;
@@ -407,6 +415,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
         await new Promise((resolve) => { releaseFirstQuestion = resolve; });
         return route.fulfill({ status: 500, json: { error: 'Question transport unavailable' } });
       }
+      return route.fulfill({ status: 202, json: { accepted: true } });
+    }
+    if (pathname.endsWith('/plan-review')) {
+      planReviewResponses.push(route.request().postDataJSON());
       return route.fulfill({ status: 202, json: { accepted: true } });
     }
     conversationReads += 1;
@@ -482,7 +494,17 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(markdownMessage.locator('a', { hasText: 'Unsafe link' })).not.toHaveAttribute('href', /.+/);
   await expect(markdownMessage).toContainText('Unsafe image');
   expect(await page.evaluate(() => window.__markdownXss)).toBeUndefined();
-  await expect(conversation.locator('.mobile-event-card')).toHaveCount(10);
+  const fileReference = markdownMessage.getByRole('button', { name: 'Open public/app.js at line 1' });
+  await expect(fileReference).toBeVisible();
+  await fileReference.click();
+  const fileSheet = conversation.locator('.mobile-file-sheet');
+  await expect(fileSheet).toBeVisible();
+  await expect(fileSheet.locator('.mobile-file-sheet-header')).toContainText('public/app.js · Lines 1–2');
+  await expect(fileSheet.locator('.mobile-file-line[data-highlighted="true"]')).toHaveCount(2);
+  await expect(fileSheet.locator('.mobile-file-lines')).toContainText('const status = "ready";');
+  await fileSheet.getByRole('button', { name: 'Close file preview' }).click();
+  await expect(fileSheet).toBeHidden();
+  await expect(conversation.locator('.mobile-event-card')).toHaveCount(11);
   await expect(conversation.locator('#mobile-conversation-context')).toContainText('6K / 190K');
   const modelButton = conversation.locator('#mobile-conversation-model');
   await expect(modelButton).toContainText('Qwen 3.8 27B');
@@ -658,7 +680,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(thoughtCard.locator('.mobile-event-panel')).toBeHidden();
   await thoughtCard.getByRole('button').click();
   await expect(thoughtCard.getByText('Interaction remains available.')).toBeVisible();
-  await expect(conversation.locator('.mobile-tool-group')).toContainText('Listed 1 dir, Read 2 files, Edited 1 file, Ran 1 command');
+  await expect(conversation.locator('.mobile-tool-group')).toContainText('Listed 1 dir, Read 2 files, Searched 1 time, Edited 1 file, Ran 1 command');
   await expect(conversation.getByText('Turn completed')).toHaveCount(0);
   await expect(conversation.getByText('Session recap')).toHaveCount(0);
   const subagentPill = conversation.locator('.mobile-subagent-pill');
@@ -790,6 +812,13 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('.mobile-event-change')).toContainText('public/app.js');
   await expect(conversation.locator('.mobile-event-change-line[data-kind="remove"]')).toContainText('const status = "old";');
   await expect(conversation.locator('.mobile-event-change-line[data-kind="add"]')).toContainText('const status = "ready";');
+  await conversation.locator('[data-event-id="tool-search-app"] > .mobile-event-toggle').click();
+  const searchMatch = conversation.locator('.mobile-event-matches button');
+  await expect(searchMatch).toContainText('render(status);');
+  await searchMatch.click();
+  await expect(fileSheet).toBeVisible();
+  await expect(fileSheet.locator('.mobile-file-line[data-highlighted="true"]')).toHaveCount(1);
+  await fileSheet.getByRole('button', { name: 'Close file preview' }).click();
   await conversation.getByRole('button', { name: /Shell/ }).click();
   const shellDetail = conversation.locator('.mobile-event-shell pre');
   await expect.poll(() => shellDetail.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
@@ -1090,6 +1119,73 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   });
   skipQuestionItem.status = 'completed';
   skipQuestionItem.outcome = 'skip_interview';
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(interactionDock).toBeHidden();
+  await expect(conversation.locator('#mobile-conversation-composer')).toBeVisible();
+
+  const planReviewItem = {
+    id: 'plan-review-exit-plan-1', type: 'plan_review', reviewId: 'exit-plan-1',
+    threadId: 'root-thread', status: 'pending',
+    planContent: '# Implementation plan\n\n1. Inspect the current provider\n2. Add the plan review flow\n3. Verify it on mobile',
+  };
+  rootItems.push(planReviewItem);
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(interactionDock).toHaveAttribute('data-kind', 'plan_review');
+  await expect(conversation.locator('#mobile-conversation-composer')).toBeHidden();
+  const review = interactionDock.locator('[data-review-id="exit-plan-1"]');
+  await expect(review.getByText('Review plan.md')).toBeVisible();
+  await expect(review.locator('.mobile-plan-line')).toHaveCount(5);
+  await review.locator('.mobile-plan-line[data-line="3"]').click();
+  await review.locator('.mobile-plan-line[data-line="4"]').click();
+  await expect(review.locator('.mobile-plan-line[aria-selected="true"]')).toHaveCount(2);
+  await review.getByRole('textbox', { name: 'Comment on line 3–4' }).fill('Keep these steps explicit and explain the order.');
+  await review.getByRole('button', { name: 'Add comment' }).click();
+  await expect(review.getByText('Lines 3–4')).toBeVisible();
+  await review.getByRole('textbox', { name: 'Additional plan feedback' }).fill('Add a rollback check.');
+  await review.getByRole('button', { name: /Request changes/ }).click();
+  await expect.poll(() => planReviewResponses.at(-1)).toEqual({
+    threadId: 'root-thread', reviewId: 'exit-plan-1', outcome: 'cancelled',
+    feedback: [
+      'The user wants to revise the plan. The user said:',
+      '@plan.md:3-4',
+      'Keep these steps explicit and explain the order.',
+      '',
+      'Add a rollback check.',
+    ].join('\n'),
+  });
+  planReviewItem.status = 'completed';
+  planReviewItem.outcome = 'cancelled';
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(interactionDock).toBeHidden();
+
+  const revisedPlan = {
+    ...planReviewItem, id: 'plan-review-exit-plan-2', reviewId: 'exit-plan-2',
+    status: 'pending', outcome: undefined, planContent: '# Revised plan\n\n1. Implement\n2. Verify\n3. Roll back if needed',
+  };
+  rootItems.push(revisedPlan);
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await interactionDock.getByRole('button', { name: /Approve plan/ }).click();
+  await expect.poll(() => planReviewResponses.at(-1)).toEqual({
+    threadId: 'root-thread', reviewId: 'exit-plan-2', outcome: 'approved',
+  });
+  revisedPlan.status = 'completed';
+  revisedPlan.outcome = 'approved';
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', {
       data: JSON.stringify({ conversation: nextConversation }),

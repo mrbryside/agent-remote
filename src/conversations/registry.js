@@ -112,6 +112,12 @@ export function createConversationRegistry({ providers = [] } = {}) {
       return resolved.provider.respondQuestion(resolved.handle, input);
     },
 
+    async respondPlanReview(session, input) {
+      const resolved = await resolve(session);
+      if (!resolved?.provider.respondPlanReview) throw new Error('This session does not support plan review');
+      return resolved.provider.respondPlanReview(resolved.handle, input);
+    },
+
     async close() {
       await Promise.all(providers.map((provider) => provider.close?.()));
     },

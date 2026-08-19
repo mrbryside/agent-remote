@@ -144,6 +144,7 @@ test('serves a provider-neutral mobile conversation only for a managed session',
   const inputs = [];
   const permissions = [];
   const questions = [];
+  const planReviews = [];
   const modelChanges = [];
   const modeChanges = [];
   const cancellations = [];
@@ -181,6 +182,14 @@ test('serves a provider-neutral mobile conversation only for a managed session',
         throw error;
       }
       questions.push({ session, input });
+    },
+    respondPlanReview: async (session, input) => {
+      if (input.reviewId === 'expired') {
+        const error = new Error('Plan review is no longer active');
+        error.code = 'GROK_ACP_PLAN_EXPIRED';
+        throw error;
+      }
+      planReviews.push({ session, input });
     },
     setModel: async (session, modelId) => modelChanges.push({ session, modelId }),
     setMode: async (session, modeId) => ({ accepted: true, modeId: (modeChanges.push({ session, modeId }), modeId) }),
@@ -264,6 +273,19 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     assert.deepEqual(questions.map(({ session, input }) => ({ name: session.name, ...input })), [{
       name: 'ar-mobile', threadId: 'thread-1', questionId: 'ask-1', answers: { 'Pick a color': 'Red' },
     }]);
+    const planReviewResponse = await fetch(`${url}/api/conversations/ar-mobile/plan-review`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        threadId: 'thread-1', reviewId: 'exit-plan-1', outcome: 'cancelled',
+        feedback: '@plan.md:3\nExplain this step.',
+      }),
+    });
+    assert.equal(planReviewResponse.status, 202);
+    assert.deepEqual(await planReviewResponse.json(), { accepted: true, outcome: 'cancelled' });
+    assert.deepEqual(planReviews.map(({ session, input }) => ({ name: session.name, ...input })), [{
+      name: 'ar-mobile', threadId: 'thread-1', reviewId: 'exit-plan-1', outcome: 'cancelled',
+      feedback: '@plan.md:3\nExplain this step.',
+    }]);
     const modelResponse = await fetch(`${url}/api/conversations/ar-mobile/model`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ modelId: 'grok-4.6' }),
@@ -326,6 +348,14 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     const fileCompletions = await fetch(`${url}/api/conversations/ar-mobile/completions/files?q=mobconv`);
     assert.equal(fileCompletions.status, 200);
     assert.equal((await fileCompletions.json()).files[0].path, 'public/mobile-conversation.js');
+    const filePreview = await fetch(`${url}/api/conversations/ar-mobile/files?path=public%2Fmobile-conversation.js`);
+    assert.equal(filePreview.status, 200);
+    const preview = (await filePreview.json()).file;
+    assert.equal(preview.path, 'public/mobile-conversation.js');
+    assert.match(preview.content, /createMobileConversationView/);
+    assert.equal(preview.startLine, 1);
+    assert.ok(preview.totalLines > 100);
+    assert.equal((await fetch(`${url}/api/conversations/ar-mobile/files?path=..%2Fpackage.json`)).status, 400);
     const mentionedInput = await fetch(`${url}/api/conversations/ar-mobile/input`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -358,6 +388,19 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     assert.equal(expiredQuestion.status, 409);
     assert.deepEqual(await expiredQuestion.json(), {
       error: 'Question request is no longer active', code: 'GROK_ACP_QUESTION_EXPIRED',
+    });
+    const malformedPlanReview = await fetch(`${url}/api/conversations/ar-mobile/plan-review`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ threadId: 'thread-1', reviewId: 'exit-plan-1', outcome: 'approve' }),
+    });
+    assert.equal(malformedPlanReview.status, 400);
+    const expiredPlanReview = await fetch(`${url}/api/conversations/ar-mobile/plan-review`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ threadId: 'thread-1', reviewId: 'expired', outcome: 'approved' }),
+    });
+    assert.equal(expiredPlanReview.status, 409);
+    assert.deepEqual(await expiredPlanReview.json(), {
+      error: 'Plan review is no longer active', code: 'GROK_ACP_PLAN_EXPIRED',
     });
     initializing = true;
     const connecting = await fetch(`${url}/api/conversations/ar-mobile`);

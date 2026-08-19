@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { resolveProjectFiles, searchProjectFiles } from '../src/conversations/files.js';
+import { readProjectFile, resolveProjectFiles, searchProjectFiles } from '../src/conversations/files.js';
 
 test('project file completion is fuzzy, bounded, and ignores dependency trees', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-remote-files-'));
@@ -31,6 +31,27 @@ test('file mentions resolve only regular files contained by the project root', a
     assert.equal((await resolveProjectFiles(root, ['inside.txt']))[0].absolutePath, await realpath(join(root, 'inside.txt')));
     await assert.rejects(resolveProjectFiles(root, ['../outside.txt']), { code: 'FILE_MENTION_INVALID' });
     await assert.rejects(resolveProjectFiles(root, ['escape.txt']), { code: 'FILE_MENTION_INVALID' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('file preview reads bounded project text and rejects binary or escaped files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-remote-files-'));
+  const outside = await mkdtemp(join(tmpdir(), 'agent-remote-outside-'));
+  try {
+    await writeFile(join(root, 'inside.txt'), 'first\nsecond\n');
+    await writeFile(join(root, 'binary.dat'), Buffer.from([1, 0, 2]));
+    await writeFile(join(root, 'large.txt'), '12345');
+    await writeFile(join(outside, 'outside.txt'), 'outside');
+    await symlink(join(outside, 'outside.txt'), join(root, 'escape.txt'));
+    assert.deepEqual(await readProjectFile(root, 'inside.txt'), {
+      path: 'inside.txt', content: 'first\nsecond\n', size: 13, totalLines: 2, startLine: 1,
+    });
+    await assert.rejects(readProjectFile(root, 'binary.dat'), { code: 'FILE_PREVIEW_BINARY' });
+    await assert.rejects(readProjectFile(root, 'large.txt', { maximumBytes: 4 }), { code: 'FILE_PREVIEW_TOO_LARGE' });
+    await assert.rejects(readProjectFile(root, 'escape.txt'), { code: 'FILE_MENTION_INVALID' });
   } finally {
     await rm(root, { recursive: true, force: true });
     await rm(outside, { recursive: true, force: true });

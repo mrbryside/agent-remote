@@ -114,6 +114,25 @@ merged into the same card instead of appearing in a tool group. Completed
 question cards are reconstructed from replay even though their live JSON-RPC
 request no longer exists.
 
+Finishing a Grok Plan-mode draft is another blocking extension:
+`_x.ai/exit_plan_mode` (the non-underscored spelling is accepted as well).
+The request carries the authoritative `planContent`; the ACP client holds that
+request open and projects it as a dedicated `plan_review` interaction instead
+of a generic tool. On mobile, Plan Review replaces the composer with a bounded
+`plan.md` reader. Each source line is selectable, a second line expands the
+selection into a range, and saved comments retain their exact
+`@plan.md:start-end` location. `Request changes` requires at least one line
+comment or revision note, sends that structured feedback through
+`_x.ai/interject`, then resolves the review as `cancelled` so Grok keeps
+planning. `Approve plan` resolves it as `approved`; `Quit Plan mode` resolves
+it as `abandoned` without feedback. The interjection must be written before
+the review response but not awaited, because Grok drains it only after the
+blocked exit request is released. The provider validates descendant thread
+ownership before any response and maps a stale review to an HTTP conflict.
+Writes to Grok's session-owned `.grok/sessions/.../plan.md` artifact and the
+enter/exit-plan tool calls are protocol detail: they update activity but never
+appear in the visible tool timeline or tool groups.
+
 `src/conversations/grok.js` translates user-relevant `sessionUpdate` values:
 user and agent messages, thoughts, tool calls/results (including diffs and
 images), plans, goals, hooks, retries, background tasks, and subagent lifecycle
