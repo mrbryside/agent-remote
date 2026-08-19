@@ -582,6 +582,22 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }, rootConversation());
   await expect(thoughtCard.getByRole('button')).toContainText('Thought');
   await expect(thoughtCard.locator('.mobile-thinking-indicator')).toHaveCount(0);
+  rootItems[rootItems.findIndex((item) => item.id === 'thought-1')].text += ' Interaction remains available.';
+  const interactionDuringStream = await page.evaluate((nextConversation) => {
+    const button = document.querySelector('.mobile-event-thought .mobile-event-toggle');
+    button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+    const connected = button.isConnected;
+    button.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
+    button.click();
+    return { connected, expanded: button.getAttribute('aria-expanded') };
+  }, rootConversation());
+  expect(interactionDuringStream).toEqual({ connected: true, expanded: 'false' });
+  await expect(thoughtCard.locator('.mobile-event-panel')).toBeHidden();
+  await thoughtCard.getByRole('button').click();
+  await expect(thoughtCard.getByText('Interaction remains available.')).toBeVisible();
   await expect(conversation.locator('.mobile-tool-group')).toContainText('Listed 1 dir, Read 2 files, Edited 1 file, Ran 1 command');
   await expect(conversation.getByText('Turn completed')).toHaveCount(0);
   await expect(conversation.getByText('Session recap')).toHaveCount(0);
@@ -669,8 +685,29 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => streamedCodeViewport.evaluate((node) =>
     node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(1);
 
+  rootItems.push({
+    id: 'tool-group-short', type: 'tool_group', title: 'Read 2 short files', status: 'completed', tools: [
+      { id: 'tool-short-a', type: 'tool', title: 'Read', subject: 'a.js', kind: 'read', status: 'completed' },
+      { id: 'tool-short-b', type: 'tool', title: 'Read', subject: 'b.js', kind: 'read', status: 'completed' },
+    ],
+  });
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await conversation.getByRole('button', { name: /Read 2 short files/ }).click();
+  const shortToolPanel = conversation.locator('[data-event-id="tool-group-short"] > .mobile-tool-group-panel');
+  await expect(shortToolPanel).toBeVisible();
+  const shortToolPanelSize = await shortToolPanel.evaluate((panel) => ({
+    height: panel.clientHeight,
+    contentHeight: panel.scrollHeight,
+  }));
+  expect(shortToolPanelSize.height).toBe(shortToolPanelSize.contentHeight);
+  expect(shortToolPanelSize.height).toBeLessThan(200);
+
   await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
-  const toolPanel = conversation.locator('.mobile-tool-group-panel');
+  const toolPanel = conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-panel');
   await expect.poll(() => toolPanel.evaluate((panel) => panel.clientHeight)).toBeGreaterThan(200);
   await conversation.getByRole('button', { name: /Edited app\.js/ }).click();
   await expect(conversation.locator('.mobile-event-change')).toContainText('public/app.js');
@@ -680,6 +717,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const shellDetail = conversation.locator('.mobile-event-shell pre');
   await expect.poll(() => shellDetail.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
   await expect.poll(() => toolPanel.evaluate((panel) => panel.scrollHeight > panel.clientHeight)).toBe(true);
+  const toolReadingPosition = await toolPanel.evaluate((panel) => {
+    panel.scrollTop = Math.min(60, panel.scrollHeight - panel.clientHeight - 1);
+    return panel.scrollTop;
+  });
+  rootItems[rootItems.findIndex((item) => item.id === 'tool-group-1')].tools
+    .find((tool) => tool.id === 'tool-shell').output += '\nstreamed tool output';
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect.poll(() => toolPanel.evaluate((panel) => panel.scrollTop)).toBe(toolReadingPosition);
   await conversation.getByRole('button', { name: /Read AGENTS\.md/ }).click();
   await expect(conversation.getByText('Provider instructions loaded')).toBeVisible();
   await expect(conversation.locator('.mobile-subagent-pill')).toContainText('1 agent running');

@@ -114,6 +114,9 @@ export function createMobileConversationView({
   let suggestionTimer;
   let suggestionGeneration = 0;
   const mentionedFiles = new Set();
+  let streamPointerActive = false;
+  let deferredStreamRender;
+  let deferredStreamRenderTimer;
 
   function setAvailable(next) {
     if (available === next) return;
@@ -127,12 +130,22 @@ export function createMobileConversationView({
     return Math.max(0, container.scrollHeight - container.scrollTop - container.clientHeight);
   }
 
-  function captureMarkdownScroll(container) {
+  function scrollIdentity(viewport) {
+    const owner = viewport.closest('[data-message-id], [data-event-id]');
+    if (!owner) return undefined;
+    const ownerId = owner.dataset.messageId
+      ? `message:${owner.dataset.messageId}`
+      : `event:${owner.dataset.eventId}`;
+    const viewportId = viewport.dataset.markdownScroll || viewport.dataset.streamScroll;
+    return viewportId ? `${ownerId}:${viewportId}` : undefined;
+  }
+
+  function captureStreamScroll(container) {
     const positions = new Map();
-    for (const viewport of container.querySelectorAll('[data-markdown-scroll]')) {
-      const messageId = viewport.closest('[data-message-id]')?.dataset.messageId;
-      if (!messageId) continue;
-      positions.set(`${messageId}:${viewport.dataset.markdownScroll}`, {
+    for (const viewport of container.querySelectorAll('[data-markdown-scroll], [data-stream-scroll]')) {
+      const identity = scrollIdentity(viewport);
+      if (!identity) continue;
+      positions.set(identity, {
         top: viewport.scrollTop,
         left: viewport.scrollLeft,
         atBottom: distanceFromBottom(viewport) <= 1,
@@ -141,10 +154,9 @@ export function createMobileConversationView({
     return positions;
   }
 
-  function restoreMarkdownScroll(container, positions) {
-    for (const viewport of container.querySelectorAll('[data-markdown-scroll]')) {
-      const messageId = viewport.closest('[data-message-id]')?.dataset.messageId;
-      const position = positions.get(`${messageId}:${viewport.dataset.markdownScroll}`);
+  function restoreStreamScroll(container, positions) {
+    for (const viewport of container.querySelectorAll('[data-markdown-scroll], [data-stream-scroll]')) {
+      const position = positions.get(scrollIdentity(viewport));
       if (!position) continue;
       viewport.scrollLeft = position.left;
       viewport.scrollTop = position.atBottom ? viewport.scrollHeight : position.top;
@@ -651,7 +663,7 @@ export function createMobileConversationView({
         const payload = JSON.parse(event.data);
         if (payload.conversation?.thread?.id !== threadId) return;
         providerId = payload.conversation.provider.id;
-        render(payload.conversation, { animate: true });
+        render(payload.conversation, { animate: true, fromStream: true });
       } catch {
         schedule();
       }
@@ -683,7 +695,7 @@ export function createMobileConversationView({
     return row;
   }
 
-  function changeNode(change) {
+  function changeNode(change, index) {
     const splitLines = (value) => {
       const text = String(value || '').replace(/\n$/, '');
       return text ? text.split('\n') : [];
@@ -704,6 +716,7 @@ export function createMobileConversationView({
       element('small', '', `+${added.length} −${removed.length}`),
     );
     const scroll = element('div', 'mobile-event-change-scroll');
+    scroll.dataset.streamScroll = `diff:${index}:${change.path || 'changed-file'}`;
     const lines = element('div', 'mobile-event-change-lines');
     const contextStart = Math.max(0, prefix - 3);
     if (contextStart > 0) lines.append(changeLine('skip', '', '', '…'));
@@ -739,7 +752,7 @@ export function createMobileConversationView({
       if (item.command) detail(panel, 'Shell', item.command, 'mobile-event-shell');
       else if (!item.diffs?.length) detail(panel, 'Input', item.input);
       detail(panel, 'Locations', item.locations?.join('\n'));
-      for (const change of item.diffs || []) panel.append(changeNode(change));
+      for (const [index, change] of (item.diffs || []).entries()) panel.append(changeNode(change, index));
       detail(panel, 'Output', item.output);
       for (const output of item.images || []) {
         const image = element('img', 'mobile-event-image');
@@ -858,6 +871,7 @@ export function createMobileConversationView({
 
   function eventNode(item) {
     const card = element('article', `mobile-event-card mobile-event-${item.type}`);
+    card.dataset.eventId = item.id;
     card.dataset.kind = item.kind || item.type;
     card.dataset.state = item.status || 'completed';
     const toggle = element('button', 'mobile-event-toggle');
@@ -877,6 +891,7 @@ export function createMobileConversationView({
     } else if (item.type === 'thought') state.hidden = true;
     const arrow = element('i', '', '›');
     const panel = element('div', 'mobile-event-panel');
+    panel.dataset.streamScroll = 'details';
     panel.hidden = !expandedItems.has(item.id);
     eventDetails(panel, item);
     toggle.append(copy, state, arrow);
@@ -1089,6 +1104,7 @@ export function createMobileConversationView({
 
   function toolGroupNode(item) {
     const group = element('article', 'mobile-tool-group');
+    group.dataset.eventId = item.id;
     group.dataset.state = item.status || 'completed';
     const toggle = element('button', 'mobile-tool-group-toggle');
     toggle.type = 'button';
@@ -1099,6 +1115,7 @@ export function createMobileConversationView({
       element('small', '', statusLabel(item.status)),
     );
     const panel = element('div', 'mobile-tool-group-panel');
+    panel.dataset.streamScroll = 'tools';
     panel.hidden = !expandedItems.has(item.id);
     for (const tool of item.tools || []) {
       const displayTitle = tool.subject && !tool.title?.includes(tool.subject)
@@ -1404,7 +1421,16 @@ export function createMobileConversationView({
     return eventNode(item);
   }
 
-  function render(conversation, { animate = false } = {}) {
+  function render(conversation, { animate = false, fromStream = false } = {}) {
+    if (fromStream && streamPointerActive) {
+      deferredStreamRender = { conversation, animate };
+      return;
+    }
+    if (fromStream) {
+      clearTimeout(deferredStreamRenderTimer);
+      deferredStreamRenderTimer = undefined;
+      deferredStreamRender = undefined;
+    }
     const previousConversation = lastConversation;
     lastConversation = conversation;
     const initialThreadRender = !previousConversation ||
@@ -1416,7 +1442,7 @@ export function createMobileConversationView({
     // generous "near bottom" threshold makes short mobile histories snap back
     // down on every streamed update and effectively prevents scrolling.
     const atBottom = distanceFromBottom(targetMessages) <= 1;
-    const markdownScroll = captureMarkdownScroll(targetMessages);
+    const streamScroll = captureStreamScroll(targetMessages);
     const signature = JSON.stringify({
       thread: conversation.thread,
       activity: conversation.activity,
@@ -1498,11 +1524,31 @@ export function createMobileConversationView({
     }
     if (!fragment.childNodes.length) fragment.append(element('div', 'mobile-conversation-loading', 'No messages yet'));
     targetMessages.replaceChildren(fragment);
-    restoreMarkdownScroll(targetMessages, markdownScroll);
+    restoreStreamScroll(targetMessages, streamScroll);
     if (initialThreadRender || atBottom || pendingMessage) targetMessages.scrollTop = targetMessages.scrollHeight;
     if (isRoot) updateJumpToLatest();
     if (isRoot) updateComposerAction();
     if (isRoot && !sheet?.hidden && sheetMode === 'list') renderSubagentList(conversation);
+  }
+
+  function beginStreamInteraction(event) {
+    if (!messages.contains(event.target) && !sheetMessages?.contains(event.target)) return;
+    streamPointerActive = true;
+    clearTimeout(deferredStreamRenderTimer);
+  }
+
+  function finishStreamInteraction() {
+    if (!streamPointerActive) return;
+    streamPointerActive = false;
+    clearTimeout(deferredStreamRenderTimer);
+    // Browsers dispatch click after pointerup. Flush in the next task so a
+    // streamed snapshot cannot replace the pressed control between the two.
+    deferredStreamRenderTimer = setTimeout(() => {
+      deferredStreamRenderTimer = undefined;
+      const pending = deferredStreamRender;
+      deferredStreamRender = undefined;
+      if (pending) render(pending.conversation, { animate: pending.animate, fromStream: true });
+    }, 0);
   }
 
   async function refresh() {
@@ -1700,6 +1746,9 @@ export function createMobileConversationView({
     if (suggestions.contains(event.target) || input.contains(event.target)) return;
     closeSuggestions();
   });
+  root.addEventListener('pointerdown', beginStreamInteraction, true);
+  window.addEventListener('pointerup', finishStreamInteraction);
+  window.addEventListener('pointercancel', finishStreamInteraction);
   input.addEventListener('keydown', (event) => {
     if (!suggestions.hidden && suggestionItems.length) {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -1854,8 +1903,12 @@ export function createMobileConversationView({
       generation += 1;
       clearTimeout(refreshTimer);
       clearTimeout(pendingAcceptanceTimer);
+      clearTimeout(deferredStreamRenderTimer);
       closeStream();
       document.removeEventListener('pointerdown', dismissModelList);
+      root.removeEventListener('pointerdown', beginStreamInteraction, true);
+      window.removeEventListener('pointerup', finishStreamInteraction);
+      window.removeEventListener('pointercancel', finishStreamInteraction);
     },
   };
 }
