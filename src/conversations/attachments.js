@@ -18,7 +18,7 @@ function cleanMime(value) {
 }
 
 export function createConversationAttachmentStore({
-  createTempDir = () => mkdtemp(join(tmpdir(), 'agent-remote-uploads-')),
+  createTempDir = () => mkdtemp(join(process.platform === 'darwin' ? '/tmp' : tmpdir(), 'agent-remote-uploads-')),
   write = writeFile,
   remove = rm,
   maxBytes = maxAttachmentBytes,

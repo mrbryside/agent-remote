@@ -204,11 +204,33 @@ test('ACP client drains queued follow-ups in order and updates real session cont
   assert.deepEqual(modeRequest.params, { sessionId, modeId: 'plan' });
   reply(child, modeRequest.id, {});
   await settingMode;
-  await client.setPermissionMode({ sessionId, cwd: '/tmp/project', permissionMode: 'bypassPermissions' });
-  const permissionNotice = fake.requests.findLast((entry) => entry.method === '_x.ai/yolo_mode_changed');
-  assert.deepEqual(permissionNotice.params, { sessionId, auto_mode: false, ask: false });
+  let permissionNotice = fake.requests.findLast((entry) => entry.method === '_x.ai/yolo_mode_changed');
+  assert.deepEqual(permissionNotice.params, { sessionId, auto_mode: false, ask: true });
   assert.equal(client.read(sessionId).controls.mode.currentId, 'plan');
-  assert.equal(client.read(sessionId).controls.permission.currentId, 'bypassPermissions');
+  assert.equal('permission' in client.read(sessionId).controls, false);
+
+  const settingAuto = client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'auto' });
+  const modeDeadline = Date.now() + 1_000;
+  while (fake.requests.filter((entry) => entry.method === 'session/set_mode').length < 2) {
+    if (Date.now() > modeDeadline) assert.fail('Timed out waiting for default mode');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const defaultModeRequest = fake.requests.filter((entry) => entry.method === 'session/set_mode')[1];
+  assert.deepEqual(defaultModeRequest.params, { sessionId, modeId: 'default' });
+  reply(child, defaultModeRequest.id, {});
+  await settingAuto;
+  permissionNotice = fake.requests.findLast((entry) => entry.method === '_x.ai/yolo_mode_changed');
+  assert.deepEqual(permissionNotice.params, { sessionId, auto_mode: true, ask: false });
+  assert.equal(client.read(sessionId).controls.mode.currentId, 'auto');
+
+  await client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'alwaysApprove' });
+  permissionNotice = fake.requests.findLast((entry) => entry.method === '_x.ai/yolo_mode_changed');
+  assert.deepEqual(permissionNotice.params, { sessionId, auto_mode: false, ask: false });
+  assert.equal(client.read(sessionId).controls.mode.currentId, 'alwaysApprove');
+
+  notify(child, sessionId, { sessionUpdate: 'current_mode_update', currentModeId: 'plan' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(client.read(sessionId).controls.mode.currentId, 'plan');
   await client.close();
 });
 

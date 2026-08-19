@@ -435,15 +435,14 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   #mobile-conversation-send:disabled { border-color: var(--color-border); background: var(--color-surface-subtle); color: var(--color-text-faint); }
   #mobile-conversation-attach { display: grid; flex: 0 0 36px; width: 36px; height: 36px; place-items: center; padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--color-text-secondary); font: 22px/1 var(--font-family-sans); }
   #mobile-conversation-attach:active { background: var(--color-surface-pressed); }
-  #mobile-conversation-model, #mobile-conversation-mode, #mobile-conversation-permission-mode { display: flex; flex: 0 1 auto; min-width: 0; max-width: 104px; height: 36px; align-items: center; justify-content: space-between; gap: 5px; padding: 0 8px; overflow: hidden; border: 1px solid var(--color-border-strong); border-radius: 11px; background: var(--color-surface-subtle); color: var(--color-text-strong); font: 600 9px/1.2 var(--font-family-mono); }
-  #mobile-conversation-permission-mode { flex-basis: 80px; max-width: 80px; }
-  #mobile-conversation-mode { flex-basis: 62px; max-width: 62px; }
+  #mobile-conversation-model, #mobile-conversation-mode { display: flex; flex: 0 1 auto; min-width: 0; max-width: 112px; height: 36px; align-items: center; justify-content: space-between; gap: 5px; padding: 0 8px; overflow: hidden; border: 1px solid var(--color-border-strong); border-radius: 11px; background: var(--color-surface-subtle); color: var(--color-text-strong); font: 600 9px/1.2 var(--font-family-mono); }
+  #mobile-conversation-mode { flex-basis: 96px; max-width: 112px; }
   #mobile-conversation-model { flex: 1 1 82px; max-width: 94px; }
-  #mobile-conversation-model[hidden], #mobile-conversation-mode[hidden], #mobile-conversation-permission-mode[hidden] { display: none; }
-  #mobile-conversation-model > span, #mobile-conversation-mode > span, #mobile-conversation-permission-mode > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #mobile-conversation-model > i, #mobile-conversation-mode > i, #mobile-conversation-permission-mode > i { color: var(--color-text-muted); font: normal 12px/1 var(--font-family-sans); }
-  #mobile-conversation-model[aria-expanded="true"], #mobile-conversation-mode[aria-expanded="true"], #mobile-conversation-permission-mode[aria-expanded="true"] { border-color: var(--color-accent); background: var(--color-surface-pressed); }
-  #mobile-conversation-model:disabled, #mobile-conversation-mode:disabled, #mobile-conversation-permission-mode:disabled, #mobile-conversation-attach:disabled { opacity: .55; }
+  #mobile-conversation-model[hidden], #mobile-conversation-mode[hidden] { display: none; }
+  #mobile-conversation-model > span, #mobile-conversation-mode > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #mobile-conversation-model > i, #mobile-conversation-mode > i { color: var(--color-text-muted); font: normal 12px/1 var(--font-family-sans); }
+  #mobile-conversation-model[aria-expanded="true"], #mobile-conversation-mode[aria-expanded="true"] { border-color: var(--color-accent); background: var(--color-surface-pressed); }
+  #mobile-conversation-model:disabled, #mobile-conversation-mode:disabled, #mobile-conversation-attach:disabled { opacity: .55; }
   .mobile-conversation-attachments { display: flex; gap: 8px; padding: 0 0 8px; overflow-x: auto; overscroll-behavior-inline: contain; }
   .mobile-conversation-attachments[hidden] { display: none; }
   .mobile-conversation-attachment { position: relative; display: grid; flex: 0 0 74px; width: 74px; height: 66px; align-content: center; justify-items: center; gap: 3px; overflow: hidden; border: 1px solid var(--color-border-strong); border-radius: 10px; background: var(--color-surface-subtle); }

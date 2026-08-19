@@ -76,12 +76,6 @@ export function createConversationRegistry({ providers = [] } = {}) {
       return resolved.provider.setMode(resolved.handle, modeId);
     },
 
-    async setPermissionMode(session, permissionMode) {
-      const resolved = await resolve(session);
-      if (!resolved?.provider.setPermissionMode) throw new Error('This session does not support permission modes');
-      return resolved.provider.setPermissionMode(resolved.handle, permissionMode);
-    },
-
     async removeQueuedInput(session, queueId) {
       const resolved = await resolve(session);
       if (!resolved?.provider.removeQueuedInput) throw new Error('This session does not support queued input');

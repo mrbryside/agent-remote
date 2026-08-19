@@ -33,7 +33,7 @@ function duration(value) {
 }
 
 export function createMobileConversationView({
-  api, apiUrl, media, send, uploadAttachment, searchFiles, setModel, setMode, setPermissionMode,
+  api, apiUrl, media, send, uploadAttachment, searchFiles, setModel, setMode,
   removeQueuedInput, steerQueuedInput, respondPermission, respondQuestion,
   onVisibilityChange, onStatusChange = () => {},
 }) {
@@ -54,9 +54,6 @@ export function createMobileConversationView({
   const modeButton = document.querySelector('#mobile-conversation-mode');
   const modeLabel = modeButton.querySelector('span');
   const modeList = document.querySelector('#mobile-conversation-mode-list');
-  const permissionModeButton = document.querySelector('#mobile-conversation-permission-mode');
-  const permissionModeLabel = permissionModeButton.querySelector('span');
-  const permissionModeList = document.querySelector('#mobile-conversation-permission-mode-list');
   const attachButton = document.querySelector('#mobile-conversation-attach');
   const fileInput = document.querySelector('#mobile-conversation-file');
   const attachmentTray = document.querySelector('#mobile-conversation-attachments');
@@ -125,7 +122,7 @@ export function createMobileConversationView({
   }
 
   function closeAuxiliaryLists({ focus } = {}) {
-    for (const [button, list] of [[modeButton, modeList], [permissionModeButton, permissionModeList]]) {
+    for (const [button, list] of [[modeButton, modeList]]) {
       if (!list.hidden) {
         list.hidden = true;
         button.setAttribute('aria-expanded', 'false');
@@ -254,8 +251,6 @@ export function createMobileConversationView({
 
   function renderChoiceControls(conversation) {
     renderChoiceControl(conversation, 'mode', modeButton, modeLabel, modeList, setMode);
-    renderChoiceControl(conversation, 'permission', permissionModeButton, permissionModeLabel,
-      permissionModeList, setPermissionMode);
   }
 
   function commandMatches(command, query) {
@@ -1405,8 +1400,6 @@ export function createMobileConversationView({
     if (opening) list.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
   }
   modeButton.addEventListener('click', () => toggleAuxiliaryList(modeButton, modeList));
-  permissionModeButton.addEventListener('click', () =>
-    toggleAuxiliaryList(permissionModeButton, permissionModeList));
   modelList.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     event.preventDefault();
@@ -1414,8 +1407,7 @@ export function createMobileConversationView({
   });
   document.addEventListener('pointerdown', dismissModelList);
   document.addEventListener('pointerdown', (event) => {
-    if (modeList.contains(event.target) || modeButton.contains(event.target) ||
-        permissionModeList.contains(event.target) || permissionModeButton.contains(event.target)) return;
+    if (modeList.contains(event.target) || modeButton.contains(event.target)) return;
     closeAuxiliaryLists();
   });
   document.addEventListener('pointerdown', (event) => {
@@ -1505,7 +1497,6 @@ export function createMobileConversationView({
       context.hidden = true;
       modelButton.hidden = true;
       modeButton.hidden = true;
-      permissionModeButton.hidden = true;
       queue.hidden = true;
       queue.replaceChildren();
       interactionDock.hidden = true;
@@ -1543,7 +1534,6 @@ export function createMobileConversationView({
       context.hidden = true;
       modelButton.hidden = true;
       modeButton.hidden = true;
-      permissionModeButton.hidden = true;
       queue.hidden = true;
       queue.replaceChildren();
       if (!sessionName || !media.matches) return setAvailable(false);

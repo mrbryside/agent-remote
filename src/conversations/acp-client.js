@@ -9,6 +9,14 @@ const maxAnswerText = 4_000;
 const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,79}$/;
 const conversationModes = new Set(['default', 'plan']);
 const permissionModes = new Set(['default', 'auto', 'bypassPermissions']);
+const unifiedModes = new Set(['normal', 'plan', 'auto', 'alwaysApprove']);
+
+function unifiedMode(current) {
+  if (current.currentMode === 'plan') return 'plan';
+  if (current.permissionMode === 'auto') return 'auto';
+  if (current.permissionMode === 'bypassPermissions') return 'alwaysApprove';
+  return 'normal';
+}
 
 function rpcError(message, code = 'GROK_ACP_ERROR') {
   const error = new Error(message);
@@ -202,8 +210,12 @@ export function createGrokAcpClient({
       current.turnActive = true;
     } else if (update.sessionUpdate === 'turn_completed') {
       current.turnActive = false;
-    } else if (update.sessionUpdate === 'current_mode_update' && conversationModes.has(update.currentMode)) {
-      current.currentMode = update.currentMode;
+    } else if (update.sessionUpdate === 'current_mode_update') {
+      const nextMode = update.currentModeId ?? update.currentMode;
+      if (conversationModes.has(nextMode)) {
+        current.currentMode = nextMode;
+        current.permissionMode = 'default';
+      }
     }
     const signature = subagentSignature(update);
     if (signature && ['tool_call', 'tool_call_update'].includes(update.sessionUpdate) &&
@@ -447,18 +459,12 @@ export function createGrokAcpClient({
       })),
       controls: {
         mode: {
-          currentId: current.currentMode,
+          currentId: unifiedMode(current),
           options: [
-            { id: 'default', label: 'Build', description: 'Work normally and make changes' },
+            { id: 'normal', label: 'Normal', description: 'Work normally and ask before protected calls' },
             { id: 'plan', label: 'Plan', description: 'Plan first without making changes' },
-          ],
-        },
-        permission: {
-          currentId: current.permissionMode,
-          options: [
-            { id: 'default', label: 'Ask', description: 'Ask before protected tool calls' },
             { id: 'auto', label: 'Auto', description: 'Let Grok approve lower-risk calls' },
-            { id: 'bypassPermissions', label: 'Full access', description: 'Skip ordinary permission prompts' },
+            { id: 'alwaysApprove', label: 'Always approve', description: 'Skip ordinary permission prompts' },
           ],
         },
         commands: { options: current.commands.slice() },
@@ -548,32 +554,27 @@ export function createGrokAcpClient({
   }
 
   async function setMode({ sessionId, cwd, modeId }) {
-    if (!conversationModes.has(modeId)) throw rpcError('Conversation mode is invalid', 'GROK_ACP_MODE_INVALID');
+    if (!unifiedModes.has(modeId)) throw rpcError('Conversation mode is invalid', 'GROK_ACP_MODE_INVALID');
     await loadSession({ sessionId, cwd });
     const current = state(sessionId);
     if (current.activePrompt || current.turnActive) {
       throw rpcError('Wait for the current turn before changing mode', 'GROK_ACP_SESSION_BUSY');
     }
-    await request('session/set_mode', { sessionId, modeId });
-    current.currentMode = modeId;
-    publish(sessionId);
-    return { accepted: true, modeId };
-  }
-
-  async function setPermissionMode({ sessionId, cwd, permissionMode }) {
-    if (!permissionModes.has(permissionMode)) {
-      throw rpcError('Permission mode is invalid', 'GROK_ACP_PERMISSION_MODE_INVALID');
+    const conversationMode = modeId === 'plan' ? 'plan' : 'default';
+    const permissionMode = modeId === 'auto' ? 'auto'
+      : modeId === 'alwaysApprove' ? 'bypassPermissions' : 'default';
+    if (current.currentMode !== conversationMode) {
+      await request('session/set_mode', { sessionId, modeId: conversationMode });
     }
-    await loadSession({ sessionId, cwd });
-    const current = state(sessionId);
     notify('_x.ai/yolo_mode_changed', {
       sessionId,
       auto_mode: permissionMode === 'auto',
       ask: permissionMode === 'default',
     });
+    current.currentMode = conversationMode;
     current.permissionMode = permissionMode;
     publish(sessionId);
-    return { accepted: true, permissionMode };
+    return { accepted: true, modeId };
   }
 
   async function removeQueuedPrompt({ sessionId, queueId }) {
@@ -674,7 +675,7 @@ export function createGrokAcpClient({
   }
 
   return {
-    loadSession, prompt, setModel, setMode, setPermissionMode,
+    loadSession, prompt, setModel, setMode,
     removeQueuedPrompt, steerQueuedPrompt,
     read, watch, respondPermission, respondQuestion, close,
   };

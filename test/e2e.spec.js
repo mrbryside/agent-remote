@@ -230,8 +230,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   };
   rootItems.push(subagentItem, secondSubagentItem);
   let currentModelId = 'qwen-local';
-  let currentModeId = 'default';
-  let currentPermissionMode = 'default';
+  let currentModeId = 'normal';
   const queuedInputs = [];
   const rootConversation = () => ({
     provider: { id: 'grok', label: 'Grok' },
@@ -252,13 +251,12 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       ],
     }, mode: {
       currentId: currentModeId,
-      options: [{ id: 'default', label: 'Build', description: 'Work normally' },
-        { id: 'plan', label: 'Plan', description: 'Plan before changing files' }],
-    }, permission: {
-      currentId: currentPermissionMode,
-      options: [{ id: 'default', label: 'Ask', description: 'Ask first' },
+      options: [
+        { id: 'normal', label: 'Normal', description: 'Work normally and ask first' },
+        { id: 'plan', label: 'Plan', description: 'Plan before changing files' },
         { id: 'auto', label: 'Auto', description: 'Approve lower-risk calls' },
-        { id: 'bypassPermissions', label: 'Full access', description: 'Skip ordinary prompts' }],
+        { id: 'alwaysApprove', label: 'Always approve', description: 'Skip ordinary prompts' },
+      ],
     }, commands: { options: [
       { name: 'compact', description: 'Compress conversation history', inputHint: 'optional focus' },
       { name: 'deep-research', description: 'Research a topic', inputHint: 'topic' },
@@ -280,7 +278,6 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const mobileInputs = [];
   const modelChanges = [];
   const modeChanges = [];
-  const permissionModeChanges = [];
   const queueActions = [];
   const uploads = [];
   const permissionResponses = [];
@@ -320,14 +317,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       currentModeId = submitted.modeId;
       return route.fulfill({ status: 202, json: { accepted: true, modeId: currentModeId } });
     }
-    if (pathname.endsWith('/permission-mode')) {
-      const submitted = route.request().postDataJSON();
-      permissionModeChanges.push(submitted);
-      currentPermissionMode = submitted.permissionMode;
-      return route.fulfill({ status: 202, json: { accepted: true, permissionMode: currentPermissionMode } });
-    }
     if (pathname.endsWith('/attachments') && route.request().method() === 'POST') {
-      uploads.push(route.request().headers()['x-file-name']);
+      uploads.push({
+        name: route.request().headers()['x-file-name'],
+        bytes: route.request().postDataBuffer()?.toString('utf8'),
+      });
       return route.fulfill({ status: 201, json: { attachment: {
         id: '11111111-1111-4111-8111-111111111111', name: 'phone.png', mimeType: 'image/png', size: 8,
         previewUrl: `/api/conversations/${sessionName}/attachments/11111111-1111-4111-8111-111111111111`,
@@ -399,11 +393,12 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await conversation.locator('#mobile-conversation-mode-list').getByRole('option', { name: /Plan/ }).click();
   await expect.poll(() => modeChanges).toContainEqual({ modeId: 'plan' });
   await expect(conversation.locator('#mobile-conversation-mode')).toContainText('Plan');
-  await conversation.locator('#mobile-conversation-permission-mode').click();
-  await conversation.locator('#mobile-conversation-permission-mode-list')
-    .getByRole('option', { name: /Full access/ }).click();
-  await expect.poll(() => permissionModeChanges).toContainEqual({ permissionMode: 'bypassPermissions' });
-  await expect(conversation.locator('#mobile-conversation-permission-mode')).toContainText('Full access');
+  await conversation.locator('#mobile-conversation-mode').click();
+  await conversation.locator('#mobile-conversation-mode-list')
+    .getByRole('option', { name: /Always approve/ }).click();
+  await expect.poll(() => modeChanges).toContainEqual({ modeId: 'alwaysApprove' });
+  await expect(conversation.locator('#mobile-conversation-mode')).toContainText('Always approve');
+  await expect(conversation.locator('#mobile-conversation-permission-mode')).toHaveCount(0);
   const input = conversation.locator('#mobile-conversation-input');
   await input.fill('/co');
   const suggestions = conversation.locator('#mobile-conversation-suggestions');
@@ -494,7 +489,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await conversation.locator('#mobile-conversation-file').setInputFiles({
     name: 'phone.png', mimeType: 'image/png', buffer: Buffer.from('fake-image'),
   });
-  await expect.poll(() => uploads).toContain(encodeURIComponent('phone.png'));
+  await expect.poll(() => uploads).toContainEqual({
+    name: encodeURIComponent('phone.png'), bytes: 'fake-image',
+  });
   await expect(conversation.locator('.mobile-conversation-attachments img')).toHaveCount(1);
   await input.fill('inspect screenshot');
   await conversation.locator('#mobile-conversation-send').click();

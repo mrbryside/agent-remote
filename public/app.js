@@ -160,11 +160,6 @@ const mobileConversation = createMobileConversationView({
       method: 'POST', body: JSON.stringify({ modeId }),
     });
   },
-  async setPermissionMode(sessionName, permissionMode) {
-    return api(`/api/conversations/${encodeURIComponent(sessionName)}/permission-mode`, {
-      method: 'POST', body: JSON.stringify({ permissionMode }),
-    });
-  },
   async removeQueuedInput(sessionName, queueId) {
     return api(`/api/conversations/${encodeURIComponent(sessionName)}/queue/${encodeURIComponent(queueId)}`, {
       method: 'DELETE',

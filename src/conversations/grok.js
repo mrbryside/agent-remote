@@ -777,7 +777,6 @@ export function createGrokConversationProvider({
     const controls = includeControls ? {
       ...(model ? { model } : {}),
       ...(snapshot.controls?.mode ? { mode: snapshot.controls.mode } : {}),
-      ...(snapshot.controls?.permission ? { permission: snapshot.controls.permission } : {}),
       ...(snapshot.controls?.commands ? { commands: snapshot.controls.commands } : {}),
     } : undefined;
     const context = includeControls
@@ -924,11 +923,6 @@ export function createGrokConversationProvider({
     },
     async setMode(handle, modeId) {
       return acpClient.setMode({ sessionId: handle.rootThreadId, cwd: handle.cwd, modeId });
-    },
-    async setPermissionMode(handle, permissionMode) {
-      return acpClient.setPermissionMode({
-        sessionId: handle.rootThreadId, cwd: handle.cwd, permissionMode,
-      });
     },
     async removeQueuedInput(handle, queueId) {
       return acpClient.removeQueuedPrompt({ sessionId: handle.rootThreadId, queueId });

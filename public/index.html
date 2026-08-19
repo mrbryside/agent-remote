@@ -90,16 +90,14 @@
                   <textarea id="mobile-conversation-input" rows="1" maxlength="16384" enterkeyhint="send" autocapitalize="sentences" autocomplete="off" placeholder="Message Grok…" aria-label="Message"></textarea>
                 </div>
                 <div class="mobile-conversation-compose-toolbar">
-                  <input id="mobile-conversation-file" type="file" multiple hidden>
+                  <input id="mobile-conversation-file" type="file" multiple hidden aria-label="Choose files from this device">
                   <button id="mobile-conversation-attach" type="button" aria-label="Attach files">＋</button>
-                  <button id="mobile-conversation-permission-mode" type="button" aria-haspopup="listbox" aria-expanded="false" hidden><span>Ask</span><i>⌄</i></button>
-                  <button id="mobile-conversation-mode" type="button" aria-haspopup="listbox" aria-expanded="false" hidden><span>Build</span><i>⌄</i></button>
+                  <button id="mobile-conversation-mode" type="button" aria-haspopup="listbox" aria-expanded="false" hidden><span>Normal</span><i>⌄</i></button>
                   <button id="mobile-conversation-model" type="button" aria-haspopup="listbox" aria-expanded="false" hidden><span>Model</span><i>⌄</i></button>
                   <button id="mobile-conversation-send" type="submit" aria-label="Send message">↑</button>
                 </div>
                 <div id="mobile-conversation-model-list" class="mobile-conversation-model-list" role="listbox" aria-label="Choose model" hidden></div>
                 <div id="mobile-conversation-mode-list" class="mobile-conversation-model-list" role="listbox" aria-label="Choose mode" hidden></div>
-                <div id="mobile-conversation-permission-mode-list" class="mobile-conversation-model-list" role="listbox" aria-label="Choose permission mode" hidden></div>
                 <div id="mobile-conversation-suggestions" class="mobile-conversation-suggestions" role="listbox" aria-label="Composer suggestions" hidden></div>
               </form>
             </section>

@@ -1556,8 +1556,8 @@ export function createTerminalServer(options = {}) {
         if (request.method === 'POST' && conversationModeMatch) {
           const name = decodeURIComponent(conversationModeMatch[1]);
           const body = await readJson(request);
-          if (!['default', 'plan'].includes(body.modeId)) {
-            return json(response, 400, { error: 'modeId must be default or plan' });
+          if (!['normal', 'plan', 'auto', 'alwaysApprove'].includes(body.modeId)) {
+            return json(response, 400, { error: 'modeId must be normal, plan, auto, or alwaysApprove' });
           }
           const session = await conversationSession(name);
           if (!session) return json(response, 404, { error: 'Managed session not found' });
@@ -1567,25 +1567,6 @@ export function createTerminalServer(options = {}) {
           } catch (error) {
             if (error?.code === 'GROK_ACP_MODE_INVALID') return json(response, 400, { error: error.message, code: error.code });
             if (error?.code === 'GROK_ACP_SESSION_BUSY') return json(response, 409, { error: error.message, code: error.code });
-            return conversationFailure(response, error);
-          }
-        }
-        const conversationPermissionModeMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/permission-mode$/);
-        if (request.method === 'POST' && conversationPermissionModeMatch) {
-          const name = decodeURIComponent(conversationPermissionModeMatch[1]);
-          const body = await readJson(request);
-          if (!['default', 'auto', 'bypassPermissions'].includes(body.permissionMode)) {
-            return json(response, 400, { error: 'permissionMode is invalid' });
-          }
-          const session = await conversationSession(name);
-          if (!session) return json(response, 404, { error: 'Managed session not found' });
-          try {
-            const result = await conversationRegistry.setPermissionMode(session, body.permissionMode);
-            return json(response, 202, result);
-          } catch (error) {
-            if (error?.code === 'GROK_ACP_PERMISSION_MODE_INVALID') {
-              return json(response, 400, { error: error.message, code: error.code });
-            }
             return conversationFailure(response, error);
           }
         }

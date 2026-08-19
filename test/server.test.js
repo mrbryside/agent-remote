@@ -137,7 +137,6 @@ test('serves a provider-neutral mobile conversation only for a managed session',
   const questions = [];
   const modelChanges = [];
   const modeChanges = [];
-  const permissionModeChanges = [];
   const queueActions = [];
   let initializing = false;
   let activeDeliveries = 0;
@@ -175,9 +174,6 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     },
     setModel: async (session, modelId) => modelChanges.push({ session, modelId }),
     setMode: async (session, modeId) => ({ accepted: true, modeId: (modeChanges.push({ session, modeId }), modeId) }),
-    setPermissionMode: async (session, permissionMode) => ({
-      accepted: true, permissionMode: (permissionModeChanges.push({ session, permissionMode }), permissionMode),
-    }),
     removeQueuedInput: async (session, queueId) => (queueActions.push({ action: 'remove', session, queueId }), { accepted: true }),
     steerQueuedInput: async (session, queueId) => (queueActions.push({ action: 'steer', session, queueId }), { accepted: true }),
   };
@@ -266,23 +262,12 @@ test('serves a provider-neutral mobile conversation only for a managed session',
       name: 'ar-mobile', modelId: 'grok-4.6',
     }]);
     const modeResponse = await fetch(`${url}/api/conversations/ar-mobile/mode`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modeId: 'plan' }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modeId: 'alwaysApprove' }),
     });
     assert.equal(modeResponse.status, 202);
-    assert.deepEqual(await modeResponse.json(), { accepted: true, modeId: 'plan' });
-    const permissionModeResponse = await fetch(`${url}/api/conversations/ar-mobile/permission-mode`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ permissionMode: 'bypassPermissions' }),
-    });
-    assert.equal(permissionModeResponse.status, 202);
-    assert.deepEqual(await permissionModeResponse.json(), {
-      accepted: true, permissionMode: 'bypassPermissions',
-    });
+    assert.deepEqual(await modeResponse.json(), { accepted: true, modeId: 'alwaysApprove' });
     assert.deepEqual(modeChanges.map(({ session, modeId }) => ({ name: session.name, modeId })), [
-      { name: 'ar-mobile', modeId: 'plan' },
-    ]);
-    assert.deepEqual(permissionModeChanges.map(({ session, permissionMode }) => ({ name: session.name, permissionMode })), [
-      { name: 'ar-mobile', permissionMode: 'bypassPermissions' },
+      { name: 'ar-mobile', modeId: 'alwaysApprove' },
     ]);
     for (const [suffix, method] of [['', 'DELETE'], ['/steer', 'POST']]) {
       const queueResponse = await fetch(`${url}/api/conversations/ar-mobile/queue/q-1${suffix}`, {
@@ -302,13 +287,15 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     assert.equal(upload.status, 201);
     const uploaded = (await upload.json()).attachment;
     assert.equal(uploaded.name, 'phone.png');
+    assert.equal('path' in uploaded, false);
     assert.equal((await fetch(`${url}${uploaded.previewUrl}`)).status, 200);
     const attachmentInput = await fetch(`${url}/api/conversations/ar-mobile/input`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ id: 'mobile-attachment', text: 'inspect this', attachmentIds: [uploaded.id] }),
     });
     assert.equal(attachmentInput.status, 202);
-    assert.match(inputs.at(-1).text, /^inspect this\n\n!\[phone\.png\]\(\/.*\.png\)$/);
+    assert.match(inputs.at(-1).text,
+      /^inspect this\n\n!\[phone\.png\]\(\/tmp\/agent-remote-uploads-[^/]+\/[0-9a-f-]{36}\.png\)$/);
     assert.equal(inputs.at(-1).options.attachments[0].previewUrl, uploaded.previewUrl);
     const fileCompletions = await fetch(`${url}/api/conversations/ar-mobile/completions/files?q=mobconv`);
     assert.equal(fileCompletions.status, 200);
