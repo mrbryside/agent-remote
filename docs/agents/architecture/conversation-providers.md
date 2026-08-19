@@ -144,7 +144,13 @@ After the initial HTTP read, `/api/conversations/:session/stream` publishes the
 provider-neutral snapshots over SSE. Provider watchers are released when the
 browser disconnects or the server stops. Assistant text is painted immediately
 from those provider chunks; the browser does not add a synthetic typewriter
-delay after a chunk arrives. During initial ACP connection, the
+delay after a chunk arrives. Opening or switching a root conversation places
+the message viewport at its latest item synchronously, with no smooth initial
+scroll animation. Later stream updates follow the tail only while the reader
+is already there. Scrolling up reveals a jump-to-latest control; that explicit
+action scrolls smoothly unless the device requests reduced motion.
+
+During initial ACP connection, the
 native mobile surface continues to own the viewport and shows reconnecting
 state; it does not briefly attach xterm and resize the shared tmux pane. A new
 Grok chat reserves that native surface optimistically on the original `+`
