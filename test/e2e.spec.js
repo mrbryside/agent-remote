@@ -425,9 +425,23 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const mobileShellBox = await page.locator('.terminal-shell').boundingBox();
   expect(mobileStageBox.y).toBe(mobileShellBox.y);
   expect(mobileStageBox.height).toBe(mobileShellBox.height);
+  const projectId = await project.getAttribute('data-project');
+  const secondSessionName = await page.evaluate(async (id) => {
+    const response = await fetch(`/api/projects/${encodeURIComponent(id)}/sessions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    return (await response.json()).session.name;
+  }, projectId);
+  await expect(project.locator('.session-row')).toHaveCount(2, { timeout: 6_000 });
+
   await conversation.locator('#mobile-conversation-menu').click();
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'expanded');
-  await page.locator('#toggle-sidebar').click();
+  await project.locator(`.session-row[data-session="${secondSessionName}"] .session-button`).click();
+  await expect(project.locator(`.session-row[data-session="${secondSessionName}"]`)).toHaveClass(/active/);
+  await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'collapsed');
+  await conversation.locator('#mobile-conversation-menu').click();
+  await project.locator(`.session-row[data-session="${sessionName}"] .session-button`).click();
+  await expect(project.locator(`.session-row[data-session="${sessionName}"]`)).toHaveClass(/active/);
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'collapsed');
   await expect(page.locator('#terminal')).toBeHidden();
   await expect.poll(() => conversationReads).toBeGreaterThan(0);

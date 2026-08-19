@@ -2435,7 +2435,10 @@ function showHome() {
 
 function selectSession(name, { expandProject = true } = {}) {
   const currentRuntime = name ? terminalRuntimes.get(name) : undefined;
-  if (name && activeSession === name && currentRuntime?.socket?.readyState === WebSocket.OPEN) return;
+  if (name && activeSession === name && currentRuntime?.socket?.readyState === WebSocket.OPEN) {
+    if (compactSidebarMedia.matches) setSidebarCollapsed(true, { persist: false });
+    return;
+  }
   activeSession = name || null;
   firstPromptBuffer = '';
   firstPromptSession = activeSession;
@@ -2465,6 +2468,7 @@ function selectSession(name, { expandProject = true } = {}) {
   updateGraphicsSplit();
   syncSidebarSelection();
   setView();
+  if (compactSidebarMedia.matches) setSidebarCollapsed(true, { persist: false });
   if (activeSession && !selectedSession()?.pending &&
       !mobileConversation.isVisibleFor(activeSession)) connect();
 }

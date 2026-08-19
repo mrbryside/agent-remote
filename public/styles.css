@@ -313,6 +313,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .sidebar { position: absolute; z-index: 30; inset: 0 auto 0 0; width: min(88vw, 320px); }
   .workspace[data-sidebar="collapsed"][data-sidebar-peek="true"] .sidebar { width: min(88vw, 320px); }
   .sidebar-resizer { display: none; }
+  .session-row:not(.active) .session-close { display: none; }
   .project-select { gap: 10px; }
   .topbar { padding-inline: 10px; }
   .workspace[data-mobile-conversation="true"] .topbar { display: none; }
