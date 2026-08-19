@@ -38,10 +38,14 @@ and sends the real `_x.ai/interject` request to the active turn. A
 input.
 
 The root snapshot also exposes provider-owned controls. Grok uses
-`session/set_model`, `session/set_mode` (`default`/`plan`), and the
-`_x.ai/yolo_mode_changed` notification for Ask, Auto, and Full access. The
-initial permission label follows Grok's `[ui].permission_mode` config, while a
-mobile selection changes only the loaded Grok session through ACP.
+`session/set_model` and one mutually exclusive mode control: `Normal`, `Plan`,
+`Auto`, or `Always approve`. `Plan` maps to ACP `session/set_mode` `plan`; the
+other choices use `default` plus `_x.ai/yolo_mode_changed` with ask, auto, or
+bypass semantics. Incoming `current_mode_update.currentModeId` notifications
+update the same control, so the mobile selection and Grok session do not expose
+independent plan and permission dropdowns. The initial choice follows Grok's
+`[ui].permission_mode` config, while a mobile change affects only the loaded
+Grok session through ACP.
 
 Composer completion also stays behind provider and project boundaries. Slash
 commands come from Grok's live ACP `available_commands_update` notification;
@@ -53,13 +57,16 @@ separately from the visible text. Before ACP delivery, the server resolves each
 path through `realpath`, rejects traversal and symlink escapes, and appends the
 validated absolute file reference to the prompt.
 
-Mobile uploads go through `src/conversations/attachments.js`. Each server
-process owns a private temporary root, writes opaque mode-0600 files, binds
-their ids to one managed session, and deletes the root on shutdown. Input APIs
-accept only those ids and expand them to local Markdown paths immediately
-before ACP delivery; clients cannot submit arbitrary filesystem paths through
-the attachment field. Preview responses are no-store, nosniff, sandboxed, and
-only raster images render inline.
+Mobile uploads go through `src/conversations/attachments.js`. The browser sends
+the selected file bytes and display metadata; it never sends or receives a
+device filesystem path. Each server process owns a private temporary root
+(`/tmp/agent-remote-uploads-*` on macOS), writes opaque mode-0600 files, binds
+their ids to one managed session, and deletes the root on shutdown. The upload
+response exposes only an opaque id and preview URL. Input APIs accept only
+those ids and expand them to backend-local Markdown paths immediately before
+ACP delivery; clients cannot submit arbitrary filesystem paths through the
+attachment field. Preview responses are no-store, nosniff, sandboxed, and only
+raster images render inline.
 
 When Grok requests tool permission, the ACP client keeps the JSON-RPC request
 open and projects its exact options into a native permission card. The mobile
