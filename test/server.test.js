@@ -464,8 +464,22 @@ test('streams provider-neutral conversation updates and releases its watcher on 
     const response = await fetch(`${url}/api/conversations/ar-mobile/stream`, { signal: controller.signal });
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type'), /^text\/event-stream/);
-    const { value } = await response.body.getReader().read();
+    const reader = response.body.getReader();
+    const { value } = await reader.read();
     assert.match(Buffer.from(value).toString('utf8'), /"live chunk"/);
+    const split = await fetch(`${url}/api/control/split`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        cwd: '/tmp/project',
+        argv: ['terminal-browser', 'open', 'https://example.com'],
+      }),
+    });
+    assert.equal(split.status, 202);
+    assert.deepEqual(await split.json(), { delivered: 1, session: 'ar-mobile' });
+    const control = await reader.read();
+    assert.match(Buffer.from(control.value).toString('utf8'), /event: control/);
+    assert.match(Buffer.from(control.value).toString('utf8'), /"action":"open-graphics"/);
     controller.abort();
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(stopped, true);

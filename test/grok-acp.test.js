@@ -7,7 +7,7 @@ import { createGrokAcpClient } from '../src/conversations/acp-client.js';
 function harness() {
   const children = [];
   const requests = [];
-  const spawn = (command, args) => {
+  const spawn = (command, args, options) => {
     const child = new EventEmitter();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
@@ -21,7 +21,7 @@ function harness() {
       }
     });
     child.kill = (signal) => { child.killedWith = signal; };
-    children.push({ child, command, args });
+    children.push({ child, command, args, options });
     return child;
   };
   return { spawn, children, requests };
@@ -49,7 +49,10 @@ async function waitForRequest(harnessValue, method) {
 
 test('ACP client initializes once, replays history, deduplicates events, and prompts', async () => {
   const fake = harness();
-  const client = createGrokAcpClient({ spawn: fake.spawn });
+  const client = createGrokAcpClient({
+    spawn: fake.spawn,
+    environment: () => ({ AGENT_REMOTE_WEB: '1', AGENT_REMOTE_URL: 'http://127.0.0.1:4321' }),
+  });
   const sessionId = '01a015a9-61df-7052-a5d0-17de77a201fa';
   const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
   const load = await waitForRequest(fake, 'session/load');
@@ -65,6 +68,9 @@ test('ACP client initializes once, replays history, deduplicates events, and pro
   assert.equal(snapshot.events.length, 1);
   assert.equal(fake.children[0].command, 'grok');
   assert.deepEqual(fake.children[0].args, ['agent', '--leader', 'stdio']);
+  assert.equal(fake.children[0].options.env.AGENT_REMOTE_WEB, '1');
+  assert.equal(fake.children[0].options.env.AGENT_REMOTE_URL, 'http://127.0.0.1:4321');
+  assert.equal(fake.children[0].options.stdio.length, 3);
 
   let streamed;
   const stop = client.watch(sessionId, (next) => { streamed = next; });

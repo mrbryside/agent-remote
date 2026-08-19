@@ -176,6 +176,12 @@ scroll animation. Later stream updates follow the tail only while the reader
 is already there. Scrolling up reveals a jump-to-latest control; that explicit
 action scrolls smoothly unless the device requests reduced motion.
 
+The same session-scoped SSE connection may carry a `control` event for browser
+surface requests originating inside the headless ACP leader. This is transport
+metadata rather than a conversation timeline item. The mobile view validates
+the command shape, opens the existing session-keyed graphics renderer, and
+publishes Browser availability into the shared Browser/Subagents activity dock.
+
 Assistant message text is reparsed on each snapshot as GitHub-flavored Markdown
 with the locally bundled Marked runtime. Its HTML output must pass through
 DOMPurify's HTML-only profile before entering the DOM; raw forms and styling are

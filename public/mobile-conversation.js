@@ -38,7 +38,8 @@ export function createMobileConversationView({
   api, apiUrl, media, send, cancelTurn, uploadAttachment, searchFiles, readFile, setModel, setMode,
   removeQueuedInput, steerQueuedInput, reorderQueuedInputs, respondPermission, respondQuestion,
   respondPlanReview,
-  onVisibilityChange, onStatusChange = () => {},
+  onVisibilityChange, onStatusChange = () => {}, onBrowserOpen = () => {},
+  onShowBrowser = () => {}, onHideBrowser = () => {}, onSubagentAvailabilityChange = () => {},
 }) {
   const root = document.querySelector('#mobile-conversation');
   const title = document.querySelector('#mobile-conversation-title');
@@ -93,6 +94,7 @@ export function createMobileConversationView({
   let sheetState;
   let sheetBack;
   let sheetClose;
+  let sheetBrowser;
   let sheetHandle;
   let sheetMode = 'list';
   let selectedChildId;
@@ -126,6 +128,7 @@ export function createMobileConversationView({
   let fileSheetBody;
   let fileSheetClose;
   let filePreviewGeneration = 0;
+  let browserAvailable = false;
 
   function setAvailable(next) {
     if (available === next) return;
@@ -486,10 +489,15 @@ export function createMobileConversationView({
     const copy = element('span');
     copy.append(sheetTitle, sheetMeta);
     sheetState = element('span', 'mobile-subagent-sheet-state');
+    sheetBrowser = element('button', 'mobile-subagent-sheet-browser', 'Browser');
+    sheetBrowser.type = 'button';
+    sheetBrowser.hidden = !browserAvailable;
     sheetClose = element('button', 'mobile-subagent-sheet-close', '×');
     sheetClose.type = 'button';
     sheetClose.setAttribute('aria-label', 'Close subagents');
-    header.append(sheetBack, copy, sheetState, sheetClose);
+    const actions = element('span', 'mobile-subagent-sheet-actions');
+    actions.append(sheetBrowser, sheetClose);
+    header.append(sheetBack, copy, sheetState, actions);
     sheetList = element('div', 'mobile-subagent-list');
     sheetMessages = element('div', 'mobile-subagent-sheet-messages');
     sheetMessages.setAttribute('role', 'log');
@@ -502,6 +510,10 @@ export function createMobileConversationView({
     });
     sheetClose.addEventListener('click', closeSheet);
     sheetBack.addEventListener('click', showSheetList);
+    sheetBrowser.addEventListener('click', () => {
+      closeSheet();
+      onShowBrowser(sessionName);
+    });
     sheet.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -579,28 +591,45 @@ export function createMobileConversationView({
       root.append(subagentPillHost);
     }
     const items = subagents(conversation);
-    if (!items.length) {
+    onSubagentAvailabilityChange(items.length > 0);
+    if (!items.length && !browserAvailable) {
       subagentPillHost.replaceChildren();
       subagentPillHost.hidden = true;
       return;
     }
     subagentPillHost.hidden = false;
-    const running = items.filter((item) => ['calling', 'running'].includes(subagentState(item))).length;
-    const label = running ? `${running} agent${running === 1 ? '' : 's'} running`
-      : `${items.length} agent${items.length === 1 ? '' : 's'} done`;
-    const pill = element('button', 'mobile-subagent-pill');
-    pill.type = 'button';
-    pill.dataset.state = running ? 'running' : 'completed';
-    pill.setAttribute('aria-label', `${label}. View subagents`);
-    pill.append(element('i'), element('span', '', label), element('small', '', `${items.length}`));
-    pill.addEventListener('click', () => openSheet());
-    subagentPillHost.replaceChildren(pill);
+    const cluster = element('span', 'mobile-activity-pill-cluster');
+    if (browserAvailable) {
+      const browser = element('button', 'mobile-browser-pill');
+      browser.type = 'button';
+      browser.setAttribute('aria-label', 'Open browser');
+      browser.append(element('i'), element('span', '', 'Browser'));
+      browser.addEventListener('click', () => {
+        closeSheet();
+        onShowBrowser(sessionName);
+      });
+      cluster.append(browser);
+    }
+    if (items.length) {
+      const running = items.filter((item) => ['calling', 'running'].includes(subagentState(item))).length;
+      const label = running ? `${running} agent${running === 1 ? '' : 's'} running`
+        : `${items.length} agent${items.length === 1 ? '' : 's'} done`;
+      const pill = element('button', 'mobile-subagent-pill');
+      pill.type = 'button';
+      pill.dataset.state = running ? 'running' : 'completed';
+      pill.setAttribute('aria-label', `${label}. View subagents`);
+      pill.append(element('i'), element('span', '', label), element('small', '', `${items.length}`));
+      pill.addEventListener('click', () => openSheet());
+      cluster.append(pill);
+    }
+    subagentPillHost.replaceChildren(cluster);
   }
 
   function clearSubagentPill() {
     if (!subagentPillHost) return;
     subagentPillHost.replaceChildren();
     subagentPillHost.hidden = true;
+    onSubagentAvailabilityChange(false);
   }
 
   function openSheet() {
@@ -609,6 +638,8 @@ export function createMobileConversationView({
     sheet.hidden = false;
     sheetMode = 'list';
     selectedChildId = undefined;
+    onHideBrowser(sessionName);
+    sheetBrowser.hidden = !browserAvailable;
     renderSubagentList();
     sheetList.hidden = false;
     sheetMessages.hidden = true;
@@ -675,6 +706,19 @@ export function createMobileConversationView({
         render(payload.conversation, { animate: true, fromStream: true });
       } catch {
         schedule();
+      }
+    });
+    eventSource.addEventListener('control', (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload?.type !== 'control' || payload.action !== 'open-graphics' ||
+            !Array.isArray(payload.argv) || payload.argv.length === 0 || payload.argv.length > 100 ||
+            payload.argv.some((argument) => typeof argument !== 'string' || argument.length > 4096)) return;
+        browserAvailable = true;
+        renderSubagentPill(rootConversation || { items: [] });
+        onBrowserOpen(sessionName, payload.argv);
+      } catch {
+        // Ignore malformed control events without interrupting conversation streaming.
       }
     });
     eventSource.addEventListener('open', () => clearTimeout(refreshTimer));
@@ -2211,6 +2255,7 @@ export function createMobileConversationView({
       threadId = undefined;
       rootThreadId = undefined;
       rootConversation = undefined;
+      browserAvailable = false;
       clearSubagentPill();
       parentId = undefined;
       providerId = undefined;
@@ -2255,6 +2300,7 @@ export function createMobileConversationView({
       threadId = undefined;
       rootThreadId = undefined;
       rootConversation = undefined;
+      browserAvailable = false;
       clearSubagentPill();
       parentId = undefined;
       providerId = undefined;
@@ -2293,6 +2339,15 @@ export function createMobileConversationView({
     },
     isVisibleFor(name) {
       return available && media.matches && name === sessionName;
+    },
+    setBrowserAvailable(name, next) {
+      if (name !== sessionName) return;
+      browserAvailable = Boolean(next);
+      if (sheetBrowser) sheetBrowser.hidden = !browserAvailable;
+      renderSubagentPill(rootConversation || { items: [] });
+    },
+    openSubagents() {
+      if (subagents(rootConversation || { items: [] }).length) openSheet();
     },
     destroy() {
       generation += 1;

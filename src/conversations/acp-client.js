@@ -165,6 +165,7 @@ export function createGrokAcpClient({
   command = 'grok',
   spawn = spawnProcess,
   logger = () => {},
+  environment = () => ({}),
   defaultPermissionMode = 'default',
 } = {}) {
   let child;
@@ -440,7 +441,7 @@ export function createGrokAcpClient({
     generation += 1;
     child = spawn(command, ['agent', '--leader', 'stdio'], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: process.env,
+      env: { ...process.env, ...environment() },
     });
     const connectingChild = child;
     lines = createInterface({ input: child.stdout, crlfDelay: Infinity });

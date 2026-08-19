@@ -332,6 +332,30 @@ test('agent terminal-browser command opens a rendered web split on the right', a
       .evaluate((canvas) => canvas.width > 0 && canvas.height > 0), { timeout: 10_000 }).toBe(true);
     await expect(page.locator('.graphics-terminal-instance:not([hidden]) .browser-tab')).toHaveCount(1);
 
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mobileSheet = page.locator('#graphics-split');
+    await expect(mobileSheet).toBeVisible();
+    await expect(page.locator('#graphics-sheet-handle')).toBeVisible();
+    await expect(page.locator('#graphics-sheet-backdrop')).toBeVisible();
+    await expect.poll(async () => {
+      const box = await mobileSheet.boundingBox();
+      return box && Math.abs(box.y + box.height - 844) < 2 && box.height >= 320 && box.height < 560;
+    }).toBe(true);
+    const handle = await page.locator('#graphics-sheet-handle').boundingBox();
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + 140, { steps: 4 });
+    await page.mouse.up();
+    await expect(mobileSheet).toBeHidden();
+    await expect(page.locator('#graphics-mobile-reopen')).toBeVisible();
+    await expect.poll(async () => {
+      const payload = await (await page.request.get('/api/renderers')).json();
+      return payload.renderers.some((renderer) => renderer.key === `session:${managedName}`);
+    }).toBe(true);
+    await page.locator('#graphics-mobile-reopen').click();
+    await expect(mobileSheet).toBeVisible();
+    await page.setViewportSize({ width: 1280, height: 720 });
+
     await page.locator('.graphics-terminal-instance:not([hidden]) .browser-tab-close').click();
     await expect(page.locator('#graphics-split')).toBeHidden();
     await expect.poll(async () => {

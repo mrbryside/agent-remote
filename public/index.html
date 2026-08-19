@@ -110,13 +110,19 @@
             </section>
           </div>
           <div id="graphics-resizer" class="graphics-resizer" role="separator" aria-orientation="vertical" aria-label="Resize browser pane" tabindex="0" hidden></div>
+          <div id="graphics-sheet-backdrop" class="graphics-sheet-backdrop" hidden></div>
           <section id="graphics-split" class="graphics-split" hidden>
+            <button id="graphics-sheet-handle" class="graphics-sheet-handle" type="button" aria-label="Drag down to hide browser"></button>
             <header class="graphics-split-header">
               <span><i id="graphics-status-dot"></i> browser</span>
-              <button id="close-graphics-split" type="button" aria-label="Close browser pane" title="Close browser pane">×</button>
+              <span class="graphics-split-actions">
+                <button id="graphics-mobile-agents" type="button" hidden>Agents</button>
+                <button id="close-graphics-split" type="button" aria-label="Close browser pane" title="Close browser pane">×</button>
+              </span>
             </header>
             <div id="graphics-terminal" aria-label="Terminal browser pane"></div>
           </section>
+          <button id="graphics-mobile-reopen" class="graphics-mobile-reopen" type="button" hidden>Browser</button>
         </div>
       </section>
     </main>

@@ -30,6 +30,10 @@ const sessionLoadingCopy = document.querySelector('#session-loading-copy');
 const graphicsSplit = document.querySelector('#graphics-split');
 const graphicsTerminalElement = document.querySelector('#graphics-terminal');
 const closeGraphicsSplitButton = document.querySelector('#close-graphics-split');
+const graphicsSheetBackdrop = document.querySelector('#graphics-sheet-backdrop');
+const graphicsSheetHandle = document.querySelector('#graphics-sheet-handle');
+const graphicsMobileAgentsButton = document.querySelector('#graphics-mobile-agents');
+const graphicsMobileReopenButton = document.querySelector('#graphics-mobile-reopen');
 const graphicsResizer = document.querySelector('#graphics-resizer');
 const sidebarResizer = document.querySelector('#sidebar-resizer');
 const workspace = document.querySelector('.workspace');
@@ -212,6 +216,18 @@ const mobileConversation = createMobileConversationView({
     if (status === 'working' || status === 'idle') {
       setSessionWorking(sessionName, status === 'working', { authoritative: true });
     }
+  },
+  onBrowserOpen(sessionName, argv) {
+    openGraphicsSplit(argv, 'backend', sessionName);
+  },
+  onShowBrowser(sessionName) {
+    showGraphicsSheet(sessionName);
+  },
+  onHideBrowser(sessionName) {
+    hideGraphicsSheet(sessionName);
+  },
+  onSubagentAvailabilityChange(available) {
+    graphicsMobileAgentsButton.hidden = !available;
   },
 });
 
@@ -1038,16 +1054,22 @@ function activeGraphicsPane() {
 
 function updateGraphicsSplit() {
   const activePane = activeGraphicsPane();
+  const mobile = compactSidebarMedia.matches;
+  const nativeMobile = mobile && mobileConversation.isVisibleFor(activeSession);
+  const splitVisible = Boolean(activePane?.revealed && !(mobile && activePane.mobileHidden));
   for (const pane of graphicsPanes.values()) {
-    const visible = pane === activePane;
+    const visible = pane === activePane && splitVisible;
     pane.host.hidden = !visible;
     if (pane.socket?.readyState === WebSocket.OPEN) {
       pane.socket.send(JSON.stringify({ type: 'visibility', visible }));
     }
   }
 
-  graphicsSplit.hidden = !activePane || !activePane.revealed;
-  graphicsResizer.hidden = graphicsSplit.hidden;
+  graphicsSplit.hidden = !splitVisible;
+  graphicsSheetBackdrop.hidden = !mobile || !splitVisible;
+  graphicsResizer.hidden = graphicsSplit.hidden || mobile;
+  graphicsMobileReopenButton.hidden = !mobile || nativeMobile || !activePane?.revealed || !activePane.mobileHidden;
+  mobileConversation.setBrowserAvailable(activeSession, Boolean(activePane?.revealed));
   graphicsSplit.dataset.state = activePane?.state || 'disconnected';
   graphicsTerminalElement.dataset.images = String(activePane?.images || 0);
   graphicsTerminalElement.dataset.session = activeSession ?? '';
@@ -1057,6 +1079,20 @@ function updateGraphicsSplit() {
   else delete graphicsSplit.dataset.controlTransport;
 
   requestAnimationFrame(() => requestAnimationFrame(fitTerminals));
+}
+
+function hideGraphicsSheet(name = activeSession) {
+  const pane = graphicsPanes.get(graphicsPaneKey(name));
+  if (!pane || !compactSidebarMedia.matches) return;
+  pane.mobileHidden = true;
+  updateGraphicsSplit();
+}
+
+function showGraphicsSheet(name = activeSession) {
+  const pane = graphicsPanes.get(graphicsPaneKey(name));
+  if (!pane) return;
+  pane.mobileHidden = false;
+  updateGraphicsSplit();
 }
 
 function setGraphicsPaneState(pane, state) {
@@ -1602,6 +1638,7 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
     cursor: 'default',
     lastViewportRequest: '',
     requestedViewport: undefined,
+    mobileHidden: false,
     pointerAnimationFrame: undefined,
     pendingPointerMove: undefined,
     resizeAnimationFrame: undefined,
@@ -2849,7 +2886,37 @@ terminalElement.addEventListener('pointerdown', beginTerminalTouch, { capture: t
 terminalElement.addEventListener('pointermove', updateTerminalTouch, { capture: true, passive: true });
 terminalElement.addEventListener('pointerup', (event) => finishTerminalTouch(event), { capture: true });
 terminalElement.addEventListener('pointercancel', (event) => finishTerminalTouch(event, true), { capture: true });
-closeGraphicsSplitButton.addEventListener('click', () => closeGraphicsSplit());
+closeGraphicsSplitButton.addEventListener('click', () => {
+  if (compactSidebarMedia.matches) hideGraphicsSheet();
+  else closeGraphicsSplit();
+});
+graphicsSheetBackdrop.addEventListener('click', () => hideGraphicsSheet());
+graphicsMobileReopenButton.addEventListener('click', () => showGraphicsSheet());
+graphicsMobileAgentsButton.addEventListener('click', () => {
+  hideGraphicsSheet();
+  mobileConversation.openSubagents();
+});
+let graphicsSheetPointer;
+graphicsSheetHandle.addEventListener('pointerdown', (event) => {
+  graphicsSheetPointer = { id: event.pointerId, startY: event.clientY, distance: 0 };
+  graphicsSheetHandle.setPointerCapture?.(event.pointerId);
+  graphicsSplit.dataset.dragging = 'true';
+});
+graphicsSheetHandle.addEventListener('pointermove', (event) => {
+  if (!graphicsSheetPointer || event.pointerId !== graphicsSheetPointer.id) return;
+  graphicsSheetPointer.distance = Math.max(0, event.clientY - graphicsSheetPointer.startY);
+  graphicsSplit.style.setProperty('--graphics-sheet-drag', `${graphicsSheetPointer.distance}px`);
+});
+const finishGraphicsSheetDrag = (event) => {
+  if (!graphicsSheetPointer || event.pointerId !== graphicsSheetPointer.id) return;
+  const shouldHide = graphicsSheetPointer.distance > 96;
+  graphicsSheetPointer = undefined;
+  delete graphicsSplit.dataset.dragging;
+  graphicsSplit.style.removeProperty('--graphics-sheet-drag');
+  if (shouldHide) hideGraphicsSheet();
+};
+graphicsSheetHandle.addEventListener('pointerup', finishGraphicsSheetDrag);
+graphicsSheetHandle.addEventListener('pointercancel', finishGraphicsSheetDrag);
 toggleSidebarButton.addEventListener('click', () => {
   setSidebarCollapsed(true);
 });
@@ -2866,7 +2933,10 @@ window.addEventListener('keydown', (event) => {
 });
 installHorizontalResizer(sidebarResizer, 'sidebar');
 installHorizontalResizer(graphicsResizer, 'graphics');
-compactSidebarMedia.addEventListener('change', syncSidebarForViewport);
+compactSidebarMedia.addEventListener('change', () => {
+  syncSidebarForViewport();
+  updateGraphicsSplit();
+});
 syncSidebarForViewport();
 function syncVisualViewport() {
   if (!window.visualViewport) return;

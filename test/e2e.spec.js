@@ -687,6 +687,43 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(subagentPill).toHaveCount(1);
   await expect(subagentPill).toContainText('2 agents running');
   await expect(conversation.locator('.mobile-subagent-card')).toHaveCount(0);
+  await page.evaluate(() => {
+    class MockGraphicsSocket extends EventTarget {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
+      constructor() {
+        super();
+        this.readyState = MockGraphicsSocket.OPEN;
+        queueMicrotask(() => this.dispatchEvent(new Event('open')));
+      }
+      send() {}
+      close() {
+        this.readyState = MockGraphicsSocket.CLOSED;
+        this.dispatchEvent(new CloseEvent('close'));
+      }
+    }
+    window.WebSocket = MockGraphicsSocket;
+    window.__conversationStreams.at(-1).emit('control', {
+      data: JSON.stringify({
+        type: 'control', action: 'open-graphics',
+        argv: ['terminal-browser', 'open', 'https://example.test'],
+      }),
+    });
+  });
+  await expect(conversation.locator('.mobile-browser-pill')).toBeVisible();
+  await expect(conversation.locator('.mobile-activity-pill-cluster > button')).toHaveCount(2);
+  await expect(page.locator('#graphics-split')).toBeVisible();
+  await expect(page.locator('#graphics-mobile-agents')).toBeVisible();
+  await page.locator('#graphics-mobile-agents').click();
+  await expect(page.locator('#graphics-split')).toBeHidden();
+  await expect(conversation.locator('.mobile-subagent-sheet')).toBeVisible();
+  await conversation.locator('.mobile-subagent-sheet-browser').click();
+  await expect(conversation.locator('.mobile-subagent-sheet')).toBeHidden();
+  await expect(page.locator('#graphics-split')).toBeVisible();
+  await page.locator('#close-graphics-split').click();
+  await expect(page.locator('#graphics-split')).toBeHidden();
   Object.assign(subagentItem, { threadId: 'child-thread', phase: 'running', status: 'working' });
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', {

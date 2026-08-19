@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer as createHttpServer, request as createHttpRequest } from 'node:http';
 import { createConnection } from 'node:net';
 import { homedir } from 'node:os';
-import { basename, dirname, extname, join } from 'node:path';
+import { basename, delimiter, dirname, extname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import * as pty from 'node-pty';
@@ -339,10 +339,17 @@ export function createTerminalServer(options = {}) {
   const clientContexts = new Map();
   const renderers = new Map();
   const projectStore = createProjectStore(config.databaseFile);
+  let localControlUrl = '';
   const grokAcpClient = options.grokAcpClient ?? createGrokAcpClient({
     command: options.grokCommand ?? 'grok',
     spawn: options.grokAcpSpawn,
     logger: options.grokAcpLogger,
+    environment: () => ({
+      AGENT_REMOTE_WEB: '1',
+      AGENT_REMOTE_ACP: '1',
+      ...(localControlUrl ? { AGENT_REMOTE_URL: localControlUrl } : {}),
+      PATH: `${agentRemoteBin}${delimiter}${process.env.PATH ?? ''}`,
+    }),
     defaultPermissionMode: options.grokDefaultPermissionMode ?? configuredGrokPermissionMode(),
   });
   const conversationRegistry = options.conversationRegistry ?? createConversationRegistry({
@@ -458,6 +465,28 @@ export function createTerminalServer(options = {}) {
       ? await options.managedSessionProcessId(session)
       : await managedSessionProcessId(config.tmuxCommand, session.name);
     return { ...session, processId };
+  }
+
+  async function resolveControlSession({ session, cwd } = {}) {
+    if (session) return { session };
+    if (!cwd) return { session: undefined };
+    const requestedCwd = resolvePath(cwd);
+    const workspaceSessions = (await listWorkspaceSessions()).filter((item) =>
+      typeof item.cwd === 'string' && resolvePath(item.cwd) === requestedCwd);
+    const connectedNames = new Set([
+      ...[...clientContexts.values()]
+        .filter((context) => context.mode !== 'graphics' && context.session)
+        .map((context) => context.session),
+      ...[...conversationStreams]
+        .map((stream) => stream.sessionName)
+        .filter(Boolean),
+    ]);
+    const connected = workspaceSessions.filter((item) => connectedNames.has(item.name));
+    if (connected.length === 1) return { session: connected[0].name };
+    const working = connected.filter((item) => item.conversationStatus === 'working');
+    if (working.length === 1) return { session: working[0].name };
+    if (connected.length > 1) return { error: 'More than one active chat uses that project folder' };
+    return { error: 'No active chat uses that project folder' };
   }
 
   async function deliverConversationInput(session, text, inputOptions = {}) {
@@ -959,6 +988,10 @@ export function createTerminalServer(options = {}) {
   }
 
   function rendererForSession(session) {
+    if (session) {
+      const direct = renderers.get(`session:${session}`);
+      if (direct?.browserSocket) return direct;
+    }
     const owner = [...clientContexts.values()].find((context) =>
       context.mode !== 'graphics' &&
       (!session || context.session === session) &&
@@ -1450,20 +1483,33 @@ export function createTerminalServer(options = {}) {
               (typeof body.session !== 'string' || body.session.length > 64)) {
             return json(response, 400, { error: 'session must be a string under 64 characters' });
           }
+          if (body.cwd !== undefined &&
+              (typeof body.cwd !== 'string' || body.cwd.length === 0 || body.cwd.length > 4096)) {
+            return json(response, 400, { error: 'cwd must be a non-empty string under 4096 characters' });
+          }
+          const resolved = await resolveControlSession(body);
+          if (resolved.error) return json(response, 409, { error: resolved.error });
 
           const targets = [...clients].filter((client) => {
             const context = clientContexts.get(client);
             return client.readyState === WebSocket.OPEN &&
               context?.mode !== 'graphics' &&
-              (!body.session || context?.session === body.session);
+              (!resolved.session || context?.session === resolved.session);
           });
-          if (targets.length === 0) {
+          const streams = [...conversationStreams].filter((stream) =>
+            !resolved.session || stream.sessionName === resolved.session);
+          if (targets.length === 0 && streams.length === 0) {
             return json(response, 409, { error: 'No browser is connected to that session' });
           }
+          const control = { type: 'control', action: 'open-graphics', argv: body.argv };
           for (const client of targets) {
-            sendJson(client, { type: 'control', action: 'open-graphics', argv: body.argv });
+            sendJson(client, control);
           }
-          return json(response, 202, { delivered: targets.length });
+          for (const stream of streams) stream.sendControl?.(control);
+          return json(response, 202, {
+            delivered: targets.length + streams.length,
+            session: resolved.session,
+          });
         }
         if (request.method === 'POST' && pathname === '/api/control/browser-tab') {
           const body = await readJson(request);
@@ -1477,8 +1523,14 @@ export function createTerminalServer(options = {}) {
               (typeof body.session !== 'string' || body.session.length > 64)) {
             return json(response, 400, { error: 'session must be a string under 64 characters' });
           }
+          if (body.cwd !== undefined &&
+              (typeof body.cwd !== 'string' || body.cwd.length === 0 || body.cwd.length > 4096)) {
+            return json(response, 400, { error: 'cwd must be a non-empty string under 4096 characters' });
+          }
+          const resolved = await resolveControlSession(body);
+          if (resolved.error) return json(response, 409, { error: resolved.error });
 
-          const renderer = rendererForSession(body.session);
+          const renderer = rendererForSession(resolved.session);
           if (!renderer) {
             return json(response, 409, { error: 'No terminal-browser is open for that session' });
           }
@@ -1497,10 +1549,14 @@ export function createTerminalServer(options = {}) {
         }
         if (request.method === 'GET' && pathname === '/api/control/browser-target') {
           const session = url.searchParams.get('session') || undefined;
+          const cwd = url.searchParams.get('cwd') || undefined;
           if (session && session.length > 64) {
             return json(response, 400, { error: 'session must be under 64 characters' });
           }
-          const renderer = rendererForSession(session);
+          if (cwd && cwd.length > 4096) return json(response, 400, { error: 'cwd must be under 4096 characters' });
+          const resolved = await resolveControlSession({ session, cwd });
+          if (resolved.error) return json(response, 409, { error: resolved.error });
+          const renderer = rendererForSession(resolved.session);
           if (!renderer?.browserKey) {
             return json(response, 409, { error: 'No terminal-browser is open for that session' });
           }
@@ -1872,6 +1928,12 @@ export function createTerminalServer(options = {}) {
             conversationStreams.delete(close);
             await stopWatching();
             if (!response.writableEnded) response.end();
+          };
+          close.sessionName = name;
+          close.sendControl = (control) => {
+            if (!closed && !response.writableEnded) {
+              response.write(`event: control\ndata: ${JSON.stringify(control)}\n\n`);
+            }
           };
           const heartbeat = setInterval(() => {
             if (!response.writableEnded) response.write(': keep-alive\n\n');
@@ -2453,6 +2515,7 @@ export function createTerminalServer(options = {}) {
       const localAddress = server.address();
       const remoteAddress = remoteServer.address();
       const localUrl = `http://${config.host}:${localAddress.port}`;
+      localControlUrl = localUrl;
       const remoteUrl = `http://${config.remoteHost}:${remoteAddress.port}`;
       // Reconnect only an explicitly desired named tunnel. Do not delay local
       // readiness (or fail it) if Keychain or Cloudflare is unavailable.
