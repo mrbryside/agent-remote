@@ -111,10 +111,21 @@ request no longer exists.
 user and agent messages, thoughts, tool calls/results (including diffs and
 images), plans, goals, hooks, retries, background tasks, and subagent lifecycle
 events. Protocol-only mode/lifecycle noise updates state without becoming chat
-cards. Consecutive tools form one expandable activity group.
+cards. A contiguous run of mixed tool kinds forms one expandable activity
+group; an intervening thought or other visible conversation item starts a new
+group. Resolved permission prompts disappear instead of duplicating and
+splitting the tool activity they approved. A thought remains `Thinking…` and
+streams into its expandable reasoning panel until the next non-thought update
+closes it; completed thoughts no longer remain falsely marked `Running`.
 `turn_completed` updates lifecycle state but is not rendered. `session_recap`
 is retained as metadata instead of becoming a chat message. Unknown future
 events remain visible as generic expandable cards.
+
+On mobile, expanded tool groups own one fixed-height vertical scroll viewport.
+Nested Shell, output, input, and generic detail blocks preserve whitespace and
+can scroll both axes instead of wrapping long commands. Edit results render as
+a compact unified diff with line numbers, add/remove counts, bounded context,
+and independent two-axis scrolling.
 
 Spawn calls, permission-first embedded tool calls, `subagent_spawned`,
 completion, and output polling collapse into one stable lifecycle item:
