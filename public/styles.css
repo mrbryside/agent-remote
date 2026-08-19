@@ -502,7 +502,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-conversation-interaction { display: grid; flex: 1 1 auto; min-height: 0; box-sizing: border-box; width: 100%; align-items: end; padding: 10px max(12px, env(safe-area-inset-right)) calc(10px + var(--safe-area-bottom)) max(12px, env(safe-area-inset-left)); overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--color-border-subtle); background: var(--color-surface-raised); }
   .mobile-conversation-interaction[hidden] { display: none; }
   .mobile-conversation-interaction .mobile-question-card, .mobile-interaction-card { box-sizing: border-box; width: 100%; max-height: none; margin: 0; overflow: visible; border-radius: 12px; box-shadow: none; }
-  .mobile-conversation-interaction [data-motion="enter"] { animation: mobile-interaction-in var(--duration-slow) var(--ease-spring); transform-origin: bottom; }
+  .mobile-conversation-interaction[data-motion="enter"] { animation: mobile-interaction-in var(--duration-slow) var(--ease-spring); transform-origin: bottom; }
   .mobile-interaction-card { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--color-border-strong); background: var(--color-surface); }
   .mobile-permission-details { overflow: hidden; border: 1px solid var(--color-border-faint); border-radius: 10px; background: var(--color-canvas); }
   .mobile-permission-details summary { display: flex; min-height: 38px; align-items: center; justify-content: space-between; padding: 0 11px; color: var(--color-text-secondary); font: 650 10px/1.2 var(--font-family-mono); cursor: pointer; list-style: none; }

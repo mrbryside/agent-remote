@@ -260,6 +260,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
         { id: 'alwaysApprove', label: 'Always approve', description: 'Skip ordinary prompts' },
       ],
     }, commands: { options: [
+      { name: 'always-approve', description: 'Toggle always-approve mode' },
+      { name: 'reload-plugins', description: 'Reload plugins from disk' },
+      { name: 'goal', description: 'Set, manage, or check an autonomous goal' },
+      { name: 'find-skills', description: 'Discover and install agent skills' },
+      { name: 'terminal-browser', description: 'Open a browser in the terminal' },
       { name: 'compact', description: 'Compress conversation history', inputHint: 'optional focus' },
       { name: 'deep-research', description: 'Research a topic', inputHint: 'topic' },
     ] } },
@@ -454,8 +459,12 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(sendButton).toHaveAttribute('data-action', 'send');
   await expect(sendButton).toBeDisabled();
 
-  await input.fill('/co');
+  await input.fill('/goal');
   const suggestions = conversation.locator('#mobile-conversation-suggestions');
+  await expect(suggestions).toBeVisible();
+  await expect(suggestions.getByRole('option')).toHaveCount(1);
+  await expect(suggestions.getByRole('option', { name: /^\/goal/ })).toHaveAttribute('aria-selected', 'true');
+  await input.fill('/co');
   await expect(suggestions).toBeVisible();
   await expect(suggestions.getByRole('option', { name: /compact/ })).toBeVisible();
   await suggestions.getByRole('option', { name: /compact/ }).click();
@@ -579,10 +588,6 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(interactionDock).toBeVisible();
   await expect(interactionDock).toHaveAttribute('data-kind', 'permission');
   await expect.poll(() => interactionDock.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
-  await expect(interactionDock.locator('.mobile-interaction-permission')).toHaveAttribute('data-motion', 'enter');
-  await expect.poll(() => interactionDock.locator('.mobile-interaction-permission').evaluate(
-    (node) => getComputedStyle(node).animationName,
-  )).toBe('mobile-interaction-in');
   const permissionDetails = interactionDock.locator('.mobile-permission-details');
   await expect(permissionDetails).toHaveAttribute('open', '');
   await expect(permissionDetails.getByText('Command details')).toBeVisible();

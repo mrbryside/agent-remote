@@ -257,17 +257,35 @@ export function createMobileConversationView({
     renderChoiceControl(conversation, 'mode', modeButton, modeLabel, modeList, setMode);
   }
 
-  function commandMatches(command, query) {
-    const haystack = `${command.name} ${command.description}`.toLowerCase();
-    const needle = query.toLowerCase();
-    if (!needle) return true;
+  function commandSubsequenceScore(name, query) {
     let cursor = 0;
-    for (const character of needle) {
-      cursor = haystack.indexOf(character, cursor);
-      if (cursor < 0) return false;
-      cursor += 1;
+    let gaps = 0;
+    for (const character of query) {
+      const next = name.indexOf(character, cursor);
+      if (next < 0) return Number.POSITIVE_INFINITY;
+      gaps += next - cursor;
+      cursor = next + 1;
     }
-    return true;
+    return gaps + name.length / 1_000;
+  }
+
+  function rankedCommands(commands, query) {
+    const needle = query.trim().toLowerCase();
+    const entries = commands.map((command, index) => ({
+      command, index, name: String(command.name || '').toLowerCase(),
+    }));
+    if (!needle) return entries.map(({ command }) => command);
+    const sorted = (matches, score) => matches.sort((left, right) =>
+      score(left) - score(right) || left.name.length - right.name.length || left.index - right.index)
+      .map(({ command }) => command);
+    const exact = entries.filter(({ name }) => name === needle);
+    if (exact.length) return exact.map(({ command }) => command);
+    const prefixes = entries.filter(({ name }) => name.startsWith(needle));
+    if (prefixes.length) return sorted(prefixes, () => 0);
+    const contained = entries.filter(({ name }) => name.includes(needle));
+    if (contained.length) return sorted(contained, ({ name }) => name.indexOf(needle));
+    return sorted(entries.filter(({ name }) => Number.isFinite(commandSubsequenceScore(name, needle))),
+      ({ name }) => commandSubsequenceScore(name, needle));
   }
 
   function closeSuggestions() {
@@ -338,8 +356,7 @@ export function createMobileConversationView({
     suggestionRange = completion;
     suggestionIndex = 0;
     if (completion.kind === 'command') {
-      suggestionItems = (lastConversation.controls?.commands?.options || [])
-        .filter((command) => commandMatches(command, completion.query))
+      suggestionItems = rankedCommands(lastConversation.controls?.commands?.options || [], completion.query)
         .slice(0, 10)
         .map((command) => ({
           kind: 'command', value: `/${command.name}`, label: `/${command.name}`,
@@ -756,9 +773,8 @@ export function createMobileConversationView({
     return actions;
   }
 
-  function permissionDockNode(item, { motion = false } = {}) {
+  function permissionDockNode(item) {
     const card = element('section', 'mobile-interaction-card mobile-interaction-permission');
-    if (motion) card.dataset.motion = 'enter';
     card.dataset.permissionId = item.permissionId;
     card.dataset.state = item.status || 'pending';
     const header = element('header', 'mobile-question-header');
@@ -837,7 +853,7 @@ export function createMobileConversationView({
     window.visualViewport?.addEventListener('resize', reveal, { once: true });
   }
 
-  function questionNode(item, { docked = false, motion = false } = {}) {
+  function questionNode(item, { docked = false } = {}) {
     const localState = pendingQuestions.get(item.questionId);
     const resolved = !['calling', 'pending', 'working'].includes(item.status);
     if (resolved || item.answers || item.answerSummary) pendingQuestions.delete(item.questionId);
@@ -845,7 +861,6 @@ export function createMobileConversationView({
     const submitting = pending?.status === 'submitting';
     const card = element('article', 'mobile-question-card');
     if (docked) card.classList.add('mobile-question-docked');
-    if (motion) card.dataset.motion = 'enter';
     card.dataset.questionId = item.questionId;
     card.dataset.state = submitting ? 'working' : item.status || 'pending';
     const header = element('header', 'mobile-question-header');
@@ -1134,6 +1149,7 @@ export function createMobileConversationView({
     if (!interaction) {
       root.dataset.interaction = 'false';
       interactionMotionKey = '';
+      interactionDock.removeAttribute('data-motion');
       interactionDock.hidden = true;
       interactionDock.removeAttribute('data-kind');
       interactionDock.replaceChildren();
@@ -1151,10 +1167,16 @@ export function createMobileConversationView({
     root.dataset.interaction = 'true';
     composer.hidden = true;
     interactionDock.hidden = false;
+    if (motion) {
+      interactionDock.dataset.motion = 'enter';
+      interactionDock.addEventListener('animationend', () => {
+        if (interactionMotionKey === nextMotionKey) interactionDock.dataset.motion = 'stable';
+      }, { once: true });
+    }
     interactionDock.dataset.kind = interaction.type;
     interactionDock.replaceChildren(interaction.type === 'question'
-      ? questionNode(interaction, { docked: true, motion })
-      : permissionDockNode(interaction, { motion }));
+      ? questionNode(interaction, { docked: true })
+      : permissionDockNode(interaction));
   }
 
   function messageNode(item, conversation, { suppressPendingInteractions = false } = {}) {
