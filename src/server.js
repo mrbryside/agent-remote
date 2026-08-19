@@ -1753,6 +1753,26 @@ export function createTerminalServer(options = {}) {
           createReadStream(attachment.path).pipe(response);
           return;
         }
+        const conversationQueueReorderMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/queue\/reorder$/);
+        if (request.method === 'POST' && conversationQueueReorderMatch) {
+          const name = decodeURIComponent(conversationQueueReorderMatch[1]);
+          const body = await readJson(request);
+          if (!Array.isArray(body.queueIds) || body.queueIds.length > 100 ||
+              body.queueIds.some((id) => typeof id !== 'string' || !id || id.length > 80)) {
+            return json(response, 400, { error: 'queueIds must contain at most 100 queue ids' });
+          }
+          const session = await conversationSession(name);
+          if (!session) return json(response, 404, { error: 'Managed session not found' });
+          try {
+            const result = await conversationRegistry.reorderQueuedInputs(session, body.queueIds);
+            return json(response, 202, result);
+          } catch (error) {
+            if (error?.code === 'GROK_ACP_QUEUE_INVALID') {
+              return json(response, 409, { error: error.message, code: error.code });
+            }
+            return conversationFailure(response, error);
+          }
+        }
         const conversationQueueMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/queue\/([^/]+)(?:\/(steer))?$/);
         if (conversationQueueMatch && (request.method === 'DELETE' ||
             (request.method === 'POST' && conversationQueueMatch[3] === 'steer'))) {

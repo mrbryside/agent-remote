@@ -358,8 +358,15 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       return route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from('fake-image') });
     }
     if (pathname.includes('/queue/')) {
+      if (pathname.endsWith('/queue/reorder')) {
+        const { queueIds } = route.request().postDataJSON();
+        const byId = new Map(queuedInputs.map((entry) => [entry.id, entry]));
+        queuedInputs.splice(0, queuedInputs.length, ...queueIds.map((id) => byId.get(id)));
+        queueActions.push({ action: 'reorder', queueIds });
+        return route.fulfill({ status: 202, json: { accepted: true, queueIds } });
+      }
       const action = pathname.endsWith('/steer') ? 'steer' : 'delete';
-      queueActions.push(action);
+      queueActions.push({ action });
       queuedInputs.splice(0);
       return route.fulfill({ status: 202, json: { accepted: true } });
     }
@@ -620,13 +627,33 @@ test('uses native mobile conversation history, input, and subagent navigation', 
 
   await input.fill('queued follow up');
   await conversation.locator('#mobile-conversation-send').click();
+  queuedInputs.push({ id: 'queue-mobile-2', text: 'second queued message', createdAt: Date.now(), attachments: [] });
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', { data: JSON.stringify({ conversation: nextConversation }) });
   }, rootConversation());
-  const queuedRow = conversation.locator('.mobile-conversation-queue-item');
-  await expect(queuedRow).toContainText('queued follow up');
-  await queuedRow.getByRole('button', { name: /Steer/ }).click();
-  await expect.poll(() => queueActions).toContain('steer');
+  const queuedRows = conversation.locator('.mobile-conversation-queue-item');
+  await expect(queuedRows).toHaveCount(2);
+  const firstQueuedRow = queuedRows.filter({ hasText: 'queued follow up' });
+  const steerButton = firstQueuedRow.getByRole('button', { name: /Steer/ });
+  const deleteButton = firstQueuedRow.getByRole('button', { name: 'Delete queued message' });
+  expect((await steerButton.boundingBox()).height).toBeGreaterThanOrEqual(44);
+  expect((await deleteButton.boundingBox()).height).toBeGreaterThanOrEqual(44);
+  await expect(deleteButton).toHaveText('Delete');
+
+  const dragHandle = firstQueuedRow.getByRole('button', { name: /Reorder queued message/ });
+  const handleBox = await dragHandle.boundingBox();
+  const secondBox = await queuedRows.filter({ hasText: 'second queued message' }).boundingBox();
+  await page.mouse.move(handleBox.x + handleBox.width / 2, handleBox.y + handleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handleBox.x + handleBox.width / 2, secondBox.y + secondBox.height + 4, { steps: 5 });
+  await page.mouse.up();
+  await expect.poll(() => queueActions.find((entry) => entry.action === 'reorder')).toEqual({
+    action: 'reorder', queueIds: ['queue-mobile-2', 'queue-mobile-1'],
+  });
+  await expect(queuedRows.first()).toContainText('second queued message');
+
+  await firstQueuedRow.getByRole('button', { name: /Steer/ }).click();
+  await expect.poll(() => queueActions.some((entry) => entry.action === 'steer')).toBe(true);
 
   await conversation.locator('#mobile-conversation-file').setInputFiles({
     name: 'phone.png', mimeType: 'image/png', buffer: Buffer.from('fake-image'),

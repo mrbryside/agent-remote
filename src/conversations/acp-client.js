@@ -632,6 +632,21 @@ export function createGrokAcpClient({
     return { accepted: true };
   }
 
+  async function reorderQueuedPrompts({ sessionId, queueIds }) {
+    const current = state(sessionId);
+    const ids = Array.isArray(queueIds) ? queueIds : [];
+    const currentIds = current.queuedPrompts.map((entry) => entry.id);
+    const requested = new Set(ids);
+    if (ids.length !== currentIds.length || requested.size !== ids.length ||
+        ids.some((id) => typeof id !== 'string' || !currentIds.includes(id))) {
+      throw rpcError('Queued messages changed before they could be reordered', 'GROK_ACP_QUEUE_INVALID');
+    }
+    const entries = new Map(current.queuedPrompts.map((entry) => [entry.id, entry]));
+    current.queuedPrompts = ids.map((id) => entries.get(id));
+    publish(sessionId);
+    return { accepted: true, queueIds: ids.slice() };
+  }
+
   function watch(sessionId, listener) {
     const current = state(sessionId);
     current.listeners.add(listener);
@@ -703,7 +718,7 @@ export function createGrokAcpClient({
 
   return {
     loadSession, prompt, cancel, setModel, setMode,
-    removeQueuedPrompt, steerQueuedPrompt,
+    removeQueuedPrompt, steerQueuedPrompt, reorderQueuedPrompts,
     read, watch, respondPermission, respondQuestion, close,
   };
 }

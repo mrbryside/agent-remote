@@ -999,6 +999,9 @@ export function createGrokConversationProvider({
     async steerQueuedInput(handle, queueId) {
       return acpClient.steerQueuedPrompt({ sessionId: handle.rootThreadId, queueId });
     },
+    async reorderQueuedInputs(handle, queueIds) {
+      return acpClient.reorderQueuedPrompts({ sessionId: handle.rootThreadId, queueIds });
+    },
     async respondPermission(handle, input) {
       return acpClient.respondPermission({
         sessionId: handle.rootThreadId,

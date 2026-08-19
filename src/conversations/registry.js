@@ -94,6 +94,12 @@ export function createConversationRegistry({ providers = [] } = {}) {
       return resolved.provider.steerQueuedInput(resolved.handle, queueId);
     },
 
+    async reorderQueuedInputs(session, queueIds) {
+      const resolved = await resolve(session);
+      if (!resolved?.provider.reorderQueuedInputs) throw new Error('This session does not support queue reordering');
+      return resolved.provider.reorderQueuedInputs(resolved.handle, queueIds);
+    },
+
     async respondPermission(session, input) {
       const resolved = await resolve(session);
       if (!resolved?.provider.respondPermission) throw new Error('This session does not support permission responses');

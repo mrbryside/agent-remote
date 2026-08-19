@@ -34,7 +34,7 @@ function duration(value) {
 
 export function createMobileConversationView({
   api, apiUrl, media, send, cancelTurn, uploadAttachment, searchFiles, setModel, setMode,
-  removeQueuedInput, steerQueuedInput, respondPermission, respondQuestion,
+  removeQueuedInput, steerQueuedInput, reorderQueuedInputs, respondPermission, respondQuestion,
   onVisibilityChange, onStatusChange = () => {},
 }) {
   const root = document.querySelector('#mobile-conversation');
@@ -78,6 +78,7 @@ export function createMobileConversationView({
   let pendingMessage;
   let pendingAcceptanceTimer;
   let lastConversation;
+  let queueMutationPending = false;
   let rootThreadId;
   let rootConversation;
   let sheet;
@@ -1131,6 +1132,148 @@ export function createMobileConversationView({
     attachButton.disabled = uploadingAttachments > 0 || attachments.length >= 8;
   }
 
+  function reducedMotion() {
+    return matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  function queueRows() {
+    return [...queue.querySelectorAll('.mobile-conversation-queue-item')];
+  }
+
+  function queueOrder() {
+    return queueRows().map((row) => row.dataset.queueId);
+  }
+
+  function queuePositions() {
+    return new Map(queueRows().map((row) => [row.dataset.queueId, row.getBoundingClientRect().top]));
+  }
+
+  function animateQueuePositions(previous) {
+    if (reducedMotion()) return;
+    for (const row of queueRows()) {
+      const top = previous.get(row.dataset.queueId);
+      if (top === undefined) continue;
+      const delta = top - row.getBoundingClientRect().top;
+      if (Math.abs(delta) < 1) continue;
+      row.animate([
+        { transform: `translateY(${delta}px)` },
+        { transform: 'translateY(0)' },
+      ], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    }
+  }
+
+  function applyQueueOrder(queueIds) {
+    const previous = queuePositions();
+    const rows = new Map(queueRows().map((row) => [row.dataset.queueId, row]));
+    for (const id of queueIds) {
+      const row = rows.get(id);
+      if (row) queue.append(row);
+    }
+    animateQueuePositions(previous);
+  }
+
+  async function persistQueueOrder(previousOrder) {
+    const nextOrder = queueOrder();
+    if (nextOrder.join('\0') === previousOrder.join('\0')) return;
+    queueMutationPending = true;
+    queue.dataset.busy = 'true';
+    try {
+      await reorderQueuedInputs(sessionName, nextOrder);
+    } catch (error) {
+      applyQueueOrder(previousOrder);
+      state.textContent = error.message || 'Reorder failed';
+      state.dataset.state = 'error';
+    } finally {
+      queueMutationPending = false;
+      queue.dataset.busy = 'false';
+    }
+  }
+
+  function setupQueueReorder(row, handle) {
+    let pointerId;
+    let previousOrder;
+
+    const move = (event) => {
+      if (event.pointerId !== pointerId) return;
+      const previous = queuePositions();
+      const peers = queueRows().filter((candidate) => candidate !== row);
+      const next = peers.find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return event.clientY < rect.top + rect.height / 2;
+      });
+      if (next) queue.insertBefore(row, next);
+      else queue.append(row);
+      animateQueuePositions(previous);
+      event.preventDefault();
+    };
+    const finish = (event) => {
+      if (event.pointerId !== pointerId) return;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      pointerId = undefined;
+      row.classList.remove('is-dragging');
+      void persistQueueOrder(previousOrder);
+    };
+    handle.addEventListener('pointerdown', (event) => {
+      if (queueMutationPending || handle.disabled || event.button > 0) return;
+      pointerId = event.pointerId;
+      previousOrder = queueOrder();
+      row.classList.add('is-dragging');
+      window.addEventListener('pointermove', move, { passive: false });
+      window.addEventListener('pointerup', finish);
+      window.addEventListener('pointercancel', finish);
+      event.preventDefault();
+    });
+    handle.addEventListener('keydown', (event) => {
+      if (queueMutationPending || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      const rows = queueRows();
+      const index = rows.indexOf(row);
+      const destination = event.key === 'ArrowUp' ? index - 1 : index + 1;
+      if (destination < 0 || destination >= rows.length) return;
+      const previous = queueOrder();
+      const next = previous.slice();
+      [next[index], next[destination]] = [next[destination], next[index]];
+      applyQueueOrder(next);
+      handle.focus();
+      void persistQueueOrder(previous);
+      event.preventDefault();
+    });
+  }
+
+  async function runQueueAction(row, action, fallback) {
+    if (queueMutationPending) return;
+    queueMutationPending = true;
+    queue.dataset.busy = 'true';
+    for (const button of row.querySelectorAll('button')) button.disabled = true;
+    row.classList.add('is-leaving');
+    let exitAnimation;
+    if (!reducedMotion()) {
+      exitAnimation = row.animate([
+        { opacity: 1, transform: 'translateX(0) scale(1)' },
+        { opacity: 0, transform: 'translateX(18px) scale(.98)' },
+      ], { duration: 160, easing: 'ease-in', fill: 'forwards' });
+      await exitAnimation.finished.catch(() => {});
+    }
+    try {
+      await action();
+      row.remove();
+      const remaining = queueRows().length;
+      const title = queue.querySelector('.mobile-conversation-queue-title');
+      if (title) title.textContent = `${remaining} queued`;
+      if (!remaining) queue.hidden = true;
+    } catch (error) {
+      exitAnimation?.cancel();
+      row.classList.remove('is-leaving');
+      for (const button of row.querySelectorAll('button')) button.disabled = false;
+      state.textContent = error.message || fallback;
+      state.dataset.state = 'error';
+    } finally {
+      queueMutationPending = false;
+      queue.dataset.busy = 'false';
+    }
+  }
+
   function renderQueue(conversation) {
     const entries = Array.isArray(conversation.queue) ? conversation.queue : [];
     queue.hidden = entries.length === 0;
@@ -1142,6 +1285,13 @@ export function createMobileConversationView({
     fragment.append(element('small', 'mobile-conversation-queue-title', `${entries.length} queued`));
     for (const entry of entries) {
       const row = element('article', 'mobile-conversation-queue-item');
+      row.dataset.queueId = entry.id;
+      const handle = element('button', 'mobile-conversation-queue-handle', '↕');
+      handle.type = 'button';
+      handle.disabled = entries.length < 2;
+      handle.setAttribute('aria-label', `Reorder queued message: ${entry.text}`);
+      handle.title = 'Drag to reorder';
+      setupQueueReorder(row, handle);
       const copy = element('div', 'mobile-conversation-queue-copy');
       copy.append(element('span', '', '↳'), element('p', '', entry.text));
       const previews = element('div', 'mobile-conversation-queue-attachments');
@@ -1150,29 +1300,17 @@ export function createMobileConversationView({
       const actions = element('div', 'mobile-conversation-queue-actions');
       const steer = element('button', '', '↪ Steer');
       steer.type = 'button';
-      steer.addEventListener('click', async () => {
-        steer.disabled = true;
-        try { await steerQueuedInput(sessionName, entry.id); }
-        catch (error) {
-          state.textContent = error.message || 'Steer failed';
-          state.dataset.state = 'error';
-          steer.disabled = false;
-        }
-      });
-      const remove = element('button', '', '⌫');
+      steer.addEventListener('click', () => runQueueAction(
+        row, () => steerQueuedInput(sessionName, entry.id), 'Steer failed',
+      ));
+      const remove = element('button', '', 'Delete');
       remove.type = 'button';
       remove.setAttribute('aria-label', 'Delete queued message');
-      remove.addEventListener('click', async () => {
-        remove.disabled = true;
-        try { await removeQueuedInput(sessionName, entry.id); }
-        catch (error) {
-          state.textContent = error.message || 'Delete failed';
-          state.dataset.state = 'error';
-          remove.disabled = false;
-        }
-      });
+      remove.addEventListener('click', () => runQueueAction(
+        row, () => removeQueuedInput(sessionName, entry.id), 'Delete failed',
+      ));
       actions.append(steer, remove);
-      row.append(copy, actions);
+      row.append(handle, copy, actions);
       fragment.append(row);
     }
     queue.replaceChildren(fragment);

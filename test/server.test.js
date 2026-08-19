@@ -178,6 +178,7 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     cancel: async (session) => (cancellations.push(session), { accepted: true, active: true }),
     removeQueuedInput: async (session, queueId) => (queueActions.push({ action: 'remove', session, queueId }), { accepted: true }),
     steerQueuedInput: async (session, queueId) => (queueActions.push({ action: 'steer', session, queueId }), { accepted: true }),
+    reorderQueuedInputs: async (session, queueIds) => (queueActions.push({ action: 'reorder', session, queueIds }), { accepted: true, queueIds }),
   };
   await withServer({
     conversationRegistry,
@@ -284,10 +285,18 @@ test('serves a provider-neutral mobile conversation only for a managed session',
       });
       assert.equal(queueResponse.status, 202);
     }
+    const reorderResponse = await fetch(`${url}/api/conversations/ar-mobile/queue/reorder`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ queueIds: ['q-2', 'q-1'] }),
+    });
+    assert.equal(reorderResponse.status, 202);
+    assert.deepEqual(await reorderResponse.json(), { accepted: true, queueIds: ['q-2', 'q-1'] });
     assert.deepEqual(queueActions.map(({ action, session, queueId }) => ({ action, name: session.name, queueId })), [
       { action: 'remove', name: 'ar-mobile', queueId: 'q-1' },
       { action: 'steer', name: 'ar-mobile', queueId: 'q-1' },
+      { action: 'reorder', name: 'ar-mobile', queueId: undefined },
     ]);
+    assert.deepEqual(queueActions.at(-1).queueIds, ['q-2', 'q-1']);
     const upload = await fetch(`${url}/api/conversations/ar-mobile/attachments`, {
       method: 'POST', headers: { 'content-type': 'image/png', 'x-file-name': encodeURIComponent('phone.png') },
       body: Buffer.from('fake-image'),

@@ -175,6 +175,11 @@ const mobileConversation = createMobileConversationView({
       method: 'POST', body: '{}',
     });
   },
+  async reorderQueuedInputs(sessionName, queueIds) {
+    return api(`/api/conversations/${encodeURIComponent(sessionName)}/queue/reorder`, {
+      method: 'POST', body: JSON.stringify({ queueIds }),
+    });
+  },
   async respondPermission(sessionName, permissionId, optionId) {
     await api(`/api/conversations/${encodeURIComponent(sessionName)}/permission`, {
       method: 'POST', body: JSON.stringify({ permissionId, optionId }),

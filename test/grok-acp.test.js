@@ -179,6 +179,35 @@ test('ACP client keeps follow-ups local until the active turn completes and can 
   await client.close();
 });
 
+test('ACP client reorders the complete pending prompt queue atomically', async () => {
+  const fake = harness();
+  const client = createGrokAcpClient({ spawn: fake.spawn });
+  const sessionId = '01a015a9-61df-7052-a5d0-17de77a201fa';
+  const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  const load = await waitForRequest(fake, 'session/load');
+  const child = fake.children[0].child;
+  reply(child, load.id, {});
+  await loading;
+
+  notify(child, sessionId, {
+    sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'external turn' },
+  });
+  for (const id of ['one', 'two', 'three']) {
+    await client.prompt({ sessionId, cwd: '/tmp/project', id, text: id });
+  }
+  assert.deepEqual(client.read(sessionId).queue.map((entry) => entry.id), ['one', 'two', 'three']);
+  assert.deepEqual(await client.reorderQueuedPrompts({
+    sessionId, queueIds: ['three', 'one', 'two'],
+  }), { accepted: true, queueIds: ['three', 'one', 'two'] });
+  assert.deepEqual(client.read(sessionId).queue.map((entry) => entry.id), ['three', 'one', 'two']);
+
+  await assert.rejects(client.reorderQueuedPrompts({
+    sessionId, queueIds: ['three', 'three', 'two'],
+  }), { code: 'GROK_ACP_QUEUE_INVALID' });
+  assert.deepEqual(client.read(sessionId).queue.map((entry) => entry.id), ['three', 'one', 'two']);
+  await client.close();
+});
+
 test('ACP client exposes and cancels an active turn through the standard session notification', async () => {
   const fake = harness();
   const client = createGrokAcpClient({ spawn: fake.spawn });
