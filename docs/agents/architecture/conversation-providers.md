@@ -45,7 +45,10 @@ cards. The composer keeps one contextual action: with an active turn and an
 empty draft it sends the standard ACP `session/cancel` notification, while
 typing a draft changes the same action back to Send so the prompt can be queued
 or steered. `turn_completed` clears both the activity indicator and the pending
-cancel state.
+cancel state. Treat that notification as the authoritative visible boundary:
+the underlying `session/prompt` JSON-RPC promise may still be settling so the
+queue remains serialized, but the phone must already leave its streaming/Stop
+state when Grok says the turn is complete.
 
 The root snapshot also exposes provider-owned controls. Grok uses
 `session/set_model` and one mutually exclusive mode control: `Normal`, `Plan`,
@@ -128,12 +131,17 @@ graph.
 
 After the initial HTTP read, `/api/conversations/:session/stream` publishes the
 provider-neutral snapshots over SSE. Provider watchers are released when the
-browser disconnects or the server stops. During initial ACP connection, the
+browser disconnects or the server stops. Assistant text is painted immediately
+from those provider chunks; the browser does not add a synthetic typewriter
+delay after a chunk arrives. During initial ACP connection, the
 native mobile surface continues to own the viewport and shows reconnecting
 state; it does not briefly attach xterm and resize the shared tmux pane. A new
 Grok chat reserves that native surface optimistically on the original `+`
 click, before session creation returns, so even the pending frame says
-`Connecting to Grok` rather than rendering the generic terminal loader.
+`Connecting to Grok` rather than rendering the generic terminal loader. Once
+active, the native surface also owns the only mobile header and places project
+navigation there; the terminal topbar is removed from layout instead of being
+stacked above the conversation header.
 
 ## Future adapters
 
