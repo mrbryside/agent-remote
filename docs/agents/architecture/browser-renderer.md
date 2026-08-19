@@ -18,6 +18,10 @@ Each session owns one keyed renderer and one UI split state. The browser toolbar
 
 Desktop control events use the selected terminal WebSocket. Native mobile conversations intentionally suspend that socket, so their SSE stream also carries validated `open-graphics` control events. Both transports address the same session-keyed renderer. On phones the renderer is presented in a draggable bottom sheet rather than a full-screen xterm layer. Dismissing the sheet only changes frontend visibility and keeps the renderer alive; a Browser activity pill reopens it. If subagents are also present, Browser and Subagents share one activity dock, and each sheet exposes a direct switch to the other so the two surfaces never stack.
 
+The sheet's close button is different from dismissal: it closes the keyed
+renderer and unregisters the owning terminal-browser process, while dragging
+down or tapping the backdrop remains the reversible hide action.
+
 The page viewport displays Chromium's compositor screencast directly. Layout,
 input, and raster dimensions share CSS-pixel coordinates, so there is no
 motion/idle quality switch and no second `Page.captureScreenshot` encode on each
@@ -34,6 +38,13 @@ fallback when an idle compositor does not emit. This ordering prevents a fresh
 frame from being covered by a late loading state and removes the need for a
 manual resize. DevTools docks below the same target; its duplicate screencast is
 disabled so the picker inspects the primary viewport.
+
+Keyboard input is forwarded as complete CDP key events, including the Windows
+virtual key code Chromium uses for default editing behavior, modifier bits,
+location, repeat state, and generated text. Keep this mapping intact for
+Enter/Space/Tab, editing and navigation keys, function/numpad keys, and
+platform shortcuts; forwarding only DOM `key` and `code` makes printable text
+appear to work while silently breaking form submit and caret movement.
 
 Changes here require the real-browser coverage in `test/terminal-browser.spec.js` in addition to the general Playwright suite. The real terminal-browser case may skip when its machine binary is unavailable.
 

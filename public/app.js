@@ -1769,16 +1769,34 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
     if (event.target.closest('.browser-toolbar, .browser-inspector')) return;
     if (nextSocket.readyState !== WebSocket.OPEN) return;
     event.preventDefault();
+    const modifiers = (event.altKey ? 1 : 0) |
+      (event.ctrlKey ? 2 : 0) |
+      (event.metaKey ? 4 : 0) |
+      (event.shiftKey ? 8 : 0);
+    const unmodifiedText = event.key === 'Enter' || event.code === 'NumpadEnter'
+      ? '\r'
+      : event.key === 'Spacebar' || event.code === 'Space'
+        ? ' '
+        : event.key.length === 1 ? event.key : '';
+    const text = event.altKey || event.ctrlKey || event.metaKey ? '' : unmodifiedText;
     nextSocket.send(JSON.stringify({
       type: 'key', event: 'keyDown', key: event.key, code: event.code,
-      text: event.key.length === 1 ? event.key : '',
+      text, unmodifiedText, keyCode: event.keyCode, modifiers,
+      repeat: event.repeat, location: event.location,
     }));
   });
   surface.addEventListener('keyup', (event) => {
     if (event.target.closest('.browser-toolbar, .browser-inspector')) return;
     if (nextSocket.readyState !== WebSocket.OPEN) return;
     event.preventDefault();
-    nextSocket.send(JSON.stringify({ type: 'key', event: 'keyUp', key: event.key, code: event.code }));
+    const modifiers = (event.altKey ? 1 : 0) |
+      (event.ctrlKey ? 2 : 0) |
+      (event.metaKey ? 4 : 0) |
+      (event.shiftKey ? 8 : 0);
+    nextSocket.send(JSON.stringify({
+      type: 'key', event: 'keyUp', key: event.key, code: event.code,
+      keyCode: event.keyCode, modifiers, location: event.location,
+    }));
   });
 
   nextTerminal.onData((data) => {

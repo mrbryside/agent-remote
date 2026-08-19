@@ -48,6 +48,54 @@ const browserCursorValues = new Set([
   'nw-resize', 'se-resize', 'sw-resize', 'ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize',
   'zoom-in', 'zoom-out',
 ]);
+const browserVirtualKeyCodes = new Map(Object.entries({
+  Backspace: 8,
+  Tab: 9,
+  Enter: 13,
+  NumpadEnter: 13,
+  ShiftLeft: 16,
+  ShiftRight: 16,
+  ControlLeft: 17,
+  ControlRight: 17,
+  AltLeft: 18,
+  AltRight: 18,
+  Pause: 19,
+  CapsLock: 20,
+  Escape: 27,
+  Space: 32,
+  PageUp: 33,
+  PageDown: 34,
+  End: 35,
+  Home: 36,
+  ArrowLeft: 37,
+  ArrowUp: 38,
+  ArrowRight: 39,
+  ArrowDown: 40,
+  PrintScreen: 44,
+  Insert: 45,
+  Delete: 46,
+  MetaLeft: 91,
+  MetaRight: 92,
+  ContextMenu: 93,
+  NumpadMultiply: 106,
+  NumpadAdd: 107,
+  NumpadSubtract: 109,
+  NumpadDecimal: 110,
+  NumpadDivide: 111,
+  NumLock: 144,
+  ScrollLock: 145,
+  Semicolon: 186,
+  Equal: 187,
+  Comma: 188,
+  Minus: 189,
+  Period: 190,
+  Slash: 191,
+  Backquote: 192,
+  BracketLeft: 219,
+  Backslash: 220,
+  BracketRight: 221,
+  Quote: 222,
+}));
 const cursorProbeFunction = `function(x, y) {
   const element = document.elementFromPoint(x, y);
   if (!element) return 'default';
@@ -107,6 +155,32 @@ function normalizeBrowserCursor(value) {
   if (typeof value !== 'string') return 'default';
   const fallback = value.split(',').at(-1)?.trim().toLowerCase();
   return browserCursorValues.has(fallback) ? fallback : 'default';
+}
+
+function browserVirtualKeyCode(message) {
+  const code = typeof message.code === 'string' ? message.code : '';
+  const mapped = browserVirtualKeyCodes.get(code);
+  if (mapped) return mapped;
+  if (/^Key[A-Z]$/.test(code)) return code.charCodeAt(3);
+  if (/^Digit[0-9]$/.test(code)) return code.charCodeAt(5);
+  const numpad = code.match(/^Numpad([0-9])$/);
+  if (numpad) return 96 + Number(numpad[1]);
+  const functionKey = code.match(/^F([1-9]|1[0-9]|2[0-4])$/);
+  if (functionKey) return 111 + Number(functionKey[1]);
+
+  const key = typeof message.key === 'string' ? message.key : '';
+  const keyMapped = browserVirtualKeyCodes.get(key) || {
+    ' ': 32,
+    Spacebar: 32,
+    Esc: 27,
+    Del: 46,
+  }[key];
+  if (keyMapped) return keyMapped;
+  if (/^[a-z]$/i.test(key)) return key.toUpperCase().charCodeAt(0);
+  if (/^[0-9]$/.test(key)) return key.charCodeAt(0);
+  return Number.isInteger(message.keyCode) && message.keyCode > 0 && message.keyCode <= 255
+    ? message.keyCode
+    : 0;
 }
 
 function rendererViewport(width, height) {
@@ -1198,11 +1272,35 @@ export function createTerminalServer(options = {}) {
         renderer.cursorProbePoint = undefined;
         broadcastCursor(renderer, 'default');
       } else if (message.type === 'key' && renderer.cdp && ['keyDown', 'keyUp', 'rawKeyDown'].includes(message.event)) {
+        const key = typeof message.key === 'string' ? message.key.slice(0, 64) : '';
+        const code = typeof message.code === 'string' ? message.code.slice(0, 64) : '';
+        const modifiers = Number.isInteger(message.modifiers) ? message.modifiers & 15 : 0;
+        let text = message.event === 'keyDown' && typeof message.text === 'string'
+          ? message.text.slice(0, 64)
+          : '';
+        if (message.event === 'keyDown' && !(modifiers & 7) && !text) {
+          if (key === 'Enter' || code === 'Enter' || code === 'NumpadEnter') text = '\r';
+          else if (key === ' ' || key === 'Spacebar' || code === 'Space') text = ' ';
+        }
+        const unmodifiedText = message.event === 'keyDown' && typeof message.unmodifiedText === 'string'
+          ? message.unmodifiedText.slice(0, 64)
+          : text;
+        const location = Number.isInteger(message.location) && message.location >= 0 && message.location <= 3
+          ? message.location
+          : 0;
+        const windowsVirtualKeyCode = browserVirtualKeyCode(message);
         void sendCdp(renderer, 'Input.dispatchKeyEvent', {
-          type: message.event,
-          key: typeof message.key === 'string' ? message.key : '',
-          code: typeof message.code === 'string' ? message.code : '',
-          text: message.event === 'keyDown' && typeof message.text === 'string' ? message.text : '',
+          type: message.event === 'keyDown' && !text ? 'rawKeyDown' : message.event,
+          key,
+          code,
+          text,
+          unmodifiedText,
+          windowsVirtualKeyCode,
+          modifiers,
+          autoRepeat: Boolean(message.repeat),
+          isKeypad: location === 3,
+          isSystemKey: Boolean(modifiers & 1),
+          location,
         }).catch(() => {});
       } else if (message.type === 'tab-new') {
         void controlRendererTab(renderer, { cmd: 'open-tab', url: 'about:blank' })

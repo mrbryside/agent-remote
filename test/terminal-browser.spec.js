@@ -124,6 +124,62 @@ test('agent terminal-browser command opens a rendered web split on the right', a
 
     const browserFrame = page.locator('.graphics-terminal-instance:not([hidden]) .browser-frame');
     const graphicsHost = page.locator('.graphics-terminal-instance:not([hidden])');
+    const keyboardFixture = terminalBrowserAction(
+      observedBrowser.key,
+      'eval',
+      `document.body.innerHTML='<form id="keyboard-form"><input id="keyboard-input"><button id="keyboard-next">Next</button><output id="keyboard-output"></output></form>'; ` +
+        `window.__keyboardKeys=[]; ` +
+        `document.querySelector('#keyboard-input').addEventListener('keydown',event=>window.__keyboardKeys.push(event.key)); ` +
+        `document.querySelector('#keyboard-form').addEventListener('submit',event=>{event.preventDefault();document.querySelector('#keyboard-output').textContent=document.querySelector('#keyboard-input').value}); ` +
+        `document.querySelector('#keyboard-input').focus(); 'keyboard-ready'`,
+    );
+    expect(keyboardFixture.status, keyboardFixture.stderr).toBe(0);
+    await page.locator('.graphics-terminal-instance:not([hidden]) .browser-surface').focus();
+    await page.keyboard.type('ab cd');
+    await page.keyboard.press('Home');
+    await page.keyboard.press('Delete');
+    await page.keyboard.press('End');
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('Space');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Tab');
+    await expect.poll(() => {
+      const result = terminalBrowserAction(
+        observedBrowser.key,
+        'eval',
+        `JSON.stringify({value:document.querySelector('#keyboard-input').value,` +
+          `submitted:document.querySelector('#keyboard-output').textContent,` +
+          `active:document.activeElement.id,keys:window.__keyboardKeys})`,
+      );
+      return result.stdout;
+    }, { timeout: 10_000 }).toContain('\\"value\\":\\"b c \\"');
+    const keyboardResult = terminalBrowserAction(
+      observedBrowser.key,
+      'eval',
+      `JSON.stringify({submitted:document.querySelector('#keyboard-output').textContent,` +
+        `active:document.activeElement.id,keys:window.__keyboardKeys})`,
+    );
+    expect(keyboardResult.stdout).toContain('\\"submitted\\":\\"b c \\"');
+    expect(keyboardResult.stdout).toContain('\\"active\\":\\"keyboard-next\\"');
+    for (const key of ['Home', 'Delete', 'End', 'Backspace', ' ', 'Enter', 'Tab']) {
+      expect(keyboardResult.stdout).toContain(`\\"${key}\\"`);
+    }
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+    await page.keyboard.type('z');
+    await page.keyboard.press('ArrowLeft');
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Escape');
+    await expect.poll(() => {
+      const result = terminalBrowserAction(
+        observedBrowser.key,
+        'eval',
+        `JSON.stringify({value:document.querySelector('#keyboard-input').value,` +
+          `active:document.activeElement.id,keys:window.__keyboardKeys})`,
+      );
+      return result.stdout;
+    }, { timeout: 10_000 }).toContain('\\"value\\":\\"z\\"');
+
     const frameBeforeNavigationFixture = Number(await graphicsHost.getAttribute('data-frame-version') || 0);
     const navigationFixture = terminalBrowserAction(
       observedBrowser.key,
