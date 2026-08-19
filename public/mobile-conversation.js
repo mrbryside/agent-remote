@@ -127,6 +127,30 @@ export function createMobileConversationView({
     return Math.max(0, container.scrollHeight - container.scrollTop - container.clientHeight);
   }
 
+  function captureMarkdownScroll(container) {
+    const positions = new Map();
+    for (const viewport of container.querySelectorAll('[data-markdown-scroll]')) {
+      const messageId = viewport.closest('[data-message-id]')?.dataset.messageId;
+      if (!messageId) continue;
+      positions.set(`${messageId}:${viewport.dataset.markdownScroll}`, {
+        top: viewport.scrollTop,
+        left: viewport.scrollLeft,
+        atBottom: distanceFromBottom(viewport) <= 1,
+      });
+    }
+    return positions;
+  }
+
+  function restoreMarkdownScroll(container, positions) {
+    for (const viewport of container.querySelectorAll('[data-markdown-scroll]')) {
+      const messageId = viewport.closest('[data-message-id]')?.dataset.messageId;
+      const position = positions.get(`${messageId}:${viewport.dataset.markdownScroll}`);
+      if (!position) continue;
+      viewport.scrollLeft = position.left;
+      viewport.scrollTop = position.atBottom ? viewport.scrollHeight : position.top;
+    }
+  }
+
   function updateJumpToLatest() {
     jumpToLatest.hidden = !available || root.dataset.interaction === 'true' || distanceFromBottom() <= 48;
   }
@@ -1392,6 +1416,7 @@ export function createMobileConversationView({
     // generous "near bottom" threshold makes short mobile histories snap back
     // down on every streamed update and effectively prevents scrolling.
     const atBottom = distanceFromBottom(targetMessages) <= 1;
+    const markdownScroll = captureMarkdownScroll(targetMessages);
     const signature = JSON.stringify({
       thread: conversation.thread,
       activity: conversation.activity,
@@ -1473,6 +1498,7 @@ export function createMobileConversationView({
     }
     if (!fragment.childNodes.length) fragment.append(element('div', 'mobile-conversation-loading', 'No messages yet'));
     targetMessages.replaceChildren(fragment);
+    restoreMarkdownScroll(targetMessages, markdownScroll);
     if (initialThreadRender || atBottom || pendingMessage) targetMessages.scrollTop = targetMessages.scrollHeight;
     if (isRoot) updateJumpToLatest();
     if (isRoot) updateComposerAction();

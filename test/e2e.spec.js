@@ -625,6 +625,50 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }, rootConversation());
   await expect(streamedMessage.locator('.mobile-message-content')).toHaveText(streamText);
   await expect(streamedMessage).not.toHaveAttribute('data-streaming', 'true');
+
+  const streamedCode = {
+    id: 'assistant-code-stream', type: 'message', role: 'assistant',
+    text: `\`\`\`js\n${Array.from({ length: 50 }, (_, index) =>
+      `line ${index + 1}: ${'long-code-value '.repeat(12)}`).join('\n')}\n\`\`\``,
+  };
+  rootItems.push(streamedCode);
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  const streamedCodeViewport = conversation.locator(
+    '[data-message-id="assistant-code-stream"] [data-markdown-scroll^="code:"]',
+  );
+  await expect.poll(() => streamedCodeViewport.evaluate((node) => ({
+    vertical: node.scrollHeight > node.clientHeight,
+    horizontal: node.scrollWidth > node.clientWidth,
+  }))).toEqual({ vertical: true, horizontal: true });
+  const readingPosition = await streamedCodeViewport.evaluate((node) => {
+    node.scrollTop = 80;
+    node.scrollLeft = 70;
+    return { top: node.scrollTop, left: node.scrollLeft };
+  });
+  streamedCode.text = streamedCode.text.replace('\n```',
+    `\n${Array.from({ length: 8 }, (_, index) => `appended ${index + 1}`).join('\n')}\n\`\`\``);
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect.poll(() => streamedCodeViewport.evaluate((node) => ({
+    top: node.scrollTop, left: node.scrollLeft,
+  }))).toEqual(readingPosition);
+  await streamedCodeViewport.evaluate((node) => { node.scrollTop = node.scrollHeight; });
+  streamedCode.text = streamedCode.text.replace('\n```', '\nfinal streamed line\n```');
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect.poll(() => streamedCodeViewport.evaluate((node) =>
+    node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(1);
+
   await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
   const toolPanel = conversation.locator('.mobile-tool-group-panel');
   await expect.poll(() => toolPanel.evaluate((panel) => panel.clientHeight)).toBeGreaterThan(200);

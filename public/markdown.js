@@ -85,9 +85,10 @@ function copyButton(code) {
 }
 
 function decorateCode(root) {
-  for (const pre of [...root.querySelectorAll('pre')]) {
+  for (const [index, pre] of [...root.querySelectorAll('pre')].entries()) {
     const code = pre.querySelector(':scope > code');
     if (!code) continue;
+    pre.dataset.markdownScroll = `code:${index}`;
     const language = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9) || 'Code';
     const frame = document.createElement('div');
     frame.className = 'mobile-markdown-code';
@@ -102,9 +103,10 @@ function decorateCode(root) {
 }
 
 function decorateTables(root) {
-  for (const table of [...root.querySelectorAll('table')]) {
+  for (const [index, table] of [...root.querySelectorAll('table')].entries()) {
     const viewport = document.createElement('div');
     viewport.className = 'mobile-markdown-table';
+    viewport.dataset.markdownScroll = `table:${index}`;
     table.replaceWith(viewport);
     viewport.append(table);
   }
