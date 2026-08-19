@@ -1,3 +1,5 @@
+import { markdownNode } from './markdown.js';
+
 function element(tag, className, text) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -1364,7 +1366,9 @@ export function createMobileConversationView({
         : conversation.provider.label;
       article.append(
         element('span', 'mobile-message-author', author),
-        element('div', 'mobile-message-content', item.text),
+        item.role === 'assistant'
+          ? markdownNode(item.text)
+          : element('div', 'mobile-message-content', item.text),
       );
       return article;
     }

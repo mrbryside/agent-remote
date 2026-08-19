@@ -135,7 +135,10 @@ async function buildServerSidecar() {
     cp(join(root, 'bin'), join(runtimeDir, 'bin'), { recursive: true, dereference: true }),
   ]);
   const copied = new Set();
-  for (const dependency of ['node-pty', 'ws', 'qrcode', '@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-image']) {
+  for (const dependency of [
+    'node-pty', 'ws', 'qrcode', '@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-image',
+    'marked', 'dompurify',
+  ]) {
     await copyRuntimePackage(dependency, copied);
   }
   await chmod(join(runtimeDir, 'node_modules', 'node-pty', 'prebuilds', 'darwin-arm64', 'spawn-helper'), 0o755);

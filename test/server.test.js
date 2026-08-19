@@ -107,12 +107,15 @@ function waitForMessage(socket, predicate) {
 
 test('serves the frontend and health status', async () => {
   await withServer({}, async (url) => {
-    const [page, tokens, apiClient, remoteControl, mobileConversation, health] = await Promise.all([
+    const [page, tokens, apiClient, remoteControl, mobileConversation, markdown, markedVendor, purifierVendor, health] = await Promise.all([
       fetch(url),
       fetch(`${url}/tokens.css`),
       fetch(`${url}/api-client.js`),
       fetch(`${url}/remote-control.js`),
       fetch(`${url}/mobile-conversation.js`),
+      fetch(`${url}/markdown.js`),
+      fetch(`${url}/vendor/marked.js`),
+      fetch(`${url}/vendor/dompurify.js`),
       fetch(`${url}/health`),
     ]);
     assert.equal(page.status, 200);
@@ -126,6 +129,12 @@ test('serves the frontend and health status', async () => {
     assert.match(remoteControl.headers.get('content-type'), /^text\/javascript/);
     assert.equal(mobileConversation.status, 200);
     assert.match(await mobileConversation.text(), /createMobileConversationView/);
+    assert.equal(markdown.status, 200);
+    assert.match(await markdown.text(), /DOMPurify\.sanitize/);
+    assert.equal(markedVendor.status, 200);
+    assert.match(markedVendor.headers.get('content-type'), /^text\/javascript/);
+    assert.equal(purifierVendor.status, 200);
+    assert.match(purifierVendor.headers.get('content-type'), /^text\/javascript/);
     assert.deepEqual(await health.json(), { ok: true, mode: 'shell' });
   });
 });

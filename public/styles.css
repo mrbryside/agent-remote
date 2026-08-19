@@ -349,6 +349,38 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-message-user { justify-items: end; }
   .mobile-message-user .mobile-message-content { max-width: 88%; padding: 10px 13px; border: 1px solid var(--color-border-strong); border-radius: 15px 15px 4px 15px; background: var(--color-surface-selected); color: var(--color-text-strong); }
   .mobile-message[data-pending="true"] .mobile-message-author { color: var(--color-status-connecting); }
+  .mobile-markdown { min-width: 0; white-space: normal; }
+  .mobile-markdown > :first-child { margin-top: 0; }
+  .mobile-markdown > :last-child { margin-bottom: 0; }
+  .mobile-markdown p { margin: 0 0 12px; }
+  .mobile-markdown h1, .mobile-markdown h2, .mobile-markdown h3, .mobile-markdown h4 { margin: 22px 0 9px; color: var(--color-text-strong); line-height: 1.28; letter-spacing: -.015em; }
+  .mobile-markdown h1 { font-size: 21px; }
+  .mobile-markdown h2 { font-size: 18px; }
+  .mobile-markdown h3 { font-size: 16px; }
+  .mobile-markdown h4 { font-size: 14px; }
+  .mobile-markdown ul, .mobile-markdown ol { display: grid; gap: 5px; margin: 0 0 13px; padding-left: 24px; }
+  .mobile-markdown li { padding-left: 2px; }
+  .mobile-markdown li > p { margin-bottom: 4px; }
+  .mobile-markdown blockquote { margin: 14px 0; padding: 2px 0 2px 13px; border-left: 3px solid var(--color-border-strong); color: var(--color-text-secondary); }
+  .mobile-markdown blockquote > :last-child { margin-bottom: 0; }
+  .mobile-markdown a { color: var(--color-accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--color-accent) 48%, transparent); text-underline-offset: 3px; }
+  .mobile-markdown a:hover { text-decoration-color: currentColor; }
+  .mobile-markdown code { font-family: var(--font-family-mono); }
+  .mobile-markdown :not(pre) > code { padding: 2px 5px; border: 1px solid var(--color-border-faint); border-radius: 5px; background: var(--color-surface-subtle); color: var(--color-text-strong); font-size: .88em; overflow-wrap: anywhere; }
+  .mobile-markdown-code { min-width: 0; margin: 14px 0; overflow: hidden; border: 1px solid var(--color-border-strong); border-radius: 12px; background: var(--color-terminal-background); }
+  .mobile-markdown-code-toolbar { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--color-border); color: var(--color-text-muted); font: 9px/1 var(--font-family-mono); text-transform: uppercase; }
+  .mobile-markdown-copy { min-width: 54px; min-height: 30px; padding: 0 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--color-text-secondary); font: 9px/1 var(--font-family-mono); text-transform: none; }
+  .mobile-markdown-copy:hover, .mobile-markdown-copy:focus-visible { border-color: var(--color-border-strong); color: var(--color-text-strong); }
+  .mobile-markdown-code pre { max-width: 100%; max-height: 360px; margin: 0; padding: 13px 14px; overflow: auto; background: transparent; color: var(--color-terminal-foreground); font: 12px/1.55 var(--font-family-mono); overscroll-behavior: contain; tab-size: 2; white-space: pre; }
+  .mobile-markdown-table { max-width: 100%; margin: 14px 0; overflow: auto; border: 1px solid var(--color-border-strong); border-radius: 10px; overscroll-behavior: contain; }
+  .mobile-markdown table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
+  .mobile-markdown th, .mobile-markdown td { padding: 9px 11px; border-right: 1px solid var(--color-border-subtle); border-bottom: 1px solid var(--color-border-subtle); text-align: left; vertical-align: top; }
+  .mobile-markdown th { background: var(--color-surface-subtle); color: var(--color-text-strong); font-weight: 650; }
+  .mobile-markdown tr:last-child td { border-bottom: 0; }
+  .mobile-markdown th:last-child, .mobile-markdown td:last-child { border-right: 0; }
+  .mobile-markdown img { display: block; max-width: 100%; height: auto; margin: 14px 0; border: 1px solid var(--color-border-strong); border-radius: 12px; }
+  .mobile-markdown hr { height: 1px; margin: 20px 0; border: 0; background: var(--color-border-subtle); }
+  .mobile-markdown input[type="checkbox"] { width: 15px; height: 15px; margin: 0 6px 0 -21px; accent-color: var(--color-accent); vertical-align: -2px; }
   .mobile-subagent-pill-host { position: absolute; z-index: 4; right: max(14px, env(safe-area-inset-right)); bottom: calc(68px + env(safe-area-inset-bottom)); left: max(14px, env(safe-area-inset-left)); display: flex; justify-content: center; pointer-events: none; }
   .mobile-subagent-pill-host[hidden] { display: none; }
   .mobile-conversation[data-interaction="true"] .mobile-subagent-pill-host { display: none; }

@@ -171,17 +171,21 @@ const staticRoutes = new Map([
   ['/api-client.js', join(publicDir, 'api-client.js')],
   ['/remote-control.js', join(publicDir, 'remote-control.js')],
   ['/mobile-conversation.js', join(publicDir, 'mobile-conversation.js')],
+  ['/markdown.js', join(publicDir, 'markdown.js')],
   ['/tokens.css', join(publicDir, 'tokens.css')],
   ['/styles.css', join(publicDir, 'styles.css')],
   ['/vendor/xterm.js', join(root, 'node_modules/@xterm/xterm/lib/xterm.js')],
   ['/vendor/xterm.css', join(root, 'node_modules/@xterm/xterm/css/xterm.css')],
   ['/vendor/addon-fit.js', join(root, 'node_modules/@xterm/addon-fit/lib/addon-fit.js')],
   ['/vendor/addon-image.js', join(root, 'node_modules/@xterm/addon-image/lib/addon-image.js')],
+  ['/vendor/marked.js', join(root, 'node_modules/marked/lib/marked.esm.js')],
+  ['/vendor/dompurify.js', join(root, 'node_modules/dompurify/dist/purify.es.mjs')],
 ]);
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
 };
 

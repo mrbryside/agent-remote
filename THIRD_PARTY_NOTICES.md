@@ -13,6 +13,16 @@ Cloudflare, Inc. retains all rights to its trademarks.
 
 The packaged Node.js runtime is distributed under the [MIT License](https://github.com/nodejs/node/blob/v22.23.2/LICENSE).
 
+## Marked 18.0.10
+
+The mobile Markdown parser is distributed under the
+[MIT License](https://github.com/markedjs/marked/blob/v18.0.10/LICENSE.md).
+
+## DOMPurify 3.4.13
+
+The browser HTML sanitizer is distributed under the
+[Mozilla Public License 2.0 or Apache License 2.0](https://github.com/cure53/DOMPurify/blob/3.4.13/LICENSE).
+
 ## Packaging note
 
 `@yao-pkg/pkg` is retained as a development dependency and configured for the

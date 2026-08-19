@@ -213,7 +213,26 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const sessionName = await project.locator('.session-row').getAttribute('data-session');
   const rootItems = Array.from({ length: 18 }, (_, index) => ({
     id: `assistant-${index}`, type: 'message', role: index % 2 ? 'user' : 'assistant',
-    text: `History message ${index + 1}`,
+    text: index === 0 ? [
+      '# Markdown response',
+      '',
+      'This is **bold**, this is `inlineCode()`, and this is a [safe link](https://example.com).',
+      '',
+      '- First item',
+      '- Second item',
+      '',
+      '| Name | State |',
+      '| --- | --- |',
+      '| Renderer | Ready |',
+      '',
+      '```js',
+      'const ready = true;',
+      '```',
+      '',
+      '[Unsafe link](javascript:alert(1))',
+      '<img src="javascript:alert(2)" onerror="window.__markdownXss = true" alt="Unsafe image">',
+      '<script>window.__markdownXss = true</script>',
+    ].join('\n') : `History message ${index + 1}`,
   }));
   rootItems.push(
     { id: 'thought-1', type: 'thought', title: 'Thought', text: 'I should inspect the provider.', status: 'working' },
@@ -426,6 +445,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(1);
   expect(await page.evaluate(() => window.__mobileConversationScrollCalls
     .filter((call) => call?.behavior === 'smooth'))).toEqual([]);
+  const markdownMessage = conversation.locator('[data-message-id="assistant-0"] .mobile-markdown');
+  await expect(markdownMessage.locator('h1')).toHaveText('Markdown response');
+  await expect(markdownMessage.locator('strong')).toHaveText('bold');
+  await expect(markdownMessage.locator('li')).toHaveCount(2);
+  await expect(markdownMessage.locator('table')).toContainText('Renderer');
+  await expect(markdownMessage.locator('.mobile-markdown-code-toolbar')).toContainText('js');
+  await expect(markdownMessage.getByRole('button', { name: 'Copy code' })).toBeVisible();
+  await expect(markdownMessage.getByRole('link', { name: 'safe link' })).toHaveAttribute('rel', 'noopener noreferrer');
+  await expect(markdownMessage.locator('script, [onerror]')).toHaveCount(0);
+  await expect(markdownMessage.locator('a', { hasText: 'Unsafe link' })).not.toHaveAttribute('href', /.+/);
+  await expect(markdownMessage).toContainText('Unsafe image');
+  expect(await page.evaluate(() => window.__markdownXss)).toBeUndefined();
   await expect(conversation.locator('.mobile-event-card')).toHaveCount(10);
   await expect(conversation.locator('#mobile-conversation-context')).toContainText('6K / 190K');
   const modelButton = conversation.locator('#mobile-conversation-model');
