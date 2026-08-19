@@ -137,6 +137,7 @@ test('serves a provider-neutral mobile conversation only for a managed session',
   const questions = [];
   const modelChanges = [];
   const modeChanges = [];
+  const cancellations = [];
   const queueActions = [];
   let initializing = false;
   let activeDeliveries = 0;
@@ -174,6 +175,7 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     },
     setModel: async (session, modelId) => modelChanges.push({ session, modelId }),
     setMode: async (session, modeId) => ({ accepted: true, modeId: (modeChanges.push({ session, modeId }), modeId) }),
+    cancel: async (session) => (cancellations.push(session), { accepted: true, active: true }),
     removeQueuedInput: async (session, queueId) => (queueActions.push({ action: 'remove', session, queueId }), { accepted: true }),
     steerQueuedInput: async (session, queueId) => (queueActions.push({ action: 'steer', session, queueId }), { accepted: true }),
   };
@@ -269,6 +271,12 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     assert.deepEqual(modeChanges.map(({ session, modeId }) => ({ name: session.name, modeId })), [
       { name: 'ar-mobile', modeId: 'alwaysApprove' },
     ]);
+    const cancelResponse = await fetch(`${url}/api/conversations/ar-mobile/cancel`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    assert.equal(cancelResponse.status, 202);
+    assert.deepEqual(await cancelResponse.json(), { accepted: true, active: true });
+    assert.deepEqual(cancellations.map((session) => session.name), ['ar-mobile']);
     for (const [suffix, method] of [['', 'DELETE'], ['/steer', 'POST']]) {
       const queueResponse = await fetch(`${url}/api/conversations/ar-mobile/queue/q-1${suffix}`, {
         method, headers: method === 'POST' ? { 'content-type': 'application/json' } : undefined,

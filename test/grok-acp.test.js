@@ -174,6 +174,37 @@ test('ACP client keeps follow-ups local until the active turn completes and can 
   await client.close();
 });
 
+test('ACP client exposes and cancels an active turn through the standard session notification', async () => {
+  const fake = harness();
+  const client = createGrokAcpClient({ spawn: fake.spawn });
+  const sessionId = '01a015a9-61df-7052-a5d0-17de77a201fa';
+  const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  const load = await waitForRequest(fake, 'session/load');
+  const child = fake.children[0].child;
+  reply(child, load.id, {});
+  await loading;
+
+  notify(child, sessionId, {
+    sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'long task' },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(client.read(sessionId).turn, { active: true, cancelRequested: false });
+
+  assert.deepEqual(await client.cancel({ sessionId, cwd: '/tmp/project' }), {
+    accepted: true, active: true,
+  });
+  const cancellation = fake.requests.findLast((entry) => entry.method === 'session/cancel');
+  assert.deepEqual(cancellation, {
+    jsonrpc: '2.0', method: 'session/cancel', params: { sessionId },
+  });
+  assert.deepEqual(client.read(sessionId).turn, { active: true, cancelRequested: true });
+
+  notify(child, sessionId, { sessionUpdate: 'turn_completed', stop_reason: 'cancelled' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(client.read(sessionId).turn, { active: false, cancelRequested: false });
+  await client.close();
+});
+
 test('ACP client drains queued follow-ups in order and updates real session controls', async () => {
   const fake = harness();
   const client = createGrokAcpClient({ spawn: fake.spawn });

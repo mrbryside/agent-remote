@@ -132,6 +132,27 @@ function toolSubject(update) {
   return shortText(value, '', 180);
 }
 
+function activityLabel(value, fallback) {
+  const label = shortText(value, fallback, 180).replace(/[.\s…]+$/u, '');
+  return `${label}…`;
+}
+
+function toolActivity(update) {
+  const status = normalizedStatus(update.status, 'pending');
+  if (['completed', 'failed', 'cancelled'].includes(status)) {
+    return { phase: 'waiting', label: 'Waiting for response…' };
+  }
+  const meta = toolMeta(update);
+  const name = shortText(meta.name || update.name || update.title, 'tool', 100);
+  if (!update.status || status === 'pending' || status === 'calling') {
+    return { phase: 'tool', label: activityLabel(`Preparing ${name}`, 'Preparing tool') };
+  }
+  return {
+    phase: 'tool',
+    label: activityLabel(update.title || meta.label || name, 'Running tool'),
+  };
+}
+
 const toolSummaryLabels = new Map([
   ['list', ['Listed', 'dir', 'dirs']],
   ['read', ['Read', 'file', 'files']],
@@ -275,6 +296,7 @@ function timeline(updates) {
   let plan;
   let recap;
   let status = 'idle';
+  let activity;
 
   const appendMessage = (role, text, index, timestamp) => {
     if (!text) return;
@@ -337,16 +359,19 @@ function timeline(updates) {
     if (kind === 'available_commands_update' || kind === 'session_info_update') return;
     if (kind === 'user_message_chunk') {
       status = 'working';
+      activity = { phase: 'waiting', label: 'Waiting for response…' };
       appendMessage('user', textContent(update.content), index, record.timestamp);
       return;
     }
     if (kind === 'agent_message_chunk') {
       status = 'working';
+      activity = { phase: 'responding', label: 'Responding…' };
       appendMessage('assistant', textContent(update.content), index, record.timestamp);
       return;
     }
     if (kind === 'agent_thought_chunk') {
       status = 'working';
+      activity = { phase: 'thinking', label: 'Thinking…' };
       const text = textContent(update.content);
       if (!text) return;
       const previous = items.at(-1);
@@ -358,6 +383,7 @@ function timeline(updates) {
       return;
     }
     if (kind === 'tool_call' || kind === 'tool_call_update') {
+      activity = toolActivity(update);
       const id = typeof update.toolCallId === 'string' ? update.toolCallId : `tool-${index}`;
       if (toolExecutionStarted(update)) {
         executedToolCallIds.add(id);
@@ -390,6 +416,9 @@ function timeline(updates) {
           const summary = questionAnswerSummary(update);
           if (summary) question.answerSummary = summary;
           status = ['completed', 'failed', 'cancelled'].includes(question.status) ? status : 'working';
+          if (!['completed', 'failed', 'cancelled'].includes(question.status)) {
+            activity = { phase: 'question', label: 'Waiting for your answer…' };
+          }
         }
         return;
       }
@@ -450,6 +479,7 @@ function timeline(updates) {
           resolvePermissionFromGrok(permissions.get(String(subagent.permissionId)));
         }
         status = 'working';
+        activity = { phase: 'subagent', label: 'Working with subagent…' };
         return;
       }
 
@@ -522,6 +552,7 @@ function timeline(updates) {
       item.phase = 'running';
       resolvePermissionFromGrok(permissions.get(String(item.permissionId)));
       status = 'working';
+      activity = { phase: 'subagent', label: 'Working with subagent…' };
       return;
     }
     if (kind === 'subagent_finished') {
@@ -547,6 +578,7 @@ function timeline(updates) {
         durationMs: Number(update.duration_ms) || 0,
         tokensUsed: Number(update.tokens_used) || 0,
       };
+      activity = { phase: 'waiting', label: 'Waiting for response…' };
       return;
     }
     if (kind === 'plan') {
@@ -563,6 +595,7 @@ function timeline(updates) {
       plan.status = entries.some((entry) => entry.status === 'working') ? 'working'
         : entries.length && entries.every((entry) => entry.status === 'completed') ? 'completed' : 'pending';
       status = 'working';
+      activity = { phase: 'working', label: 'Updating plan…' };
       return;
     }
     if (kind === 'goal_updated') {
@@ -590,6 +623,7 @@ function timeline(updates) {
         lastEvent: shortText(update.last_event, '', 120),
       });
       status = goal.status === 'completed' ? status : 'working';
+      if (goal.status !== 'completed') activity = { phase: 'working', label: 'Working on goal…' };
       return;
     }
     if (kind === 'task_backgrounded' || kind === 'task_completed') {
@@ -613,6 +647,9 @@ function timeline(updates) {
           snapshot.exit_code === 0 ? 'completed' : 'failed') : 'working',
       });
       status = completed ? status : 'working';
+      activity = completed
+        ? { phase: 'waiting', label: 'Waiting for response…' }
+        : { phase: 'tool', label: activityLabel(task.title, 'Running background task') };
       return;
     }
     if (kind === 'hook_execution') {
@@ -641,6 +678,7 @@ function timeline(updates) {
         text: boundedText(update.reason, 8_000), status: 'working',
       });
       status = 'working';
+      activity = { phase: 'retrying', label: 'Retrying…' };
       return;
     }
     if (kind === 'session_recap') {
@@ -704,6 +742,7 @@ function timeline(updates) {
         }
       }
       status = 'working';
+      activity = { phase: 'permission', label: 'Waiting for your approval…' };
       return;
     }
     if (kind === 'permission_resolved') {
@@ -713,6 +752,7 @@ function timeline(updates) {
         permission.selectedOptionId = update.optionId;
         permission.selectedLabel = shortText(update.label, update.optionId || 'Resolved', 120);
       }
+      activity = { phase: 'waiting', label: 'Waiting for response…' };
       return;
     }
     if (kind === 'question_request') {
@@ -734,6 +774,7 @@ function timeline(updates) {
         question.status = 'pending';
       }
       status = 'working';
+      activity = { phase: 'question', label: 'Waiting for your answer…' };
       return;
     }
     if (kind === 'question_resolved') {
@@ -747,16 +788,18 @@ function timeline(updates) {
             .map(([prompt, answer]) => [boundedText(prompt, 4_000), boundedText(answer, 4_000)]));
         }
       }
+      activity = { phase: 'waiting', label: 'Waiting for response…' };
       return;
     }
     if (kind === 'turn_completed') {
       status = 'idle';
+      activity = undefined;
       return;
     }
     // Unknown protocol notifications are intentionally ignored. New event
     // types must be mapped deliberately before they become user-facing.
   });
-  return { items: groupToolBatches(items), children: [...children.values()].filter((child) => child.threadId), status, recap };
+  return { items: groupToolBatches(items), children: [...children.values()].filter((child) => child.threadId), status, activity, recap };
 }
 
 function grokCommand(command) {
@@ -772,6 +815,15 @@ export function createGrokConversationProvider({
   async function readThread(cwd, threadId, { includeControls = false } = {}) {
     const snapshot = await acpClient.loadSession({ sessionId: threadId, cwd });
     const parsed = timeline(snapshot.events);
+    const active = snapshot.turn?.active ?? parsed.status === 'working';
+    const cancelRequested = snapshot.turn?.cancelRequested === true;
+    const activity = active ? {
+      active: true,
+      phase: cancelRequested ? 'stopping' : parsed.activity?.phase || 'waiting',
+      label: cancelRequested ? 'Stopping…' : parsed.activity?.label || 'Waiting for response…',
+      canCancel: true,
+      cancelRequested,
+    } : { active: false };
     const detail = snapshot.metadata?._meta?.['x.ai/sessionDetail'] || {};
     const model = includeControls ? modelControls(snapshot.metadata) : undefined;
     const controls = includeControls ? {
@@ -783,23 +835,24 @@ export function createGrokConversationProvider({
       ? contextUsage(await loadSignals({ cwd, sessionId: threadId }), model)
       : undefined;
     return {
+      ...parsed,
       thread: {
         id: threadId,
         title: shortText(detail.title, detail.kind || 'Grok'),
         agentName: shortText(detail.kind, 'grok', 80),
         model: shortText(detail.currentModelId || snapshot.metadata?.models?.currentModelId, '', 80),
-        status: parsed.status,
+        status: active ? 'working' : parsed.status,
       },
+      activity,
       ...(controls && Object.keys(controls).length ? { controls } : {}),
       ...(includeControls ? { queue: snapshot.queue || [] } : {}),
       ...(context ? { context } : {}),
-      ...parsed,
     };
   }
 
   async function readStatus(handle) {
     const snapshot = await acpClient.loadSession({ sessionId: handle.rootThreadId, cwd: handle.cwd });
-    return timeline(snapshot.events).status;
+    return snapshot.turn?.active ? 'working' : timeline(snapshot.events).status;
   }
 
   async function graph(cwd, rootThreadId) {
@@ -851,6 +904,7 @@ export function createGrokConversationProvider({
       ...(threadId === handle.rootThreadId && selected.controls ? { controls: selected.controls } : {}),
       ...(threadId === handle.rootThreadId ? { queue: selected.queue || [] } : {}),
       ...(threadId === handle.rootThreadId && selected.context ? { context: selected.context } : {}),
+      activity: selected.activity,
       parent: parentId ? relationship.threads.get(parentId)?.thread ?? null : null,
       rootThreadId: handle.rootThreadId,
       capabilities: { send: threadId === handle.rootThreadId, children: children.length > 0 },
@@ -913,6 +967,9 @@ export function createGrokConversationProvider({
         cwd: handle.cwd,
         text, ...options,
       });
+    },
+    async cancel(handle) {
+      return acpClient.cancel({ sessionId: handle.rootThreadId, cwd: handle.cwd });
     },
     async setModel(handle, modelId) {
       return acpClient.setModel({

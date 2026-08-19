@@ -133,6 +133,11 @@ const mobileConversation = createMobileConversationView({
       body: JSON.stringify({ id, text, attachmentIds, fileMentions }),
     });
   },
+  async cancelTurn(sessionName) {
+    return api(`/api/conversations/${encodeURIComponent(sessionName)}/cancel`, {
+      method: 'POST', body: '{}',
+    });
+  },
   async searchFiles(sessionName, query) {
     const params = new URLSearchParams({ q: query });
     return api(`/api/conversations/${encodeURIComponent(sessionName)}/completions/files?${params}`);

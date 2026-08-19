@@ -64,6 +64,12 @@ export function createConversationRegistry({ providers = [] } = {}) {
       return resolved.provider.sendInput(resolved.handle, text, options);
     },
 
+    async cancel(session) {
+      const resolved = await resolve(session);
+      if (!resolved?.provider.cancel) throw new Error('This session does not support cancellation');
+      return resolved.provider.cancel(resolved.handle);
+    },
+
     async setModel(session, modelId) {
       const resolved = await resolve(session);
       if (!resolved?.provider.setModel) throw new Error('This session does not support model selection');

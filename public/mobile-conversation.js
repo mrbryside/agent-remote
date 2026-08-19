@@ -33,7 +33,7 @@ function duration(value) {
 }
 
 export function createMobileConversationView({
-  api, apiUrl, media, send, uploadAttachment, searchFiles, setModel, setMode,
+  api, apiUrl, media, send, cancelTurn, uploadAttachment, searchFiles, setModel, setMode,
   removeQueuedInput, steerQueuedInput, respondPermission, respondQuestion,
   onVisibilityChange, onStatusChange = () => {},
 }) {
@@ -61,6 +61,8 @@ export function createMobileConversationView({
   const context = document.querySelector('#mobile-conversation-context');
   const contextProgress = document.querySelector('#mobile-conversation-context-progress');
   const contextValue = document.querySelector('#mobile-conversation-context-value');
+  const activity = document.querySelector('#mobile-conversation-activity');
+  const activityLabel = activity.querySelector('span');
   let sessionName;
   let threadId;
   let parentId;
@@ -98,6 +100,7 @@ export function createMobileConversationView({
   let modelBusy = false;
   let modelOptionsSignature = '';
   let controlBusy = false;
+  let cancellingTurn = false;
   let attachments = [];
   let uploadingAttachments = 0;
   let suggestionItems = [];
@@ -1157,6 +1160,7 @@ export function createMobileConversationView({
     const atBottom = targetMessages.scrollHeight - targetMessages.scrollTop - targetMessages.clientHeight <= 1;
     const signature = JSON.stringify({
       thread: conversation.thread,
+      activity: conversation.activity,
       items: conversation.items,
       children: conversation.children,
       controls: conversation.controls,
@@ -1166,6 +1170,7 @@ export function createMobileConversationView({
       attachments,
       uploadingAttachments,
       questions: questionStateVersion,
+      cancellingTurn,
     });
     if (signature === renderedSignature) return;
     stopReveal();
@@ -1254,6 +1259,7 @@ export function createMobileConversationView({
       const latest = reveals.at(-1);
       revealText(latest.content, latest.prefix, latest.target, atBottom, targetMessages);
     }
+    if (isRoot) updateComposerAction();
     if (isRoot && !sheet?.hidden && sheetMode === 'list') renderSubagentList(conversation);
   }
 
@@ -1290,11 +1296,48 @@ export function createMobileConversationView({
   function autoSizeInput() {
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, 132)}px`;
-    sendButton.disabled = (!input.value.trim() && attachments.length === 0) || uploadingAttachments > 0;
+    updateComposerAction();
+  }
+
+  function updateComposerAction() {
+    const pendingActive = pendingMessage && ['sending', 'accepted'].includes(pendingMessage.status);
+    const turnActive = lastConversation?.activity?.active === true || pendingActive;
+    if (!turnActive) cancellingTurn = false;
+    const hasDraft = Boolean(input.value.trim() || attachments.length);
+    const stopAction = turnActive && !hasDraft;
+    const statusText = cancellingTurn
+      ? 'Stopping…'
+      : lastConversation?.activity?.label || (pendingActive ? 'Waiting for response…' : '');
+    activity.hidden = !turnActive;
+    activity.dataset.phase = cancellingTurn
+      ? 'stopping'
+      : lastConversation?.activity?.phase || 'waiting';
+    activityLabel.textContent = statusText;
+    sendButton.dataset.action = stopAction ? 'stop' : 'send';
+    sendButton.textContent = stopAction ? '■' : '↑';
+    sendButton.setAttribute('aria-label', stopAction ? 'Stop response' : 'Send message');
+    sendButton.disabled = uploadingAttachments > 0 || (stopAction ? cancellingTurn : !hasDraft);
   }
 
   composer.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (sendButton.dataset.action === 'stop') {
+      if (!sessionName || cancellingTurn) return;
+      cancellingTurn = true;
+      updateComposerAction();
+      try {
+        const result = await cancelTurn(sessionName);
+        if (result?.accepted === false) cancellingTurn = false;
+        void refresh();
+      } catch (error) {
+        cancellingTurn = false;
+        state.textContent = error.message || 'Stop failed';
+        state.dataset.state = 'error';
+      } finally {
+        updateComposerAction();
+      }
+      return;
+    }
     const text = input.value.trim();
     if ((!text && attachments.length === 0) || !sessionName || !providerId || uploadingAttachments) return;
     const sentAttachments = attachments.slice();
@@ -1481,6 +1524,7 @@ export function createMobileConversationView({
       parentId = undefined;
       providerId = undefined;
       pendingMessage = undefined;
+      cancellingTurn = false;
       attachments = [];
       mentionedFiles.clear();
       uploadingAttachments = 0;
@@ -1495,6 +1539,7 @@ export function createMobileConversationView({
       state.dataset.state = 'working';
       composer.hidden = true;
       context.hidden = true;
+      activity.hidden = true;
       modelButton.hidden = true;
       modeButton.hidden = true;
       queue.hidden = true;
@@ -1518,6 +1563,7 @@ export function createMobileConversationView({
       parentId = undefined;
       providerId = undefined;
       pendingMessage = undefined;
+      cancellingTurn = false;
       attachments = [];
       mentionedFiles.clear();
       uploadingAttachments = 0;
@@ -1532,6 +1578,7 @@ export function createMobileConversationView({
       interactionDock.replaceChildren();
       composer.hidden = true;
       context.hidden = true;
+      activity.hidden = true;
       modelButton.hidden = true;
       modeButton.hidden = true;
       queue.hidden = true;

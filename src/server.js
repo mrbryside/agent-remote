@@ -1629,6 +1629,18 @@ export function createTerminalServer(options = {}) {
           }
           return json(response, 202, { accepted: true });
         }
+        const conversationCancelMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/cancel$/);
+        if (request.method === 'POST' && conversationCancelMatch) {
+          const name = decodeURIComponent(conversationCancelMatch[1]);
+          await readJson(request);
+          const session = await conversationSession(name);
+          if (!session) return json(response, 404, { error: 'Managed session not found' });
+          try {
+            return json(response, 202, await conversationRegistry.cancel(session));
+          } catch (error) {
+            return conversationFailure(response, error);
+          }
+        }
         const conversationInputMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/input$/);
         if (request.method === 'POST' && conversationInputMatch) {
           const name = decodeURIComponent(conversationInputMatch[1]);

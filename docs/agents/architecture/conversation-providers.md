@@ -8,10 +8,10 @@ to use xterm. The mobile UI never parses terminal cells.
 
 `src/conversations/registry.js` is the provider selection point. A provider
 implements `detect`, `read`, `watch`, and `sendInput`, plus explicit responders
-for any provider-owned blocking interaction; the registry exposes the
-same thread/items/children contract to `public/mobile-conversation.js` and
-serializes provider-owned input. New adapters stay behind this boundary and do
-not add provider-specific UI branches.
+for any provider-owned blocking interaction and optional turn cancellation;
+the registry exposes the same thread/items/children contract to
+`public/mobile-conversation.js` and serializes provider-owned input. New
+adapters stay behind this boundary and do not add provider-specific UI branches.
 
 ## Grok ACP ownership
 
@@ -36,6 +36,16 @@ and sends the real `_x.ai/interject` request to the active turn. A
 `turn_completed` update drains the next row. No tmux cursor state, focus key,
 `send-keys`, or concurrent headless resume process participates in native
 input.
+
+The ACP snapshot is also the source of truth for mobile turn activity. User,
+thought, tool, assistant, retry, permission, question, and subagent updates map
+to concise phases such as `Waiting for response…`, `Preparing read_file…`, and
+`Responding…`; these phases are status metadata and are not extra timeline
+cards. The composer keeps one contextual action: with an active turn and an
+empty draft it sends the standard ACP `session/cancel` notification, while
+typing a draft changes the same action back to Send so the prompt can be queued
+or steered. `turn_completed` clears both the activity indicator and the pending
+cancel state.
 
 The root snapshot also exposes provider-owned controls. Grok uses
 `session/set_model` and one mutually exclusive mode control: `Normal`, `Plan`,
@@ -94,10 +104,11 @@ merged into the same card instead of appearing in a tool group. Completed
 question cards are reconstructed from replay even though their live JSON-RPC
 request no longer exists.
 
-`src/conversations/grok.js` translates every visible `sessionUpdate`: user and
-agent messages, thoughts, tool calls/results (including diffs and images),
-plans, goals, hooks, mode changes, retries, background tasks, and subagent
-lifecycle events. Consecutive tools form one expandable activity group.
+`src/conversations/grok.js` translates user-relevant `sessionUpdate` values:
+user and agent messages, thoughts, tool calls/results (including diffs and
+images), plans, goals, hooks, retries, background tasks, and subagent lifecycle
+events. Protocol-only mode/lifecycle noise updates state without becoming chat
+cards. Consecutive tools form one expandable activity group.
 `turn_completed` updates lifecycle state but is not rendered. `session_recap`
 is retained as metadata instead of becoming a chat message. Unknown future
 events remain visible as generic expandable cards.

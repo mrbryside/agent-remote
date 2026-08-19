@@ -231,6 +231,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   rootItems.push(subagentItem, secondSubagentItem);
   let currentModelId = 'qwen-local';
   let currentModeId = 'normal';
+  let currentActivity = { active: false };
   const queuedInputs = [];
   const rootConversation = () => ({
     provider: { id: 'grok', label: 'Grok' },
@@ -243,6 +244,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       { id: 'child-thread-2', title: 'Review the test coverage', agentName: 'review', model: 'tera', status: secondSubagentItem.status },
     ],
     queue: queuedInputs,
+    activity: currentActivity,
     controls: { model: {
       currentId: currentModelId,
       options: [
@@ -276,6 +278,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     children: [], capabilities: { send: false, children: false },
   });
   const mobileInputs = [];
+  const cancellations = [];
   const modelChanges = [];
   const modeChanges = [];
   const queueActions = [];
@@ -295,6 +298,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     if (pathname.endsWith('/permission')) {
       permissionResponses.push(route.request().postDataJSON());
       return route.fulfill({ status: 202, json: { accepted: true } });
+    }
+    if (pathname.endsWith('/cancel')) {
+      cancellations.push(route.request().postDataJSON());
+      return route.fulfill({ status: 202, json: { accepted: true, active: true } });
     }
     if (pathname.endsWith('/input')) {
       const submitted = route.request().postDataJSON();
@@ -400,6 +407,53 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('#mobile-conversation-mode')).toContainText('Always approve');
   await expect(conversation.locator('#mobile-conversation-permission-mode')).toHaveCount(0);
   const input = conversation.locator('#mobile-conversation-input');
+  const activity = conversation.locator('#mobile-conversation-activity');
+  const sendButton = conversation.locator('#mobile-conversation-send');
+  currentActivity = {
+    active: true, phase: 'waiting', label: 'Waiting for response…',
+    canCancel: true, cancelRequested: false,
+  };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(activity).toBeVisible();
+  await expect(activity).toContainText('Waiting for response…');
+  await expect(activity.locator('i')).toHaveCount(1);
+  await expect(sendButton).toHaveAttribute('data-action', 'stop');
+  await expect(sendButton).toHaveAttribute('aria-label', 'Stop response');
+
+  currentActivity = {
+    active: true, phase: 'tool', label: 'Preparing read_file…',
+    canCancel: true, cancelRequested: false,
+  };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(activity).toContainText('Preparing read_file…');
+  await input.fill('queue this while Grok works');
+  await expect(sendButton).toHaveAttribute('data-action', 'send');
+  await expect(sendButton).toHaveAttribute('aria-label', 'Send message');
+  await input.fill('');
+  await expect(sendButton).toHaveAttribute('data-action', 'stop');
+  await sendButton.click();
+  await expect.poll(() => cancellations).toEqual([{}]);
+  await expect(activity).toContainText('Stopping…');
+  await expect(sendButton).toBeDisabled();
+
+  currentActivity = { active: false };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(activity).toBeHidden();
+  await expect(sendButton).toHaveAttribute('data-action', 'send');
+  await expect(sendButton).toBeDisabled();
+
   await input.fill('/co');
   const suggestions = conversation.locator('#mobile-conversation-suggestions');
   await expect(suggestions).toBeVisible();

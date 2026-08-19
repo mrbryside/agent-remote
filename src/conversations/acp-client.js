@@ -165,6 +165,7 @@ export function createGrokAcpClient({
         activePrompt: undefined,
         queuedPrompts: [],
         turnActive: false,
+        cancelRequested: false,
         currentMode: 'default',
         permissionMode: permissionModes.has(defaultPermissionMode) ? defaultPermissionMode : 'default',
         commands: [],
@@ -208,8 +209,10 @@ export function createGrokAcpClient({
     if (update.sessionUpdate === 'turn_started' ||
         (update.sessionUpdate === 'user_message_chunk' && current.loadedGeneration === generation && !record.replay)) {
       current.turnActive = true;
+      current.cancelRequested = false;
     } else if (update.sessionUpdate === 'turn_completed') {
       current.turnActive = false;
+      current.cancelRequested = false;
     } else if (update.sessionUpdate === 'current_mode_update') {
       const nextMode = update.currentModeId ?? update.currentMode;
       if (conversationModes.has(nextMode)) {
@@ -386,6 +389,7 @@ export function createGrokAcpClient({
       current.queuedSubagentToolCallIds.clear();
       current.pendingSubagentToolCalls.clear();
       current.questions.clear();
+      current.cancelRequested = false;
     }
     if (!closing && exited) logger(error.message);
   }
@@ -457,6 +461,10 @@ export function createGrokAcpClient({
       queue: current.queuedPrompts.map(({ id, displayText, createdAt, attachments }) => ({
         id, text: displayText, createdAt, attachments,
       })),
+      turn: {
+        active: Boolean(current.activePrompt || current.turnActive),
+        cancelRequested: current.cancelRequested,
+      },
       controls: {
         mode: {
           currentId: unifiedMode(current),
@@ -491,6 +499,7 @@ export function createGrokAcpClient({
     const entry = current.queuedPrompts.shift();
     current.activePrompt = entry;
     current.turnActive = true;
+    current.cancelRequested = false;
     publish(sessionId);
     try {
       const result = await request('session/prompt', {
@@ -514,6 +523,7 @@ export function createGrokAcpClient({
     } finally {
       current.activePrompt = undefined;
       current.turnActive = false;
+      current.cancelRequested = false;
       publish(sessionId);
       void drainPrompts(sessionId);
     }
@@ -551,6 +561,19 @@ export function createGrokAcpClient({
     if (detail && typeof detail === 'object') detail.currentModelId = modelId;
     publish(sessionId);
     return { accepted: true, modelId };
+  }
+
+  async function cancel({ sessionId, cwd }) {
+    await loadSession({ sessionId, cwd });
+    const current = state(sessionId);
+    const active = Boolean(current.activePrompt || current.turnActive);
+    if (!active) return { accepted: false, active: false };
+    if (!current.cancelRequested) {
+      current.cancelRequested = true;
+      notify('session/cancel', { sessionId });
+      publish(sessionId);
+    }
+    return { accepted: true, active: true };
   }
 
   async function setMode({ sessionId, cwd, modeId }) {
@@ -675,7 +698,7 @@ export function createGrokAcpClient({
   }
 
   return {
-    loadSession, prompt, setModel, setMode,
+    loadSession, prompt, cancel, setModel, setMode,
     removeQueuedPrompt, steerQueuedPrompt,
     read, watch, respondPermission, respondQuestion, close,
   };

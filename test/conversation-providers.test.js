@@ -62,6 +62,7 @@ async function fixture() {
   const prompts = [];
   const questionResponses = [];
   const modelChanges = [];
+  const cancellations = [];
   const acpClient = {
     loadSession: async ({ sessionId }) => snapshots.get(sessionId) ?? (() => { throw new Error('unknown session'); })(),
     read: (sessionId) => snapshots.get(sessionId),
@@ -79,6 +80,7 @@ async function fixture() {
       metadata._meta['x.ai/sessionDetail'].currentModelId = input.modelId;
       return { accepted: true, modelId: input.modelId };
     },
+    async cancel(input) { cancellations.push(input); return { accepted: true, active: true }; },
     async respondQuestion(input) { questionResponses.push(input); },
     append(sessionId, record) {
       snapshots.get(sessionId).events.push(record);
@@ -86,7 +88,7 @@ async function fixture() {
     },
     close: async () => {},
   };
-  return { cwd, parentId, childId, acpClient, prompts, questionResponses, modelChanges, snapshots };
+  return { cwd, parentId, childId, acpClient, prompts, questionResponses, modelChanges, cancellations, snapshots };
 }
 
 test('Grok provider maps a managed tmux process to messages and subagents', async () => {
@@ -550,11 +552,36 @@ test('Grok provider exposes turn lifecycle status without rendering lifecycle ev
   assert.equal(await registry.status(session), 'working');
   const working = await registry.read(session);
   assert.ok(!working.items.some((item) => item.type === 'turn'));
+  assert.deepEqual(working.activity, {
+    active: true, phase: 'waiting', label: 'Waiting for response…', canCancel: true, cancelRequested: false,
+  });
+
+  data.acpClient.append(data.parentId, { timestamp: 8.1, params: { update: {
+    sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Checking.' },
+  } } });
+  assert.equal((await registry.read(session)).activity.label, 'Thinking…');
+  data.acpClient.append(data.parentId, { timestamp: 8.2, params: { update: {
+    sessionUpdate: 'tool_call', toolCallId: 'activity-tool', title: 'read_file',
+    _meta: { 'x.ai/tool': { name: 'read_file', kind: 'read', label: 'Read' } },
+  } } });
+  assert.equal((await registry.read(session)).activity.label, 'Preparing read_file…');
+  data.acpClient.append(data.parentId, { timestamp: 8.3, params: { update: {
+    sessionUpdate: 'tool_call_update', toolCallId: 'activity-tool', title: 'Read package manifest', status: 'in_progress',
+  } } });
+  assert.equal((await registry.read(session)).activity.label, 'Read package manifest…');
+  data.acpClient.append(data.parentId, { timestamp: 8.4, params: { update: {
+    sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Here is the answer.' },
+  } } });
+  assert.equal((await registry.read(session)).activity.label, 'Responding…');
+
+  await registry.cancel(session);
+  assert.deepEqual(data.cancellations, [{ sessionId: data.parentId, cwd: data.cwd }]);
 
   data.acpClient.append(data.parentId, { timestamp: 9, params: { update: {
     sessionUpdate: 'turn_completed', stop_reason: 'end_turn',
   } } });
   assert.equal(await registry.status(session), 'idle');
+  assert.deepEqual((await registry.read(session)).activity, { active: false });
 });
 
 test('Grok provider exposes advertised models, context usage, and changes the root model', async () => {
