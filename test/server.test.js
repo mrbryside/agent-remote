@@ -993,16 +993,28 @@ test('project API persists settings and manages its own chats', async (context) 
   mkdirSync(projectPath);
   let createdName;
   try {
-    await withServer({ allowedCwdRoots: [root] }, async (url) => {
+    await withServer({
+      allowedCwdRoots: [root],
+      agentDefinitions: [{
+        id: 'fixture', label: 'Fixture agent',
+        command: "printf '__PROJECT_CHAT_READY__\\r\\n'",
+      }],
+    }, async (url) => {
+      const availableAgents = await (await fetch(`${url}/api/agents`)).json();
+      assert.deepEqual(availableAgents.agents, [{
+        id: 'fixture', label: 'Fixture agent', interactive: true,
+      }]);
       const createProject = await fetch(`${url}/api/projects`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ cwd: projectPath, commandLine: "printf '__PROJECT_CHAT_READY__\\r\\n'" }),
+        body: JSON.stringify({ cwd: projectPath, agentId: 'fixture' }),
       });
       const projectPayload = await createProject.json();
       assert.equal(createProject.status, 201, projectPayload.error);
       assert.equal(projectPayload.project.name, 'project-a');
       assert.equal(projectPayload.project.cwd, realpathSync(projectPath));
+      assert.equal(projectPayload.project.agentId, 'fixture');
+      assert.equal('commandLine' in projectPayload.project, false);
 
       const createChat = await fetch(`${url}/api/projects/${projectPayload.project.id}/sessions`, { method: 'POST' });
       const chatPayload = await createChat.json();

@@ -117,7 +117,7 @@ test('adds only remote tables to an existing project and chat database', () => {
   const { root, file } = temporaryDatabase();
   try {
     const projects = createProjectStore(file);
-    const project = projects.create({ name: 'Existing', cwd: '/tmp/existing', commandLine: 'zsh' });
+    const project = projects.create({ name: 'Existing', cwd: '/tmp/existing', agentId: 'grok' });
     projects.saveChat({ name: 'existing-chat', projectId: project.id, createdAt: 100, lastActiveAt: 100 });
     projects.close();
 

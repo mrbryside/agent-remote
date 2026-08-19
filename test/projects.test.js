@@ -12,7 +12,7 @@ test('creates the SQLite database and persists projects and chats', () => {
   try {
     const first = createProjectStore(file);
     assert.equal(existsSync(file), true);
-    const project = first.create({ name: 'Example', cwd: '/tmp/example', commandLine: 'claude' });
+    const project = first.create({ name: 'Example', cwd: '/tmp/example', agentId: 'grok' });
     const savedChat = first.saveChat({
       name: 'ar-example', projectId: project.id, title: 'New chat', autoTitle: true,
     });
@@ -41,7 +41,7 @@ test('creates the SQLite database and persists projects and chats', () => {
   }
 });
 
-test('migrates existing chat databases and keeps their original activity order', () => {
+test('adds chat activity tracking to databases created with the current project schema', () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-remote-projects-legacy-'));
   const directory = join(root, '.agent-remote');
   const file = join(directory, 'agent-remote.db');
@@ -52,14 +52,14 @@ test('migrates existing chat databases and keeps their original activity order',
       PRAGMA foreign_keys = ON;
       CREATE TABLE projects (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, cwd TEXT NOT NULL,
-        command_line TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        agent_id TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       );
       CREATE TABLE chats (
         session_name TEXT PRIMARY KEY,
         project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         title TEXT NOT NULL, auto_title INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL
       );
-      INSERT INTO projects VALUES ('legacy', 'Legacy', '/tmp/legacy', 'claude', 100, 100);
+      INSERT INTO projects VALUES ('legacy', 'Legacy', '/tmp/legacy', 'grok', 100, 100);
       INSERT INTO chats VALUES ('legacy-chat', 'legacy', 'Old chat', 1, 123);
     `);
     legacy.close();

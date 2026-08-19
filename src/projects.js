@@ -18,7 +18,7 @@ function projectRow(row) {
     id: row.id,
     name: row.name,
     cwd: row.cwd,
-    commandLine: row.command_line,
+    agentId: row.agent_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -46,7 +46,7 @@ export function createProjectStore(file) {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       cwd TEXT NOT NULL,
-      command_line TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
@@ -70,8 +70,8 @@ export function createProjectStore(file) {
   const statements = {
     listProjects: database.prepare('SELECT * FROM projects ORDER BY updated_at DESC'),
     getProject: database.prepare('SELECT * FROM projects WHERE id = ?'),
-    insertProject: database.prepare('INSERT INTO projects (id, name, cwd, command_line, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'),
-    updateProject: database.prepare('UPDATE projects SET name = ?, cwd = ?, command_line = ?, updated_at = ? WHERE id = ?'),
+    insertProject: database.prepare('INSERT INTO projects (id, name, cwd, agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'),
+    updateProject: database.prepare('UPDATE projects SET name = ?, cwd = ?, agent_id = ?, updated_at = ? WHERE id = ?'),
     deleteProject: database.prepare('DELETE FROM projects WHERE id = ?'),
     listChats: database.prepare('SELECT * FROM chats ORDER BY last_active_at DESC, created_at DESC'),
     getChat: database.prepare('SELECT * FROM chats WHERE session_name = ?'),
@@ -91,17 +91,17 @@ export function createProjectStore(file) {
       return projectRow(statements.getProject.get(id));
     },
 
-    create({ name, cwd, commandLine }) {
+    create({ name, cwd, agentId }) {
       const now = Date.now();
       const project = {
         id: `${projectSlug(name)}-${randomBytes(3).toString('hex')}`,
         name,
         cwd,
-        commandLine,
+        agentId,
         createdAt: now,
         updatedAt: now,
       };
-      statements.insertProject.run(project.id, name, cwd, commandLine, now, now);
+      statements.insertProject.run(project.id, name, cwd, agentId, now, now);
       return project;
     },
 
@@ -113,7 +113,7 @@ export function createProjectStore(file) {
         ...changes,
         updatedAt: Date.now(),
       };
-      statements.updateProject.run(updated.name, updated.cwd, updated.commandLine, updated.updatedAt, id);
+      statements.updateProject.run(updated.name, updated.cwd, updated.agentId, updated.updatedAt, id);
       return updated;
     },
 

@@ -103,6 +103,29 @@ app = createTerminalServer({
   remoteAuthNow: () => now,
   remoteInspectCloudflared: async () => ({ available: true, version: '2026.8.2', source: 'fixture' }),
   remoteToDataURL: async () => 'data:image/png;base64,iVBORw0KGgo=',
+  agentDefinitions: [
+    { id: 'fixture-shell', label: 'Fixture shell', command: 'exec /bin/sh', interactive: false },
+    {
+      id: 'fixture-cache', label: 'Fixture cache shell', interactive: false,
+      command: "printf '__CACHE_READY__\\r\\n'; exec /bin/sh",
+    },
+    {
+      id: 'fixture-ansi', label: 'Fixture ANSI shell', interactive: false,
+      command: "printf '\\033[31m__REFRESH_CACHE_READY__\\033[0m\\r\\n'; exec /bin/sh",
+    },
+    {
+      id: 'fixture-loading', label: 'Fixture loading agent', interactive: true,
+      command: "printf '__GROK_BOOT__\\r\\n'; sleep 0.4; printf '__GROK_READY__\\r\\n'; exec /bin/sh",
+    },
+    {
+      id: 'fixture-grok-gate', label: 'Fixture Grok gate', providerId: 'grok', interactive: true,
+      command: "stty -echo; while :; do printf 'Starting session…\\r\\n'; sleep 0.3; done",
+    },
+    {
+      id: 'fixture-continuous', label: 'Fixture continuous agent', interactive: true,
+      command: "i=0; while [ \"$i\" -lt 45 ]; do printf '__GROK_FRAME_%s__\\r\\n' \"$i\"; i=$((i + 1)); sleep 0.1; done; exec /bin/sh",
+    },
+  ],
 });
 
 // Clock control is intentionally local-only and exists solely for expiry

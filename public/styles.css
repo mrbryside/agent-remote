@@ -200,8 +200,8 @@ dialog::backdrop { background: #0009; backdrop-filter: blur(5px); }
 .dialog-kicker { color: #77777e; font: 600 9px/1.2 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
 label { display: grid; gap: 7px; color: #aaaab0; font-size: clamp(11.5px, .95vw, 12px); }
 label small { color: #67676d; font-weight: 400; }
-input { width: 100%; padding: clamp(8px, .8vw, 10px) 11px; border: 1px solid #36363b; border-radius: 8px; outline: none; background: #111113; color: #e0e0e2; font-family: ui-monospace, monospace; font-size: clamp(11px, .95vw, 12px); transition: border-color .15s, box-shadow .15s; }
-input:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d87830d; }
+input, select { width: 100%; padding: clamp(8px, .8vw, 10px) 11px; border: 1px solid #36363b; border-radius: 8px; outline: none; background: #111113; color: #e0e0e2; font-family: ui-monospace, monospace; font-size: clamp(11px, .95vw, 12px); transition: border-color .15s, box-shadow .15s; }
+input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d87830d; }
 .folder-picker { display: grid; gap: 8px; min-height: clamp(180px, 34vh, 240px); }
 .folder-heading { display: flex; justify-content: space-between; gap: 14px; color: #aaaab0; font-size: 12px; }
 .folder-heading code { max-width: 70%; overflow: hidden; color: #999f9d; text-overflow: ellipsis; white-space: nowrap; }

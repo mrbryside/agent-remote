@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 import { basename } from 'node:path';
 
 const fallbackProjectName = basename(process.cwd());
@@ -17,11 +18,12 @@ async function cleanWorkspace(request) {
   }
 }
 
-async function createProject(page, { name = '', marker, command } = {}) {
+async function createProject(page, { name = '', marker, agentId } = {}) {
+  const selectedAgentId = agentId || (marker === '__CACHE_READY__' ? 'fixture-cache' : 'fixture-shell');
   await page.locator('#new-project').click();
   await expect(page.locator('#create-dialog')).toBeVisible();
   await page.locator('#project-name').fill(name);
-  await page.locator('#command-line').fill(command || `printf '${marker}\\r\\n'; exec /bin/sh`);
+  await page.locator('#project-agent').selectOption(selectedAgentId);
   await page.locator('#folder-path').fill(process.cwd());
   await page.locator('#go-folder').click();
   await expect(page.locator('#selected-folder')).toHaveText(process.cwd());
@@ -29,6 +31,11 @@ async function createProject(page, { name = '', marker, command } = {}) {
   await expect(page.locator('#create-dialog')).not.toBeVisible();
   await expect(page.locator('#terminal')).toBeVisible({ timeout: 8_000 });
   await expect(page.locator('#status')).toHaveAttribute('data-state', 'connected');
+  if (marker && selectedAgentId === 'fixture-shell') {
+    const sessionName = await page.locator('#terminal').getAttribute('data-session');
+    execFileSync('tmux', ['-L', 'agent-remote-playwright', 'send-keys', '-t', sessionName, '-l', `printf '${marker}\\r\\n'`]);
+    execFileSync('tmux', ['-L', 'agent-remote-playwright', 'send-keys', '-t', sessionName, 'Enter']);
+  }
   if (marker) await expect(page.locator('#terminal .xterm-rows')).toContainText(marker, { timeout: 5_000 });
   const expectedName = name || fallbackProjectName;
   const project = page.locator('.project-group').filter({
@@ -696,7 +703,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
 
 test('owns the mobile surface from the first frame of a new Grok chat', async ({ page, request }) => {
   const created = await request.post('/api/projects', { data: {
-    name: 'Mobile ACP startup', cwd: process.cwd(), commandLine: 'grok',
+    name: 'Mobile ACP startup', cwd: process.cwd(), agentId: 'fixture-grok-gate',
   } });
   expect(created.ok()).toBeTruthy();
   const { project } = await created.json();
@@ -1352,7 +1359,7 @@ test('hydrates the active terminal from its viewport cache after refresh', async
   const project = await createProject(page, {
     name: 'Refresh cache',
     marker,
-    command: `printf '\\033[31m${marker}\\033[0m\\r\\n'; exec /bin/sh`,
+    agentId: 'fixture-ansi',
   });
   const sessionName = await project.locator('.session-row').getAttribute('data-session');
   await expect(page.locator('#terminal .xterm-rows')).toContainText(marker);
@@ -1403,7 +1410,7 @@ test('keeps agent launch chatter covered until the startup output settles', asyn
   await createProject(page, {
     name: 'Agent loading',
     marker: '__GROK_READY__',
-    command: "printf '__GROK_BOOT__\\r\\n'; sleep 0.4; printf '__GROK_READY__\\r\\n'; exec /bin/sh # agent",
+    agentId: 'fixture-loading',
   });
   await expect(page.locator('#terminal .xterm-rows')).toContainText('__GROK_READY__');
   const loading = page.locator('#session-loading');
@@ -1432,7 +1439,7 @@ test('keeps one loading cover until Grok conversation readiness succeeds', async
   });
   await createProject(page, {
     name: 'Grok ACP gate', marker: 'Starting session',
-    command: "stty -echo; while :; do printf 'Starting session…\\r\\n'; sleep 0.3; done # grok",
+    agentId: 'fixture-grok-gate',
   });
 
   const loading = page.locator('#session-loading');
@@ -1471,7 +1478,7 @@ test('reveals an agent that continuously repaints instead of connecting forever'
   await createProject(page, {
     name: 'Agent loading',
     marker: '__GROK_FRAME_0__',
-    command: "i=0; while [ \"$i\" -lt 45 ]; do printf '__GROK_FRAME_%s__\\r\\n' \"$i\"; i=$((i + 1)); sleep 0.1; done; exec /bin/sh # agent",
+    agentId: 'fixture-continuous',
   });
 
   expect(await page.evaluate(() => window.__continuousLoadingWasShown)).toBe(true);

@@ -11,6 +11,7 @@ import * as pty from 'node-pty';
 import { WebSocket, WebSocketServer } from 'ws';
 import { loadConfig } from './config.js';
 import { browseDirectories, resolveAllowedDirectory } from './directories.js';
+import { createAgentCatalog } from './agents.js';
 import { createGrokConversationProvider } from './conversations/grok.js';
 import { createGrokAcpClient } from './conversations/acp-client.js';
 import { createConversationRegistry } from './conversations/registry.js';
@@ -326,6 +327,7 @@ function canonicalBrowserUrl(value) {
 
 export function createTerminalServer(options = {}) {
   const config = loadConfig(options);
+  const agentCatalog = createAgentCatalog(options.agentDefinitions);
   const clients = new Set();
   const conversationStreams = new Set();
   const conversationInputQueues = new Map();
@@ -1509,6 +1511,9 @@ export function createTerminalServer(options = {}) {
         if (request.method === 'GET' && pathname === '/api/projects') {
           return json(response, 200, { projects: await projectStore.list() });
         }
+        if (request.method === 'GET' && pathname === '/api/agents') {
+          return json(response, 200, { agents: agentCatalog.list() });
+        }
         if (request.method === 'GET' && pathname === '/api/renderers') {
           return json(response, 200, {
             renderers: [...renderers.values()].map((renderer) => ({ key: renderer.key })),
@@ -1861,8 +1866,8 @@ export function createTerminalServer(options = {}) {
         }
         if (request.method === 'POST' && pathname === '/api/projects') {
           const body = await readJson(request);
-          if (typeof body.commandLine !== 'string' || !body.commandLine.trim() || body.commandLine.trim().length > 4096) {
-            return json(response, 400, { error: 'commandLine must be a non-empty string under 4096 characters' });
+          if (typeof body.agentId !== 'string' || !agentCatalog.get(body.agentId)) {
+            return json(response, 400, { error: 'agentId must identify an available agent' });
           }
           if (body.name !== undefined && (typeof body.name !== 'string' || body.name.length > 80 || /[\x00-\x1f\x7f]/.test(body.name))) {
             return json(response, 400, { error: 'name must be a string under 80 characters' });
@@ -1872,7 +1877,7 @@ export function createTerminalServer(options = {}) {
           const project = await projectStore.create({
             name,
             cwd: selected.path,
-            commandLine: body.commandLine.trim(),
+            agentId: body.agentId,
           });
           return json(response, 201, { project });
         }
@@ -1882,9 +1887,11 @@ export function createTerminalServer(options = {}) {
           const project = await projectStore.get(projectId);
           if (!project) return json(response, 404, { error: 'Project not found' });
           if (request.method === 'POST') {
+            const agent = agentCatalog.get(project.agentId);
+            if (!agent) return json(response, 409, { error: 'The project agent is no longer available' });
             const session = await startManagedSession({
               tmuxCommand: config.tmuxCommand,
-              rawCommand: project.commandLine,
+              rawCommand: agent.command,
               requestedName: 'New chat',
               cwd: project.cwd,
               agentRemoteUrl: `http://127.0.0.1:${server.address().port}`,
@@ -1923,11 +1930,11 @@ export function createTerminalServer(options = {}) {
               }
               changes.name = body.name.trim();
             }
-            if (body.commandLine !== undefined) {
-              if (typeof body.commandLine !== 'string' || !body.commandLine.trim() || body.commandLine.trim().length > 4096) {
-                return json(response, 400, { error: 'commandLine must be a non-empty string under 4096 characters' });
+            if (body.agentId !== undefined) {
+              if (typeof body.agentId !== 'string' || !agentCatalog.get(body.agentId)) {
+                return json(response, 400, { error: 'agentId must identify an available agent' });
               }
-              changes.commandLine = body.commandLine.trim();
+              changes.agentId = body.agentId;
             }
             if (body.cwd !== undefined) {
               changes.cwd = (await resolveAllowedDirectory(body.cwd, config.allowedCwdRoots)).path;

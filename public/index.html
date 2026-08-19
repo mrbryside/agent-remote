@@ -124,7 +124,7 @@
           <button class="icon-button" value="cancel" aria-label="Close">×</button>
         </div>
         <label><span>Project name <small>uses the folder name when empty</small></span><input id="project-name" name="name" placeholder="agent-remote" maxlength="80" autocomplete="off" /></label>
-        <label><span>Start command</span><input id="command-line" name="commandLine" placeholder="claude, grok, codex ..." required maxlength="4096" autocomplete="off" /></label>
+        <label><span>Agent</span><select id="project-agent" name="agentId" required aria-describedby="project-agent-help"></select><small id="project-agent-help">The launch command is managed by Agent Remote.</small></label>
         <section class="folder-picker">
           <div class="folder-heading"><span>Project folder</span><code id="selected-folder">Loading…</code></div>
           <div id="folder-roots" class="folder-roots"></div>

@@ -11,7 +11,7 @@ const projectList = document.querySelector('#project-list');
 const dialog = document.querySelector('#create-dialog');
 const projectForm = document.querySelector('#project-form');
 const dialogTitle = document.querySelector('#dialog-title');
-const commandLineInput = document.querySelector('#command-line');
+const projectAgentSelect = document.querySelector('#project-agent');
 const projectNameInput = document.querySelector('#project-name');
 const folderPathInput = document.querySelector('#folder-path');
 const selectedFolder = document.querySelector('#selected-folder');
@@ -93,6 +93,7 @@ terminalElement.dataset.kittyUnicodePlacement = 'unsupported';
 
 let projects = [];
 let sessions = [];
+let agents = [];
 let activeProjectId = localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY) || null;
 let activeSession = localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY) || null;
 let editingProjectId = null;
@@ -415,12 +416,9 @@ function setTerminalRuntimeStatus(runtime, state, text) {
 function terminalRuntimeSettleDelay(runtime) {
   const session = sessions.find((item) => item.name === runtime.name);
   const project = projects.find((item) => item.id === session?.projectId);
-  const commandLine = project?.commandLine || '';
   // Interactive agents usually paint a full-screen UI in several bursts.
   // Keep their launch chatter covered until that stream has gone quiet.
-  return /(?:^|[\s/])(grok|claude|codex|opencode|gemini|qwen)(?=\s|$)/i.test(commandLine)
-    ? 1_200
-    : 180;
+  return agents.find((agent) => agent.id === project?.agentId)?.interactive ? 1_200 : 180;
 }
 
 const terminalRuntimeMaximumRevealDelay = 2_400;
@@ -431,7 +429,7 @@ const grokConversationStartupFallbackDelay = 15_000;
 function isGrokTerminalRuntime(runtime) {
   const session = sessions.find((item) => item.name === runtime.name);
   const project = projects.find((item) => item.id === session?.projectId);
-  return /(?:^|[\s/])grok(?=\s|$)/i.test(project?.commandLine || '');
+  return agents.find((agent) => agent.id === project?.agentId)?.providerId === 'grok';
 }
 
 function shouldWaitForGrokConversation(runtime) {
@@ -2232,7 +2230,7 @@ function replaceProjects() {
 }
 
 function projectSignature(project) {
-  return JSON.stringify({ name: project.name, cwd: project.cwd, commandLine: project.commandLine });
+  return JSON.stringify({ name: project.name, cwd: project.cwd, agentId: project.agentId });
 }
 
 function reconcileChatList(clip, projectSessions, projectId, limited = true) {
@@ -2341,7 +2339,7 @@ function renderProjects() {
 function sidebarSignature(projectItems, sessionItems) {
   const projectOrder = new Map(projectItems.map((project, index) => [project.id, index]));
   return JSON.stringify({
-    projects: projectItems.map(({ id, name, cwd, commandLine }) => ({ id, name, cwd, commandLine })),
+    projects: projectItems.map(({ id, name, cwd, agentId }) => ({ id, name, cwd, agentId })),
     // Raw activity time is intentionally excluded. Its only visible effect is
     // ordering, so polling does not rebuild a row that stays in the same spot.
     sessions: [...sessionItems]
@@ -2468,9 +2466,12 @@ function selectSession(name, { expandProject = true } = {}) {
 
 async function refreshWorkspace() {
   const generation = ++refreshGeneration;
-  const [projectPayload, sessionPayload] = await Promise.all([api('/api/projects'), api('/api/sessions')]);
+  const [projectPayload, sessionPayload, agentPayload] = await Promise.all([
+    api('/api/projects'), api('/api/sessions'), api('/api/agents'),
+  ]);
   if (generation !== refreshGeneration) return;
   projects = projectPayload.projects.filter((project) => !pendingProjectDeletes.has(project.id));
+  agents = agentPayload.agents;
   const optimisticSessions = [...pendingSessionCreates.values()]
     .filter((operation) => !operation.canceled && !pendingProjectDeletes.has(operation.session.projectId) &&
       !pendingProjectClears.has(operation.session.projectId))
@@ -2557,7 +2558,7 @@ async function createChat(projectId = activeProjectId) {
     autoTitle: true,
     lastActiveAt: Date.now(),
     pending: true,
-    nativeConversation: /^\s*(?:['"]?[^\s'"]*\/)?grok(?:['"])?(?=\s|$)/i.test(project.commandLine || ''),
+    nativeConversation: agents.find((agent) => agent.id === project.agentId)?.providerId === 'grok',
   };
   const operation = { id: operationId, session: optimisticSession, canceled: false };
   pendingSessionCreates.set(temporaryName, operation);
@@ -2648,13 +2649,20 @@ async function openProjectDialog(project) {
   formError.textContent = '';
   dialogTitle.textContent = project ? `Edit ${project.name}` : 'New project';
   saveProjectButton.textContent = project ? 'Save changes' : 'Create project';
+  if (!agents.length) agents = (await api('/api/agents')).agents;
+  projectAgentSelect.replaceChildren(...agents.map((agent) => {
+    const option = document.createElement('option');
+    option.value = agent.id;
+    option.textContent = agent.label;
+    return option;
+  }));
   if (project) {
     projectNameInput.value = project.name;
-    commandLineInput.value = project.commandLine;
   }
+  projectAgentSelect.value = project?.agentId || agents[0]?.id || '';
   await loadDirectory(project?.cwd || currentFolder);
   dialog.showModal();
-  (project ? projectNameInput : commandLineInput).focus();
+  (project ? projectNameInput : projectAgentSelect).focus();
 }
 
 function projectNameFallback() {
@@ -2782,7 +2790,7 @@ projectForm.addEventListener('submit', async (event) => {
     const payload = await api(isEditing ? `/api/projects/${encodeURIComponent(editingProjectId)}` : '/api/projects', {
       method: isEditing ? 'PATCH' : 'POST',
       body: JSON.stringify({
-        commandLine: commandLineInput.value,
+        agentId: projectAgentSelect.value,
         name: projectNameInput.value.trim() || projectNameFallback(),
         cwd: currentFolder,
       }),
