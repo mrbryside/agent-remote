@@ -120,7 +120,7 @@ test('agent terminal-browser command opens a rendered web split on the right', a
       }),
     { timeout: 20_000 }).toBe(true);
     await expect.poll(() => page.locator('.graphics-terminal-instance:not([hidden])')
-      .evaluate((host) => Number(host.dataset.frameScale || 0)), { timeout: 20_000 }).toBeGreaterThanOrEqual(1.8);
+      .evaluate((host) => Number(host.dataset.frameScale || 0)), { timeout: 20_000 }).toBeGreaterThanOrEqual(0.95);
 
     const browserFrame = page.locator('.graphics-terminal-instance:not([hidden]) .browser-frame');
     const graphicsHost = page.locator('.graphics-terminal-instance:not([hidden])');
@@ -157,7 +157,6 @@ test('agent terminal-browser command opens a rendered web split on the right', a
         window.__agentRemoteFrameQualitySamples.push({
           version: Number(host.dataset.frameVersion || 0),
           scale: Number(host.dataset.frameScale || 0),
-          source: host.dataset.frameSource,
           at: performance.now(),
         });
       }).observe(host, { attributes: true, attributeFilter: ['data-frame-version'] });
@@ -173,20 +172,18 @@ test('agent terminal-browser command opens a rendered web split on the right', a
     expect(motionFixture.stdout).toContain('motion-started');
     await expect.poll(() => graphicsHost.evaluate((host, before) =>
       Number(host.dataset.frameVersion || 0) - before, frameBeforeMotion),
-    { timeout: 1_300, intervals: [100] }).toBeGreaterThanOrEqual(8);
-    await expect(graphicsHost).toHaveAttribute('data-frame-source', 'sharp');
+    { timeout: 1_300, intervals: [100] }).toBeGreaterThanOrEqual(16);
     await expect.poll(() => graphicsHost.evaluate((host) => Number(host.dataset.frameScale || 0)), {
       timeout: 5_000,
-    }).toBeGreaterThanOrEqual(1.8);
+    }).toBeGreaterThanOrEqual(0.95);
     const qualitySamples = await graphicsHost.evaluate(() => window.__agentRemoteFrameQualitySamples);
-    expect(qualitySamples.length).toBeGreaterThanOrEqual(8);
-    expect(new Set(qualitySamples.map((sample) => sample.source))).toEqual(new Set(['sharp']));
-    expect(Math.min(...qualitySamples.map((sample) => sample.scale))).toBeGreaterThanOrEqual(1.8);
+    expect(qualitySamples.length).toBeGreaterThanOrEqual(16);
+    expect(Math.min(...qualitySamples.map((sample) => sample.scale))).toBeGreaterThanOrEqual(0.95);
+    expect(Math.max(...qualitySamples.map((sample) => sample.scale))).toBeLessThanOrEqual(1.05);
     await page.waitForTimeout(600);
-    await expect(graphicsHost).toHaveAttribute('data-frame-source', 'sharp');
     await expect.poll(() => graphicsHost.evaluate((host) => Number(host.dataset.frameScale || 0)), {
       timeout: 5_000,
-    }).toBeGreaterThanOrEqual(1.8);
+    }).toBeGreaterThanOrEqual(0.95);
 
     const toolbar = page.locator('.graphics-terminal-instance:not([hidden]) .browser-toolbar');
     const inspect = toolbar.locator('.browser-inspect');
@@ -248,17 +245,16 @@ test('agent terminal-browser command opens a rendered web split on the right', a
       const result = terminalBrowserAction(observedBrowser.key, 'eval', 'Math.round(scrollY)');
       return Number(result.stdout.match(/\d+/)?.[0] || 0);
     }, { timeout: 10_000 }).toBeGreaterThan(300);
-    await expect(graphicsHost).toHaveAttribute('data-frame-source', 'sharp');
     await expect.poll(() => graphicsHost.evaluate((host) => Number(host.dataset.frameScale || 0)), {
       timeout: 5_000,
-    }).toBeGreaterThanOrEqual(1.8);
+    }).toBeGreaterThanOrEqual(0.95);
     await expect.poll(() => browserFrame.evaluate((canvas) => {
       const context = canvas.getContext('2d');
       const pixel = context.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height * 0.1), 1, 1).data;
       if (pixel[1] > 80 && pixel[1] > pixel[0] * 2) return 'green';
       const host = canvas.closest('.graphics-terminal-instance');
-      return `rgba(${[...pixel].join(',')}) source=${host?.dataset.frameSource} ` +
-        `scale=${host?.dataset.frameScale} viewport=${host?.dataset.frameViewport}`;
+      return `rgba(${[...pixel].join(',')}) scale=${host?.dataset.frameScale} ` +
+        `viewport=${host?.dataset.frameViewport}`;
     }), { timeout: 5_000 }).toBe('green');
 
     const record = toolbar.locator('.browser-record');
@@ -330,7 +326,7 @@ test('agent terminal-browser command opens a rendered web split on the right', a
           (viewport.clientWidth / viewport.clientHeight)) < 0.02;
       }), { timeout: 20_000 }).toBe(true);
     await expect.poll(() => page.locator('.graphics-terminal-instance:not([hidden])')
-      .evaluate((host) => Number(host.dataset.frameScale || 0)), { timeout: 20_000 }).toBeGreaterThanOrEqual(1.8);
+      .evaluate((host) => Number(host.dataset.frameScale || 0)), { timeout: 20_000 }).toBeGreaterThanOrEqual(0.95);
     await expect.poll(() => {
       const matching = terminalBrowsers().filter((item) =>
         item.tabs?.some((tab) => tab.url.startsWith(`${origin}/health`)),

@@ -987,16 +987,15 @@ function fitTerminals() {
       const viewportHeight = Math.max(120, Math.floor(pane.viewport.clientHeight));
       pane.requestedViewport = { width: viewportWidth, height: viewportHeight };
       pane.host.dataset.requestedViewport = `${viewportWidth}x${viewportHeight}`;
-      const viewportRequest = `${viewportWidth}x${viewportHeight}@2`;
+      const viewportRequest = `${viewportWidth}x${viewportHeight}`;
       if (pane.lastViewportRequest !== viewportRequest) {
         pane.lastViewportRequest = viewportRequest;
-        // A single high-DPI stream owns motion and idle frames. Input remains
-        // in CSS-pixel coordinates while the raster stays consistently sharp.
+        // Chromium's live compositor stream owns both motion and idle frames.
+        // Input and raster use the same CSS-pixel coordinate space.
         pane.socket.send(JSON.stringify({
           type: 'viewport',
           width: viewportWidth,
           height: viewportHeight,
-          scaleFactor: 2,
         }));
       }
     }
@@ -1180,7 +1179,7 @@ function browserPointerPosition(canvas, event, remoteViewport) {
   };
 }
 
-const browserFrameHeaderBytes = 29;
+const browserFrameHeaderBytes = 28;
 
 function parseBrowserFrame(buffer) {
   if (!(buffer instanceof ArrayBuffer) || buffer.byteLength <= browserFrameHeaderBytes) return undefined;
@@ -1195,7 +1194,6 @@ function parseBrowserFrame(buffer) {
     height: view.getUint32(16),
     pixelWidth: view.getUint32(20),
     pixelHeight: view.getUint32(24),
-    source: view.getUint8(28) === 1 ? 'sharp' : 'stream',
     data: buffer.slice(browserFrameHeaderBytes),
   };
 }
@@ -1224,12 +1222,11 @@ async function decodeBrowserFrame(data) {
   }
 }
 
-function browserFrameSupersedes(candidate, displayed) {
+function browserFrameInvalidatesViewport(candidate, displayed) {
   if (!candidate) return false;
   const candidateGeneration = Number(candidate.viewportGeneration) || 0;
   const displayedGeneration = Number(displayed.viewportGeneration) || 0;
-  return candidateGeneration > displayedGeneration ||
-    (candidateGeneration === displayedGeneration && (Number(candidate.sequence) || 0) > (Number(displayed.sequence) || 0));
+  return candidateGeneration > displayedGeneration;
 }
 
 function queueBrowserFrame(pane, incoming) {
@@ -1256,12 +1253,12 @@ function queueBrowserFrame(pane, incoming) {
       } catch {
         continue;
       }
-      if (pane.disposed || browserFrameSupersedes(pane.pendingFrame, next)) {
+      if (pane.disposed || browserFrameInvalidatesViewport(pane.pendingFrame, next)) {
         decoded.close?.();
         continue;
       }
       await new Promise((resolve) => requestAnimationFrame(resolve));
-      if (pane.disposed || browserFrameSupersedes(pane.pendingFrame, next)) {
+      if (pane.disposed || browserFrameInvalidatesViewport(pane.pendingFrame, next)) {
         decoded.close?.();
         continue;
       }
@@ -1286,7 +1283,6 @@ function queueBrowserFrame(pane, incoming) {
       pane.frameVersion += 1;
       pane.host.dataset.frameVersion = String(pane.frameVersion);
       pane.host.dataset.frameScale = String(decodedWidth / pane.frameViewport.width);
-      pane.host.dataset.frameSource = next.source || 'unknown';
       drawBrowserRecordingFrame(pane, pane.frame);
       decoded.close?.();
       pane.surface.dataset.ready = 'true';

@@ -39,7 +39,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const publicDir = join(root, 'public');
 const agentRemoteBin = join(root, 'bin');
 const execFileAsync = promisify(execFile);
-const rendererFrameHeaderBytes = 29;
+const rendererFrameHeaderBytes = 28;
 const rendererFrameMagic = 'OTF1';
 const browserCursorValues = new Set([
   'default', 'none', 'context-menu', 'help', 'pointer', 'progress', 'wait', 'cell', 'crosshair',
@@ -109,23 +109,12 @@ function normalizeBrowserCursor(value) {
   return browserCursorValues.has(fallback) ? fallback : 'default';
 }
 
-function rendererViewport(width, height, scaleFactor = 2) {
+function rendererViewport(width, height) {
   const cssWidth = Math.max(160, Math.min(4096, Math.floor(width)));
   const cssHeight = Math.max(120, Math.min(4096, Math.floor(height)));
-  const requestedScale = Math.max(1, Math.min(2, Number(scaleFactor) || 2));
-  const maxScale = Math.min(
-    requestedScale,
-    4096 / cssWidth,
-    4096 / cssHeight,
-    Math.sqrt(12_000_000 / (cssWidth * cssHeight)),
-  );
-  const effectiveScale = Math.max(1, maxScale);
   return {
     width: cssWidth,
     height: cssHeight,
-    scaleFactor: effectiveScale,
-    pixelWidth: Math.max(cssWidth, Math.floor(cssWidth * effectiveScale)),
-    pixelHeight: Math.max(cssHeight, Math.floor(cssHeight * effectiveScale)),
   };
 }
 
@@ -599,7 +588,6 @@ export function createTerminalServer(options = {}) {
     message.writeUInt32BE(frame.height >>> 0, 16);
     message.writeUInt32BE(frame.pixelWidth >>> 0, 20);
     message.writeUInt32BE(frame.pixelHeight >>> 0, 24);
-    message.writeUInt8(frame.source === 'sharp' ? 1 : 0, 28);
     frame.data.copy(message, rendererFrameHeaderBytes);
     return message;
   }
@@ -621,7 +609,7 @@ export function createTerminalServer(options = {}) {
     });
   }
 
-  function publishRendererFrame(renderer, data, viewport = renderer.viewport, source = 'stream') {
+  function publishRendererFrame(renderer, data, viewport = renderer.viewport) {
     if (!data || !viewport) return;
     let frameData;
     try {
@@ -637,11 +625,10 @@ export function createTerminalServer(options = {}) {
       data: frameData,
       width: viewport.width,
       height: viewport.height,
-      pixelWidth: dimensions?.width || viewport.pixelWidth,
-      pixelHeight: dimensions?.height || viewport.pixelHeight,
+      pixelWidth: dimensions?.width || viewport.width,
+      pixelHeight: dimensions?.height || viewport.height,
       viewportGeneration: renderer.viewportGeneration,
       sequence: ++renderer.frameSequence,
-      source,
     };
     const message = rendererFrameMessage(renderer);
     for (const client of renderer.clients) {
@@ -652,56 +639,6 @@ export function createTerminalServer(options = {}) {
   function rendererHasVisibleClient(renderer) {
     return [...renderer.clients].some((client) =>
       client.readyState === WebSocket.OPEN && client.rendererVisible !== false);
-  }
-
-  function requestRendererFrameCapture(renderer, metadata = {}) {
-    if (!renderer.cdp || !renderer.viewport || renderer.closing || !rendererHasVisibleClient(renderer)) return;
-    renderer.captureRequest = {
-      metadata,
-      targetId: renderer.surface?.targetId,
-      viewport: renderer.viewport,
-      viewportGeneration: renderer.viewportGeneration,
-    };
-    if (renderer.captureRunning) return;
-    renderer.captureRunning = true;
-    void (async () => {
-      try {
-        while (renderer.captureRequest && renderer.cdp && !renderer.closing && rendererHasVisibleClient(renderer)) {
-          // A new compositor tick replaces any tick that has not started its
-          // capture yet. Only one full-resolution capture can be in flight.
-          const request = renderer.captureRequest;
-          renderer.captureRequest = undefined;
-          let capture;
-          try {
-            capture = await sendCdp(renderer, 'Page.captureScreenshot', {
-              format: 'jpeg',
-              quality: 84,
-              fromSurface: true,
-              captureBeyondViewport: false,
-              optimizeForSpeed: true,
-              clip: {
-                x: Number(request.metadata.scrollOffsetX) || 0,
-                y: Number(request.metadata.scrollOffsetY) || 0,
-                width: request.viewport.width,
-                height: request.viewport.height,
-                scale: request.viewport.scaleFactor,
-              },
-            });
-          } catch {
-            continue;
-          }
-          if (capture?.data && renderer.surface?.targetId === request.targetId &&
-              renderer.viewportGeneration === request.viewportGeneration) {
-            publishRendererFrame(renderer, capture.data, request.viewport, 'sharp');
-          }
-        }
-      } finally {
-        renderer.captureRunning = false;
-        if (renderer.captureRequest && renderer.cdp && !renderer.closing && rendererHasVisibleClient(renderer)) {
-          requestRendererFrameCapture(renderer, renderer.captureRequest.metadata);
-        }
-      }
-    })();
   }
 
   function broadcastCursor(renderer, value) {
@@ -748,45 +685,41 @@ export function createTerminalServer(options = {}) {
         renderer.pendingViewport = undefined;
         const unchanged = renderer.viewport &&
           renderer.viewport.width === viewport.width &&
-          renderer.viewport.height === viewport.height &&
-          renderer.viewport.scaleFactor === viewport.scaleFactor;
-        if (unchanged && renderer.screencastStarted) continue;
-        await sendCdp(renderer, 'Emulation.setDeviceMetricsOverride', {
-          width: viewport.width,
-          height: viewport.height,
-          // Keep page layout and input in CSS pixels. Compositor ticks are
-          // converted into one consistently high-DPI capture stream below.
-          deviceScaleFactor: 1,
-          mobile: false,
-          screenWidth: viewport.width,
-          screenHeight: viewport.height,
-        });
-        if (!active()) return;
-        // Emulation.setDeviceMetricsOverride resolves only after the compositor
-        // accepts the new outer viewport. Do not wait for cssVisualViewport to
-        // equal it: scrollable documents legitimately subtract their scrollbar
-        // gutter (for example 448px outer -> 433px visual), so equality can
-        // never be reached and tab restoration stalls.
-        // Screencasting belongs to the page target, not to this WebSocket.
-        // Returning to a previously selected tab can therefore inherit a
-        // screencast started by the old CDP connection even though our local
-        // flag was reset. Always stop it before starting the active stream.
+          renderer.viewport.height === viewport.height;
+        if (!unchanged) {
+          // Page.startScreencast owns the displayed stream directly. Layout,
+          // input, and raster share one CSS-pixel coordinate space, avoiding
+          // scale artifacts and a second screenshot pass for every frame.
+          await sendCdp(renderer, 'Page.stopScreencast').catch(() => {});
+          renderer.screencastStarted = false;
+          await sendCdp(renderer, 'Emulation.setDeviceMetricsOverride', {
+            width: viewport.width,
+            height: viewport.height,
+            deviceScaleFactor: 1,
+            mobile: false,
+            screenWidth: viewport.width,
+            screenHeight: viewport.height,
+          });
+          if (!active()) return;
+          renderer.viewport = viewport;
+          renderer.viewportGeneration += 1;
+          renderer.lastFrame = undefined;
+        }
+        if (!rendererHasVisibleClient(renderer)) {
+          if (renderer.screencastStarted) {
+            await sendCdp(renderer, 'Page.stopScreencast').catch(() => {});
+            renderer.screencastStarted = false;
+          }
+          continue;
+        }
+        if (renderer.screencastStarted) continue;
+        // A target can retain a screencast across CDP connections. Clear it
+        // before attaching our direct live stream.
         await sendCdp(renderer, 'Page.stopScreencast').catch(() => {});
         if (!active()) return;
-        renderer.viewport = viewport;
-        renderer.viewportGeneration += 1;
-        renderer.lastFrame = undefined;
-        renderer.lastScreencastFrame = undefined;
-        renderer.lastScreencastMetadata = undefined;
-        renderer.captureRequest = undefined;
         await sendCdp(renderer, 'Page.startScreencast', {
           format: 'jpeg',
-          // This small stream is only a cheap compositor-change signal. Its
-          // raster is never shown; each tick requests the high-DPI frame that
-          // is sent to clients.
-          quality: 24,
-          maxWidth: Math.min(viewport.width, 320),
-          maxHeight: Math.min(viewport.height, 240),
+          quality: 90,
           everyNthFrame: 1,
         });
         if (!active()) return;
@@ -825,7 +758,6 @@ export function createTerminalServer(options = {}) {
     const desiredViewport = renderer.pendingViewport || renderer.viewport || rendererViewport(
       browser.viewport?.width || 1280,
       browser.viewport?.height || 720,
-      2,
     );
     const targets = await (await fetch(`http://127.0.0.1:${browser.cdpPort}/json/list`)).json();
     const target = targets.find((item) => item.id === activeTab.targetId) || targets.find((item) => item.type === 'page');
@@ -848,9 +780,6 @@ export function createTerminalServer(options = {}) {
       title: activeTab.title || target.title || '',
     }, renderer);
     renderer.lastFrame = undefined;
-    renderer.lastScreencastFrame = undefined;
-    renderer.lastScreencastMetadata = undefined;
-    renderer.captureRequest = undefined;
     renderer.screencastStarted = false;
     renderer.viewport = undefined;
     renderer.pendingViewport = desiredViewport;
@@ -874,12 +803,11 @@ export function createTerminalServer(options = {}) {
           method: 'Page.screencastFrameAck',
           params: { sessionId: message.params.sessionId },
         }));
-        // The low-resolution screencast is only a compositor clock. CDP, the
-        // sharp capture loop, and both WebSocket hops are latest-frame-wins.
-        if (message.params.data !== renderer.lastScreencastFrame) {
-          renderer.lastScreencastFrame = message.params.data;
-          renderer.lastScreencastMetadata = message.params.metadata;
-          requestRendererFrameCapture(renderer, message.params.metadata);
+        // Chromium supplies the final compositor frame. The server and
+        // browser client retain only the newest pending frame, so slow clients
+        // cannot turn motion into an ever-growing delayed queue.
+        if (renderer.screencastStarted && rendererHasVisibleClient(renderer)) {
+          publishRendererFrame(renderer, message.params.data, renderer.viewport);
         }
       }
     });
@@ -1093,16 +1021,12 @@ export function createTerminalServer(options = {}) {
       cdpPort: undefined,
       surface: undefined,
       lastFrame: undefined,
-      lastScreencastFrame: undefined,
-      lastScreencastMetadata: undefined,
       frameSequence: 0,
       viewport: undefined,
       viewportGeneration: 0,
       pendingViewport: undefined,
       configuringViewport: false,
       screencastStarted: false,
-      captureRunning: false,
-      captureRequest: undefined,
       cursor: 'default',
       cursorProbePoint: undefined,
       cursorProbeTimer: undefined,
@@ -1220,14 +1144,13 @@ export function createTerminalServer(options = {}) {
           const frame = rendererFrameMessage(renderer);
           if (frame) sendRendererFrame(socket, frame);
           sendJson(socket, { type: 'cursor', value: renderer.cursor || 'default' });
-          requestRendererFrameCapture(renderer, renderer.lastScreencastMetadata);
         }
+        if (renderer.viewport) renderer.pendingViewport = renderer.viewport;
+        if (renderer.cdp) void configureRendererViewport(renderer).catch(() => {});
       } else if (message.type === 'viewport' &&
           Number.isInteger(message.width) && message.width >= 160 && message.width <= 4096 &&
-          Number.isInteger(message.height) && message.height >= 120 && message.height <= 4096 &&
-          (message.scaleFactor === undefined ||
-            (Number.isFinite(message.scaleFactor) && message.scaleFactor >= 1 && message.scaleFactor <= 2))) {
-        renderer.pendingViewport = rendererViewport(message.width, message.height, message.scaleFactor);
+          Number.isInteger(message.height) && message.height >= 120 && message.height <= 4096) {
+        renderer.pendingViewport = rendererViewport(message.width, message.height);
         if (renderer.cdp) void configureRendererViewport(renderer).catch(() => {});
       } else if (message.type === 'pointer' && renderer.cdp &&
           ['mousePressed', 'mouseReleased', 'mouseMoved', 'mouseWheel'].includes(message.event) &&
