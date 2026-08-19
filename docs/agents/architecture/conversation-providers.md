@@ -37,6 +37,13 @@ and sends the real `_x.ai/interject` request to the active turn. A
 `send-keys`, or concurrent headless resume process participates in native
 input.
 
+Queue order is provider-owned state rather than a browser-only arrangement.
+Mobile queue rows expose full-size Steer/Delete actions plus a pointer and
+keyboard reorder handle. A drop posts the complete ordered id set; the ACP
+client applies it atomically only when it still matches the current pending
+queue, otherwise the browser rolls back with the same layout animation. This
+prevents a concurrent drain or steer from silently reordering the wrong prompt.
+
 The ACP snapshot is also the source of truth for mobile turn activity. User,
 thought, tool, assistant, retry, permission, question, and subagent updates map
 to concise phases such as `Waiting for response…`, `Preparing read_file…`, and
