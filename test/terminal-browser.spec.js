@@ -413,10 +413,9 @@ test('agent terminal-browser command opens a rendered web split on the right', a
     }).toBe(true);
     await page.locator('#graphics-mobile-reopen').click();
     await expect(mobileSheet).toBeVisible();
-    await page.setViewportSize({ width: 1280, height: 720 });
-
-    await page.locator('.graphics-terminal-instance:not([hidden]) .browser-tab-close').click();
+    await page.locator('#close-graphics-split').click();
     await expect(page.locator('#graphics-split')).toBeHidden();
+    await expect(page.locator('#graphics-mobile-reopen')).toBeHidden();
     await expect.poll(async () => {
       const payload = await (await page.request.get('/api/renderers')).json();
       return payload.renderers.some((renderer) => renderer.key === `session:${managedName}`);

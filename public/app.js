@@ -2897,8 +2897,7 @@ terminalElement.addEventListener('pointermove', updateTerminalTouch, { capture: 
 terminalElement.addEventListener('pointerup', (event) => finishTerminalTouch(event), { capture: true });
 terminalElement.addEventListener('pointercancel', (event) => finishTerminalTouch(event, true), { capture: true });
 closeGraphicsSplitButton.addEventListener('click', () => {
-  if (compactSidebarMedia.matches) hideGraphicsSheet();
-  else closeGraphicsSplit();
+  closeGraphicsSplit();
 });
 graphicsSheetBackdrop.addEventListener('click', () => hideGraphicsSheet());
 graphicsMobileReopenButton.addEventListener('click', () => showGraphicsSheet());
