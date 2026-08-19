@@ -11,6 +11,7 @@ test('loads remote config defaults and environment overrides', { concurrency: fa
   assert.equal(defaults.remotePort, 3001);
   assert.equal(defaults.cloudflaredBin, 'cloudflared');
   assert.equal(defaults.desktopMode, false);
+  assert.equal(defaults.grokLeaderSocket, `${defaults.databaseFile}.grok.sock`);
   assert.equal(defaults.pairingTtlMs, 120_000);
   assert.equal(defaults.challengeTtlMs, 60_000);
   assert.equal(defaults.remoteSessionTtlMs, 43_200_000);
@@ -22,11 +23,13 @@ test('loads remote config defaults and environment overrides', { concurrency: fa
       REMOTE_PORT: '4011',
       CLOUDFLARED_BIN: '/opt/homebrew/bin/cloudflared',
       AGENT_REMOTE_DESKTOP: '1',
+      AGENT_REMOTE_GROK_LEADER_SOCKET: '/tmp/agent-remote-grok.sock',
     },
   });
   assert.equal(overridden.remotePort, 4011);
   assert.equal(overridden.cloudflaredBin, '/opt/homebrew/bin/cloudflared');
   assert.equal(overridden.desktopMode, true);
+  assert.equal(overridden.grokLeaderSocket, '/tmp/agent-remote-grok.sock');
 });
 
 test('uses an ephemeral remote port with an ephemeral local port', { concurrency: false }, () => {

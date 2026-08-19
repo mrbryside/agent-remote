@@ -123,6 +123,8 @@ export function createMobileConversationView({
   let streamPointerActive = false;
   let deferredStreamRender;
   let deferredStreamRenderTimer;
+  let streamRenderFrame;
+  let scheduledStreamConversation;
   let fileSheet;
   let fileSheetPanel;
   let fileSheetTitle;
@@ -457,6 +459,20 @@ export function createMobileConversationView({
     eventSource?.close();
     eventSource = undefined;
     streamKey = '';
+    scheduledStreamConversation = undefined;
+    if (streamRenderFrame) cancelAnimationFrame(streamRenderFrame);
+    streamRenderFrame = undefined;
+  }
+
+  function scheduleStreamRender(conversation) {
+    scheduledStreamConversation = conversation;
+    if (streamRenderFrame) return;
+    streamRenderFrame = requestAnimationFrame(() => {
+      streamRenderFrame = undefined;
+      const latest = scheduledStreamConversation;
+      scheduledStreamConversation = undefined;
+      if (latest) render(latest, { animate: true, fromStream: true });
+    });
   }
 
   function subagentState(item) {
@@ -726,7 +742,7 @@ export function createMobileConversationView({
         const payload = JSON.parse(event.data);
         if (payload.conversation?.thread?.id !== threadId) return;
         providerId = payload.conversation.provider.id;
-        render(payload.conversation, { animate: true, fromStream: true });
+        scheduleStreamRender(payload.conversation);
       } catch {
         schedule();
       }
@@ -1878,6 +1894,88 @@ export function createMobileConversationView({
     return eventNode(item);
   }
 
+  function timelineNodeKey(node) {
+    if (node.nodeType !== Node.ELEMENT_NODE) return undefined;
+    if (node.matches('.mobile-tool-group')) return `group:${node.dataset.eventId}`;
+    if (node.matches('.mobile-event-card')) return `event:${node.dataset.eventId}`;
+    if (node.matches('.mobile-message')) {
+      return node.dataset.pending ? undefined : `message:${node.dataset.messageId}`;
+    }
+    if (node.matches('.mobile-question-card')) return `question:${node.dataset.questionId}`;
+    if (node.matches('.mobile-conversation-loading')) return 'loading';
+    return undefined;
+  }
+
+  function syncAttributes(current, fresh) {
+    for (const attribute of [...current.attributes]) {
+      if (!fresh.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
+    }
+    for (const attribute of [...fresh.attributes]) current.setAttribute(attribute.name, attribute.value);
+  }
+
+  function syncEventCard(current, fresh) {
+    syncAttributes(current, fresh);
+    const currentToggle = current.querySelector(':scope > .mobile-event-toggle');
+    const freshToggle = fresh.querySelector(':scope > .mobile-event-toggle');
+    const currentPanel = current.querySelector(':scope > .mobile-event-panel');
+    const freshPanel = fresh.querySelector(':scope > .mobile-event-panel');
+    if (!currentToggle || !freshToggle || !currentPanel || !freshPanel) {
+      current.replaceChildren(...fresh.childNodes);
+      return current;
+    }
+    const freshExtras = [...fresh.children].filter((child) => child !== freshToggle && child !== freshPanel);
+    syncAttributes(currentToggle, freshToggle);
+    currentToggle.replaceChildren(...freshToggle.childNodes);
+    syncAttributes(currentPanel, freshPanel);
+    currentPanel.replaceChildren(...freshPanel.childNodes);
+    for (const child of [...current.children]) {
+      if (child !== currentToggle && child !== currentPanel) child.remove();
+    }
+    for (const child of freshExtras) current.append(child);
+    return current;
+  }
+
+  function reconcileTimeline(container, freshNodes) {
+    const currentByKey = new Map();
+    for (const node of [...container.children]) {
+      const key = timelineNodeKey(node);
+      if (key) currentByKey.set(key, node);
+    }
+    const kept = new Set();
+    let cursor = container.firstChild;
+    for (const fresh of freshNodes) {
+      const key = timelineNodeKey(fresh);
+      const current = key ? currentByKey.get(key) : undefined;
+      let node = fresh;
+      if (current && current.matches('.mobile-tool-group') && fresh.matches('.mobile-tool-group')) {
+        syncAttributes(current, fresh);
+        const currentToggle = current.querySelector(':scope > .mobile-tool-group-toggle');
+        const freshToggle = fresh.querySelector(':scope > .mobile-tool-group-toggle');
+        const currentPanel = current.querySelector(':scope > .mobile-tool-group-panel');
+        const freshPanel = fresh.querySelector(':scope > .mobile-tool-group-panel');
+        if (currentToggle && freshToggle && currentPanel && freshPanel) {
+          syncAttributes(currentToggle, freshToggle);
+          currentToggle.replaceChildren(...freshToggle.childNodes);
+          syncAttributes(currentPanel, freshPanel);
+          reconcileTimeline(currentPanel, [...freshPanel.children]);
+          node = current;
+        }
+      } else if (current && current.matches('.mobile-event-card') && fresh.matches('.mobile-event-card')) {
+        node = syncEventCard(current, fresh);
+      } else if (current && current.matches('.mobile-message') && fresh.matches('.mobile-message')) {
+        syncAttributes(current, fresh);
+        current.replaceChildren(...fresh.childNodes);
+        node = current;
+      }
+      kept.add(node);
+      if (node === cursor) cursor = cursor.nextSibling;
+      else container.insertBefore(node, cursor);
+    }
+    for (const child of [...container.childNodes]) {
+      if (!kept.has(child)) child.remove();
+    }
+  }
+
   function render(conversation, { animate = false, fromStream = false } = {}) {
     if (fromStream && streamPointerActive) {
       deferredStreamRender = { conversation, animate };
@@ -1979,7 +2077,7 @@ export function createMobileConversationView({
       fragment.append(pending);
     }
     if (!fragment.childNodes.length) fragment.append(element('div', 'mobile-conversation-loading', 'No messages yet'));
-    targetMessages.replaceChildren(fragment);
+    reconcileTimeline(targetMessages, [...fragment.childNodes]);
     restoreStreamScroll(targetMessages, streamScroll);
     if (initialThreadRender || atBottom || pendingMessage) targetMessages.scrollTop = targetMessages.scrollHeight;
     if (isRoot) updateJumpToLatest();
@@ -2377,6 +2475,7 @@ export function createMobileConversationView({
       clearTimeout(refreshTimer);
       clearTimeout(pendingAcceptanceTimer);
       clearTimeout(deferredStreamRenderTimer);
+      if (streamRenderFrame) cancelAnimationFrame(streamRenderFrame);
       closeStream();
       document.removeEventListener('pointerdown', dismissModelList);
       root.removeEventListener('pointerdown', beginStreamInteraction, true);

@@ -71,6 +71,12 @@ export function loadConfig(overrides = {}) {
   const configuredRoots = env.ALLOWED_CWD_ROOTS
     ? env.ALLOWED_CWD_ROOTS.split(',').map((root) => root.trim()).filter(Boolean)
     : [homedir(), process.cwd()];
+  const databaseFile = resolve(
+    overrides.databaseFile ?? env.AGENT_REMOTE_DB_PATH ?? join(homedir(), '.agent-remote', 'agent-remote.db'),
+  );
+  const grokLeaderSocket = resolve(
+    overrides.grokLeaderSocket ?? env.AGENT_REMOTE_GROK_LEADER_SOCKET ?? `${databaseFile}.grok.sock`,
+  );
 
   return {
     host: overrides.host ?? env.HOST ?? '127.0.0.1',
@@ -88,7 +94,8 @@ export function loadConfig(overrides = {}) {
       .map((origin) => origin.trim())
       .filter(Boolean),
     allowedCwdRoots: [...new Set((overrides.allowedCwdRoots ?? configuredRoots).map((root) => resolve(root)))],
-    databaseFile: resolve(overrides.databaseFile ?? env.AGENT_REMOTE_DB_PATH ?? join(homedir(), '.agent-remote', 'agent-remote.db')),
+    databaseFile,
+    grokLeaderSocket,
     maxConnections: Number(overrides.maxConnections ?? env.MAX_CONNECTIONS ?? 20),
     cwd: overrides.cwd ?? env.TERMINAL_CWD ?? process.cwd(),
     shell,

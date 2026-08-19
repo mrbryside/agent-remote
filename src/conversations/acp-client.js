@@ -167,6 +167,7 @@ export function createGrokAcpClient({
   logger = () => {},
   environment = () => ({}),
   defaultPermissionMode = 'default',
+  leaderSocket,
 } = {}) {
   let child;
   let lines;
@@ -439,7 +440,9 @@ export function createGrokAcpClient({
     if (initialized) return initialized;
     closing = false;
     generation += 1;
-    child = spawn(command, ['agent', '--leader', 'stdio'], {
+    const args = ['agent', '--leader', 'stdio'];
+    if (leaderSocket) args.push('--leader-socket', leaderSocket);
+    child = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, ...environment() },
     });

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { commandExists } from './config.js';
+import { commandExists, loadConfig } from './config.js';
 
 const execFileAsync = promisify(execFile);
 const separator = '\x1f';
@@ -71,7 +71,7 @@ export async function sendManagedSessionInput(command, name, data, {
   }
 }
 
-export function prepareManagedCommand(commandLine, sessionId = randomUUID()) {
+export function prepareManagedCommand(commandLine, sessionId = randomUUID(), grokLeaderSocket) {
   const match = commandLine.match(/^(\s*(?:['"]?[^\s'"]*\/)?grok['"]?)(?=\s|$)([\s\S]*)$/i);
   if (!match) return { commandLine, conversationThreadId: undefined };
   const rest = match[2] || '';
@@ -82,6 +82,8 @@ export function prepareManagedCommand(commandLine, sessionId = randomUUID()) {
   const conversationThreadId = grokSessionIdPattern.test(suppliedId || '') ? suppliedId : sessionId;
   const flags = [
     /(?:^|\s)--leader(?:\s|$)/i.test(rest) ? '' : ' --leader',
+    grokLeaderSocket && !/(?:^|\s)--leader-socket(?:=|\s+)/i.test(rest)
+      ? ` --leader-socket ${shellQuote(grokLeaderSocket)}` : '',
     suppliedId ? '' : ` --session-id ${conversationThreadId}`,
   ].join('');
   return { commandLine: `${match[1]}${flags}${rest}`, conversationThreadId };
@@ -150,6 +152,7 @@ export async function startManagedSession({
   requestedName,
   agentRemoteUrl = process.env.AGENT_REMOTE_URL || 'http://127.0.0.1:3000',
   agentRemoteToken = process.env.AGENT_REMOTE_TOKEN || '',
+  grokLeaderSocket,
   projectId,
   autoTitle = false,
 }) {
@@ -162,7 +165,11 @@ export async function startManagedSession({
 
   const requestedCommandLine = rawCommand?.trim() || [command, ...args].map(shellQuote).join(' ');
   if (!requestedCommandLine) throw new Error('A command is required');
-  const prepared = prepareManagedCommand(requestedCommandLine);
+  const prepared = prepareManagedCommand(
+    requestedCommandLine,
+    randomUUID(),
+    grokLeaderSocket ?? loadConfig().grokLeaderSocket,
+  );
   const commandLine = prepared.commandLine;
   const conversationThreadId = prepared.conversationThreadId;
   const commandLabel = command || requestedCommandLine.split(/\s+/)[0];

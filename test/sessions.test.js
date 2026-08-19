@@ -15,18 +15,19 @@ test('creates safe readable session slugs', () => {
   assert.equal(slugify('ภาษาไทย'), 'session');
 });
 
-test('prepares interactive Grok sessions for the shared ACP leader', () => {
+test('prepares interactive Grok sessions for the isolated Agent Remote leader', () => {
   const id = '01a015a9-61df-7052-a5d0-17de77a201fa';
-  assert.deepEqual(prepareManagedCommand('grok --always-approve', id), {
-    commandLine: `grok --leader --session-id ${id} --always-approve`,
+  const leaderSocket = '/tmp/agent remote/grok.sock';
+  assert.deepEqual(prepareManagedCommand('grok --always-approve', id, leaderSocket), {
+    commandLine: `grok --leader --leader-socket '${leaderSocket}' --session-id ${id} --always-approve`,
     conversationThreadId: id,
   });
-  assert.deepEqual(prepareManagedCommand('/opt/bin/grok --leader --session-id 01a015a9-61df-7052-a5d0-17de77a201fb', id), {
-    commandLine: '/opt/bin/grok --leader --session-id 01a015a9-61df-7052-a5d0-17de77a201fb',
+  assert.deepEqual(prepareManagedCommand('/opt/bin/grok --leader --leader-socket /tmp/existing.sock --session-id 01a015a9-61df-7052-a5d0-17de77a201fb', id, leaderSocket), {
+    commandLine: '/opt/bin/grok --leader --leader-socket /tmp/existing.sock --session-id 01a015a9-61df-7052-a5d0-17de77a201fb',
     conversationThreadId: '01a015a9-61df-7052-a5d0-17de77a201fb',
   });
   for (const commandLine of ['grok agent --leader stdio', 'grok --resume old', 'grok -p hello', 'bash']) {
-    assert.deepEqual(prepareManagedCommand(commandLine, id), {
+    assert.deepEqual(prepareManagedCommand(commandLine, id, leaderSocket), {
       commandLine, conversationThreadId: undefined,
     });
   }

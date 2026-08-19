@@ -9,7 +9,7 @@
 - `src/sessions.js` creates and discovers only tmux sessions carrying the `@agent_remote` marker. Those sessions outlive browser connections.
 - `src/agents.js` owns the project-agent catalog. Project APIs accept an agent ID, and only the server resolves it to a launch command. Browser responses never expose those commands.
 - `public/app.js` owns mounted xterm runtimes, optimistic project/chat UI, session switching, per-session browser panes, and viewport resizing.
-- `src/conversations/` maps managed agent metadata to provider-owned conversation data. Grok uses a shared ACP leader for replay, live updates, input, and nested subagents; `public/mobile-conversation.js` renders its provider-neutral schema only on compact viewports.
+- `src/conversations/` maps managed agent metadata to provider-owned conversation data. Grok uses an Agent Remote-specific shared ACP leader socket for replay, live updates, input, and nested subagents; it must not reuse Grok's default global leader socket. `public/mobile-conversation.js` renders its provider-neutral schema only on compact viewports.
 - `bin/agent-remote.js` is the standalone session launcher. `bin/terminal-browser` routes agent browser commands back to the owning web session.
 
 ## Main terminal flow
@@ -49,6 +49,7 @@ catalog agents and standalone terminal commands retain the bounded quiet-window 
 | Active selection, expanded projects, pane widths | browser storage |
 | Mounted terminal caches during one page lifetime | `public/app.js` runtime maps |
 | Agent message/tool/subagent history | provider-owned files, read through `src/conversations/` |
+| Managed Grok TUI/ACP coordination | leader socket derived from the configured SQLite path |
 | Browser renderer/tab state | keyed renderer in `src/server.js` |
 | Named-tunnel metadata and paired-device audit rows | SQLite via `src/remote/store.js` |
 | Cloudflare user API token | macOS Keychain only |

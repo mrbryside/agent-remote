@@ -684,6 +684,28 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await thoughtCard.getByRole('button').click();
   await expect(thoughtCard.getByText('Interaction remains available.')).toBeVisible();
   await expect(conversation.locator('.mobile-tool-group')).toContainText('Listed 1 dir, Read 2 files, Searched 1 time, Edited 1 file, Ran 1 command');
+  const stableToolGroup = await page.evaluate(async (nextConversation) => {
+    const button = document.querySelector('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle');
+    button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
+    for (let index = 0; index < 24; index += 1) {
+      const snapshot = structuredClone(nextConversation);
+      const group = snapshot.items.find((item) => item.id === 'tool-group-1');
+      group.status = index === 23 ? 'completed' : 'working';
+      window.__conversationStreams.at(-1).emit('conversation', {
+        data: JSON.stringify({ conversation: snapshot }),
+      });
+    }
+    button.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerType: 'touch' }));
+    button.click();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    return {
+      connected: button.isConnected,
+      sameNode: button === document.querySelector('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle'),
+      expanded: button.getAttribute('aria-expanded'),
+    };
+  }, rootConversation());
+  expect(stableToolGroup).toEqual({ connected: true, sameNode: true, expanded: 'true' });
+  await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
   await expect(conversation.getByText('Turn completed')).toHaveCount(0);
   await expect(conversation.getByText('Session recap')).toHaveCount(0);
   const subagentPill = conversation.locator('.mobile-subagent-pill');

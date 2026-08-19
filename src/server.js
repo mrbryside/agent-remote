@@ -326,6 +326,7 @@ export function createTerminalServer(options = {}) {
     command: options.grokCommand ?? 'grok',
     spawn: options.grokAcpSpawn,
     logger: options.grokAcpLogger,
+    leaderSocket: config.grokLeaderSocket,
     environment: () => ({
       AGENT_REMOTE_WEB: '1',
       AGENT_REMOTE_ACP: '1',
@@ -1842,6 +1843,7 @@ export function createTerminalServer(options = {}) {
             cwd: selected.path,
             agentRemoteUrl: `http://127.0.0.1:${server.address().port}`,
             agentRemoteToken: config.token,
+            grokLeaderSocket: config.grokLeaderSocket,
           });
           return json(response, 201, { session });
         }
@@ -1877,6 +1879,7 @@ export function createTerminalServer(options = {}) {
               cwd: project.cwd,
               agentRemoteUrl: `http://127.0.0.1:${server.address().port}`,
               agentRemoteToken: config.token,
+              grokLeaderSocket: config.grokLeaderSocket,
               projectId: project.id,
               autoTitle: true,
             });

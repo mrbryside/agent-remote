@@ -20,7 +20,7 @@ Playwright runs serially because the tmux fixture, browser renderer, SQLite file
 - Session naming, command quoting, and CLI: `test/sessions.test.js`
 - HTTP/WebSocket/PTY/tmux behavior: `test/server.test.js`
 - Project/sidebar/terminal UX and responsive behavior: `test/e2e.spec.js`
-- Grok ACP request/response extensions (permissions, questions, and Plan Review): `test/grok-acp.test.js`
+- Grok ACP transport ownership and request/response extensions (leader socket, permissions, questions, and Plan Review): `test/grok-acp.test.js`
 - Provider-neutral timeline mapping, child-thread ownership, and interaction projection: `test/conversation-providers.test.js`
 - Real terminal-browser routing (including cwd fallback with tmux and routing environment removed), direct compositor-stream cadence/backpressure, stable frame source during motion, desktop split, mobile sheet persistence, tabs, DevTools, Record, cursor, refresh, and cleanup: `test/terminal-browser.spec.js`
 - Remote configuration: `test/config.test.js`
@@ -30,6 +30,6 @@ Playwright runs serially because the tmux fixture, browser renderer, SQLite file
 - Remote pairing, returning-device, revocation, and fake named-domain flows: `test/remote-e2e.spec.js`
 - Tauri configuration and wrapper lifecycle: `test/tauri-contract.test.js` and `src-tauri/src/main.rs` tests
 
-Tests that create tmux sessions, projects, remote stores, or child tunnels must clean up even after failure. Use unique project/session markers, temporary SQLite paths, and fake cloudflared processes; assert Remote Stop/close leaves no orphaned child. Avoid relying on execution order beyond the suite's explicit serial configuration. Run sidecar and desktop checks only on Darwin ARM64.
+Tests that create tmux sessions, projects, remote stores, or child tunnels must clean up even after failure. Use unique project/session markers, temporary SQLite paths, and fake cloudflared processes; the Grok leader socket follows the temporary database path so tests cannot attach to a user's default leader. Assert Remote Stop/close leaves no orphaned child. Avoid relying on execution order beyond the suite's explicit serial configuration. Run sidecar and desktop checks only on Darwin ARM64.
 
 [Back to workflow index](index.md)

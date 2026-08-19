@@ -15,15 +15,21 @@ adapters stay behind this boundary and do not add provider-specific UI branches.
 
 ## Grok ACP ownership
 
-New interactive Grok chats are launched with `--leader` and a preallocated
-`--session-id`. The UUID is stored in tmux's
+New interactive Grok chats are launched with `--leader`, a preallocated
+`--session-id`, and Agent Remote's own `--leader-socket`. The socket defaults
+beside the configured SQLite database (or
+`AGENT_REMOTE_GROK_LEADER_SOCKET`), so unrelated Grok terminals, probes, and
+IDEs using `~/.grok/leader.sock` cannot displace the managed tool executor or
+cause newly spawned commands to die with `SIGKILL`. The TUI and ACP stdio
+client must use the same Agent Remote socket; never point only one side at the
+custom socket. The UUID is stored in tmux's
 `@agent_remote_conversation_thread` metadata, so provider detection is available
 before the first prompt and never guesses from cwd, pids, or the newest file.
 Legacy Grok chats without this metadata are intentionally not projected into
 the native mobile UI.
 
 `src/conversations/acp-client.js` owns one persistent
-`grok agent --leader stdio` JSON-RPC client. It initializes once, calls
+`grok agent --leader stdio --leader-socket <path>` JSON-RPC client. It initializes once, calls
 `session/load` for authoritative replay, deduplicates event ids, routes live
 `session/update` notifications by session id, and calls `session/prompt` for
 mobile input. It closes only its own stdio client; the interactive Grok TUI and
@@ -170,7 +176,12 @@ After the initial HTTP read, `/api/conversations/:session/stream` publishes the
 provider-neutral snapshots over SSE. Provider watchers are released when the
 browser disconnects or the server stops. Assistant text is painted immediately
 from those provider chunks; the browser does not add a synthetic typewriter
-delay after a chunk arrives. Opening or switching a root conversation places
+delay after a chunk arrives. The mobile renderer keeps timeline nodes keyed by
+message/event id and reconciles the changing contents in place. Tool-group and
+event toggle elements therefore retain identity while output streams, so a
+touch cannot lose its click target between pointer down and click. Incoming SSE
+snapshots are latest-wins within one animation frame instead of forcing a full
+history detach for every chunk. Opening or switching a root conversation places
 the message viewport at its latest item synchronously, with no smooth initial
 scroll animation. Later stream updates follow the tail only while the reader
 is already there. Scrolling up reveals a jump-to-latest control; that explicit
