@@ -1,0 +1,10 @@
+{
+  "cloudflared": {
+    "version": "2026.8.2",
+    "filename": "cloudflared-darwin-arm64.tgz",
+    "url": "https://github.com/cloudflare/cloudflared/releases/download/2026.8.2/cloudflared-darwin-arm64.tgz",
+    "sha256": "9042c2c5d8b2de78e60f313d5fb31b6c5c1cebde787a3caf1f2c9588084ac442",
+    "license": "Apache-2.0",
+    "source": "GitHub release asset digest for cloudflare/cloudflared 2026.8.2"
+  }
+}

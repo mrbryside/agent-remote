@@ -1,0 +1,1569 @@
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function statusLabel(status) {
+  if (status === 'calling') return 'Calling';
+  if (status === 'working' || status === 'running') return 'Running';
+  if (status === 'completed') return 'Done';
+  if (status === 'failed' || status === 'error') return 'Failed';
+  if (status === 'cancelled') return 'Cancelled';
+  if (status === 'pending') return 'Pending';
+  return 'Ready';
+}
+
+function metric(value) {
+  return new Intl.NumberFormat().format(Number(value) || 0);
+}
+
+function compactMetric(value) {
+  return new Intl.NumberFormat(undefined, {
+    notation: 'compact', maximumFractionDigits: 1,
+  }).format(Number(value) || 0);
+}
+
+function duration(value) {
+  const milliseconds = Number(value) || 0;
+  if (milliseconds < 1_000) return `${milliseconds} ms`;
+  if (milliseconds < 60_000) return `${(milliseconds / 1_000).toFixed(1)} s`;
+  return `${(milliseconds / 60_000).toFixed(1)} min`;
+}
+
+export function createMobileConversationView({
+  api, apiUrl, media, send, uploadAttachment, searchFiles, setModel, setMode, setPermissionMode,
+  removeQueuedInput, steerQueuedInput, respondPermission, respondQuestion,
+  onVisibilityChange, onStatusChange = () => {},
+}) {
+  const root = document.querySelector('#mobile-conversation');
+  const title = document.querySelector('#mobile-conversation-title');
+  const meta = document.querySelector('#mobile-conversation-meta');
+  const state = document.querySelector('#mobile-conversation-state');
+  const back = document.querySelector('#mobile-conversation-back');
+  const messages = document.querySelector('#mobile-conversation-messages');
+  const interactionDock = document.querySelector('#mobile-conversation-interaction');
+  const queue = document.querySelector('#mobile-conversation-queue');
+  const composer = document.querySelector('#mobile-conversation-composer');
+  const input = document.querySelector('#mobile-conversation-input');
+  const sendButton = document.querySelector('#mobile-conversation-send');
+  const modelButton = document.querySelector('#mobile-conversation-model');
+  const modelLabel = modelButton.querySelector('span');
+  const modelList = document.querySelector('#mobile-conversation-model-list');
+  const modeButton = document.querySelector('#mobile-conversation-mode');
+  const modeLabel = modeButton.querySelector('span');
+  const modeList = document.querySelector('#mobile-conversation-mode-list');
+  const permissionModeButton = document.querySelector('#mobile-conversation-permission-mode');
+  const permissionModeLabel = permissionModeButton.querySelector('span');
+  const permissionModeList = document.querySelector('#mobile-conversation-permission-mode-list');
+  const attachButton = document.querySelector('#mobile-conversation-attach');
+  const fileInput = document.querySelector('#mobile-conversation-file');
+  const attachmentTray = document.querySelector('#mobile-conversation-attachments');
+  const suggestions = document.querySelector('#mobile-conversation-suggestions');
+  const context = document.querySelector('#mobile-conversation-context');
+  const contextProgress = document.querySelector('#mobile-conversation-context-progress');
+  const contextValue = document.querySelector('#mobile-conversation-context-value');
+  let sessionName;
+  let threadId;
+  let parentId;
+  let providerId;
+  let available = false;
+  let generation = 0;
+  let refreshTimer;
+  let eventSource;
+  let streamKey = '';
+  let renderedSignature = '';
+  let pendingMessage;
+  let pendingAcceptanceTimer;
+  let lastConversation;
+  let revealFrame;
+  let rootThreadId;
+  let rootConversation;
+  let sheet;
+  let sheetPanel;
+  let sheetList;
+  let sheetMessages;
+  let sheetTitle;
+  let sheetMeta;
+  let sheetState;
+  let sheetBack;
+  let sheetClose;
+  let sheetHandle;
+  let sheetMode = 'list';
+  let selectedChildId;
+  let sheetReturnFocus;
+  let sheetPointer;
+  let subagentPillHost;
+  const expandedItems = new Set();
+  const pendingQuestions = new Map();
+  let questionStateVersion = 0;
+  let modelBusy = false;
+  let modelOptionsSignature = '';
+  let controlBusy = false;
+  let attachments = [];
+  let uploadingAttachments = 0;
+  let suggestionItems = [];
+  let suggestionIndex = 0;
+  let suggestionRange;
+  let suggestionTimer;
+  let suggestionGeneration = 0;
+  const mentionedFiles = new Set();
+
+  function setAvailable(next) {
+    if (available === next) return;
+    available = next;
+    root.hidden = !next;
+    onVisibilityChange(next);
+  }
+
+  function closeModelList({ focus = false } = {}) {
+    if (modelList.hidden) return;
+    modelList.hidden = true;
+    modelButton.setAttribute('aria-expanded', 'false');
+    if (focus) modelButton.focus({ preventScroll: true });
+  }
+
+  function closeAuxiliaryLists({ focus } = {}) {
+    for (const [button, list] of [[modeButton, modeList], [permissionModeButton, permissionModeList]]) {
+      if (!list.hidden) {
+        list.hidden = true;
+        button.setAttribute('aria-expanded', 'false');
+      }
+    }
+    if (focus) focus.focus({ preventScroll: true });
+  }
+
+  function closeAllLists() {
+    closeModelList();
+    closeAuxiliaryLists();
+    closeSuggestions();
+  }
+
+  async function chooseModel(modelId) {
+    const control = lastConversation?.controls?.model;
+    const option = control?.options?.find((model) => model.id === modelId);
+    closeModelList();
+    if (!option || control.currentId === modelId || !sessionName || modelBusy) return;
+    modelBusy = true;
+    modelButton.disabled = true;
+    modelLabel.textContent = 'Switching…';
+    try {
+      await setModel(sessionName, modelId);
+      renderedSignature = '';
+      await refresh();
+    } catch (error) {
+      state.textContent = error.message || 'Model change failed';
+      state.dataset.state = 'error';
+    } finally {
+      modelBusy = false;
+      if (lastConversation) renderModelControls(lastConversation);
+    }
+  }
+
+  function renderModelControls(conversation) {
+    const control = conversation.controls?.model;
+    const options = Array.isArray(control?.options) ? control.options : [];
+    const current = options.find((model) => model.id === control?.currentId);
+    if (!current || !options.length) {
+      closeModelList();
+      modelButton.hidden = true;
+      context.hidden = true;
+      return;
+    }
+    modelButton.hidden = false;
+    modelButton.disabled = modelBusy || conversation.thread.status === 'working';
+    if (!modelBusy) modelLabel.textContent = current.label;
+    modelButton.setAttribute('aria-label', `Choose model, ${current.label}`);
+
+    const nextSignature = JSON.stringify({ currentId: control.currentId, options });
+    if (nextSignature !== modelOptionsSignature) {
+      modelOptionsSignature = nextSignature;
+      const fragment = document.createDocumentFragment();
+      for (const option of options) {
+        const button = element('button', 'mobile-conversation-model-option');
+        button.type = 'button';
+        button.setAttribute('role', 'option');
+        button.setAttribute('aria-selected', String(option.id === control.currentId));
+        button.dataset.modelId = option.id;
+        button.append(
+          element('strong', '', option.label),
+          element('small', '', [option.description,
+            option.contextWindowTokens ? `${compactMetric(option.contextWindowTokens)} context` : '']
+            .filter(Boolean).join(' · ')),
+        );
+        button.addEventListener('click', () => void chooseModel(option.id));
+        fragment.append(button);
+      }
+      modelList.replaceChildren(fragment);
+    }
+
+    const usage = conversation.context;
+    if (!usage?.windowTokens && usage?.usedTokens === undefined) {
+      context.hidden = true;
+      return;
+    }
+    const percent = Math.max(0, Math.min(100, Number(usage.usagePercent) || 0));
+    context.hidden = false;
+    contextProgress.value = percent;
+    contextProgress.setAttribute('aria-label', `${percent}% of context window used`);
+    contextValue.value = `${compactMetric(usage.usedTokens)} / ${compactMetric(usage.windowTokens)}`;
+    contextValue.textContent = contextValue.value;
+  }
+
+  function renderChoiceControl(conversation, key, button, label, list, change) {
+    const control = conversation.controls?.[key];
+    const options = Array.isArray(control?.options) ? control.options : [];
+    const current = options.find((option) => option.id === control?.currentId);
+    if (!current || !options.length) {
+      list.hidden = true;
+      button.hidden = true;
+      return;
+    }
+    button.hidden = false;
+    button.disabled = controlBusy || (key === 'mode' && conversation.thread.status === 'working');
+    label.textContent = current.label;
+    button.setAttribute('aria-label', `Choose ${key}, ${current.label}`);
+    const fragment = document.createDocumentFragment();
+    for (const option of options) {
+      const choice = element('button', 'mobile-conversation-model-option');
+      choice.type = 'button';
+      choice.setAttribute('role', 'option');
+      choice.setAttribute('aria-selected', String(option.id === control.currentId));
+      choice.append(element('strong', '', option.label), element('small', '', option.description || ''));
+      choice.addEventListener('click', async () => {
+        closeAuxiliaryLists();
+        if (option.id === control.currentId || controlBusy || !sessionName) return;
+        controlBusy = true;
+        try {
+          await change(sessionName, option.id);
+          renderedSignature = '';
+          await refresh();
+        } catch (error) {
+          state.textContent = error.message || `${option.label} failed`;
+          state.dataset.state = 'error';
+        } finally {
+          controlBusy = false;
+          if (lastConversation) renderChoiceControls(lastConversation);
+        }
+      });
+      fragment.append(choice);
+    }
+    list.replaceChildren(fragment);
+  }
+
+  function renderChoiceControls(conversation) {
+    renderChoiceControl(conversation, 'mode', modeButton, modeLabel, modeList, setMode);
+    renderChoiceControl(conversation, 'permission', permissionModeButton, permissionModeLabel,
+      permissionModeList, setPermissionMode);
+  }
+
+  function commandMatches(command, query) {
+    const haystack = `${command.name} ${command.description}`.toLowerCase();
+    const needle = query.toLowerCase();
+    if (!needle) return true;
+    let cursor = 0;
+    for (const character of needle) {
+      cursor = haystack.indexOf(character, cursor);
+      if (cursor < 0) return false;
+      cursor += 1;
+    }
+    return true;
+  }
+
+  function closeSuggestions() {
+    clearTimeout(suggestionTimer);
+    suggestions.hidden = true;
+    suggestions.replaceChildren();
+    suggestionItems = [];
+    suggestionRange = undefined;
+  }
+
+  function paintSuggestions() {
+    if (!suggestionItems.length) return closeSuggestions();
+    const fragment = document.createDocumentFragment();
+    suggestionItems.forEach((item, index) => {
+      const option = element('button', 'mobile-conversation-suggestion');
+      option.type = 'button';
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', String(index === suggestionIndex));
+      option.append(
+        element('strong', '', item.label),
+        element('small', '', [item.description, item.hint].filter(Boolean).join(' · ')),
+      );
+      option.addEventListener('pointerdown', (event) => event.preventDefault());
+      option.addEventListener('click', () => acceptSuggestion(index));
+      fragment.append(option);
+    });
+    suggestions.replaceChildren(fragment);
+    suggestions.hidden = false;
+    suggestions.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function acceptSuggestion(index = suggestionIndex) {
+    const item = suggestionItems[index];
+    if (!item || !suggestionRange) return;
+    const before = input.value.slice(0, suggestionRange.start);
+    const after = input.value.slice(suggestionRange.end);
+    const replacement = `${item.value} `;
+    input.value = `${before}${replacement}${after}`;
+    const caret = before.length + replacement.length;
+    input.setSelectionRange(caret, caret);
+    if (item.kind === 'file') mentionedFiles.add(item.path);
+    closeSuggestions();
+    autoSizeInput();
+    input.focus({ preventScroll: true });
+  }
+
+  function composerCompletion() {
+    const caret = input.selectionStart ?? input.value.length;
+    const before = input.value.slice(0, caret);
+    const slash = before.match(/(?:^|\n)(\s*)\/([^\s]*)$/);
+    if (slash) return {
+      kind: 'command', query: slash[2], start: caret - slash[2].length - 1, end: caret,
+    };
+    const file = before.match(/(?:^|\s)@([^\s]*)$/);
+    if (file) return {
+      kind: 'file', query: file[1], start: caret - file[1].length - 1, end: caret,
+    };
+    return undefined;
+  }
+
+  function updateSuggestions() {
+    const completion = composerCompletion();
+    suggestionGeneration += 1;
+    clearTimeout(suggestionTimer);
+    if (!completion || !lastConversation) return closeSuggestions();
+    closeModelList();
+    closeAuxiliaryLists();
+    suggestionRange = completion;
+    suggestionIndex = 0;
+    if (completion.kind === 'command') {
+      suggestionItems = (lastConversation.controls?.commands?.options || [])
+        .filter((command) => commandMatches(command, completion.query))
+        .slice(0, 10)
+        .map((command) => ({
+          kind: 'command', value: `/${command.name}`, label: `/${command.name}`,
+          description: command.description, hint: command.inputHint,
+        }));
+      return paintSuggestions();
+    }
+    const requestGeneration = suggestionGeneration;
+    suggestionTimer = setTimeout(async () => {
+      try {
+        const payload = await searchFiles(sessionName, completion.query);
+        if (requestGeneration !== suggestionGeneration || composerCompletion()?.kind !== 'file') return;
+        suggestionItems = (payload.files || []).slice(0, 10).map((file) => ({
+          kind: 'file', path: file.path, value: `@${file.path}`, label: file.name,
+          description: file.directory || 'Project root', hint: file.path,
+        }));
+        paintSuggestions();
+      } catch {
+        if (requestGeneration === suggestionGeneration) closeSuggestions();
+      }
+    }, 100);
+  }
+
+  function dismissModelList(event) {
+    if (modelList.hidden || modelList.contains(event.target) || modelButton.contains(event.target)) return;
+    closeModelList();
+  }
+
+  function schedule(delay = 4_000) {
+    clearTimeout(refreshTimer);
+    if (media.matches && sessionName) refreshTimer = setTimeout(() => void refresh(), delay);
+  }
+
+  function closeStream() {
+    eventSource?.close();
+    eventSource = undefined;
+    streamKey = '';
+  }
+
+  function stopReveal() {
+    if (revealFrame !== undefined) cancelAnimationFrame(revealFrame);
+    revealFrame = undefined;
+  }
+
+  function subagentState(item) {
+    if (item.phase === 'calling') return 'calling';
+    if (item.status === 'completed' || item.phase === 'done') return 'completed';
+    if (item.status === 'failed' || item.status === 'cancelled') return item.status;
+    return 'running';
+  }
+
+  function subagents(conversation) {
+    return (conversation.items || []).filter((item) => item.type === 'subagent');
+  }
+
+  function ensureSheet() {
+    if (sheet) return;
+    sheet = element('section', 'mobile-subagent-sheet');
+    sheet.hidden = true;
+    sheet.setAttribute('role', 'dialog');
+    sheet.setAttribute('aria-modal', 'true');
+    sheet.setAttribute('aria-label', 'Subagents');
+    sheet.tabIndex = -1;
+    sheetPanel = element('div', 'mobile-subagent-sheet-panel');
+    sheetHandle = element('button', 'mobile-subagent-sheet-handle');
+    sheetHandle.type = 'button';
+    sheetHandle.setAttribute('aria-label', 'Drag down to close subagents');
+    const header = element('header', 'mobile-subagent-sheet-header');
+    sheetBack = element('button', 'mobile-subagent-sheet-back', '‹');
+    sheetBack.type = 'button';
+    sheetBack.setAttribute('aria-label', 'Back to subagent list');
+    sheetTitle = element('strong', '', 'Subagents');
+    sheetMeta = element('small');
+    const copy = element('span');
+    copy.append(sheetTitle, sheetMeta);
+    sheetState = element('span', 'mobile-subagent-sheet-state');
+    sheetClose = element('button', 'mobile-subagent-sheet-close', '×');
+    sheetClose.type = 'button';
+    sheetClose.setAttribute('aria-label', 'Close subagents');
+    header.append(sheetBack, copy, sheetState, sheetClose);
+    sheetList = element('div', 'mobile-subagent-list');
+    sheetMessages = element('div', 'mobile-subagent-sheet-messages');
+    sheetMessages.setAttribute('role', 'log');
+    sheetMessages.setAttribute('aria-live', 'polite');
+    sheetPanel.append(sheetHandle, header, sheetList, sheetMessages);
+    sheet.append(sheetPanel);
+    root.append(sheet);
+    sheet.addEventListener('click', (event) => {
+      if (event.target === sheet) closeSheet();
+    });
+    sheetClose.addEventListener('click', closeSheet);
+    sheetBack.addEventListener('click', showSheetList);
+    sheet.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeSheet();
+      }
+      if (event.key !== 'Tab') return;
+      const controls = Array.from(sheet.querySelectorAll('button:not([hidden]):not(:disabled), [tabindex="0"]'));
+      if (!controls.length) return;
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+    sheetHandle.addEventListener('pointerdown', (event) => {
+      sheetPointer = { id: event.pointerId, startY: event.clientY, distance: 0 };
+      sheetHandle.setPointerCapture?.(event.pointerId);
+      sheetPanel.dataset.dragging = 'true';
+    });
+    sheetHandle.addEventListener('pointermove', (event) => {
+      if (!sheetPointer || event.pointerId !== sheetPointer.id) return;
+      sheetPointer.distance = Math.max(0, event.clientY - sheetPointer.startY);
+      sheetPanel.style.setProperty('--mobile-sheet-drag', `${sheetPointer.distance}px`);
+    });
+    const finishDrag = (event) => {
+      if (!sheetPointer || event.pointerId !== sheetPointer.id) return;
+      const shouldClose = sheetPointer.distance > 96;
+      sheetPointer = undefined;
+      delete sheetPanel.dataset.dragging;
+      sheetPanel.style.removeProperty('--mobile-sheet-drag');
+      if (shouldClose) closeSheet();
+    };
+    sheetHandle.addEventListener('pointerup', finishDrag);
+    sheetHandle.addEventListener('pointercancel', finishDrag);
+  }
+
+  function renderSubagentList(conversation = rootConversation) {
+    if (!sheet || !conversation) return;
+    const items = subagents(conversation);
+    const running = items.filter((item) => ['calling', 'running'].includes(subagentState(item))).length;
+    sheetTitle.textContent = running ? `${running} agent${running === 1 ? '' : 's'} running` : 'Subagents';
+    sheetMeta.textContent = `${items.length} agent${items.length === 1 ? '' : 's'}`;
+    sheetState.textContent = '';
+    sheetList.replaceChildren();
+    for (const item of items) {
+      const lifecycleState = subagentState(item);
+      const row = element(item.threadId ? 'button' : 'article', 'mobile-subagent-row');
+      row.dataset.state = lifecycleState;
+      if (item.threadId) {
+        row.type = 'button';
+        row.dataset.threadId = item.threadId;
+        row.addEventListener('click', () => openChild(item.threadId));
+      } else row.setAttribute('aria-label', `${item.title || 'Subagent'} · ${statusLabel(lifecycleState)}`);
+      const copy = element('span');
+      copy.append(
+        element('strong', '', item.title || 'Subagent'),
+        element('small', '', [item.role || 'Subagent', item.model, item.capabilityMode]
+          .filter(Boolean).join(' · ')),
+      );
+      const status = element('span', 'mobile-subagent-status', statusLabel(lifecycleState));
+      status.dataset.state = lifecycleState;
+      row.append(copy, status, element('i', '', item.threadId ? '›' : '…'));
+      sheetList.append(row);
+    }
+    if (!items.length) sheetList.append(element('p', 'mobile-subagent-empty', 'No subagents yet.'));
+  }
+
+  function renderSubagentPill(conversation) {
+    if (!subagentPillHost) {
+      subagentPillHost = element('div', 'mobile-subagent-pill-host');
+      root.append(subagentPillHost);
+    }
+    const items = subagents(conversation);
+    if (!items.length) {
+      subagentPillHost.replaceChildren();
+      subagentPillHost.hidden = true;
+      return;
+    }
+    subagentPillHost.hidden = false;
+    const running = items.filter((item) => ['calling', 'running'].includes(subagentState(item))).length;
+    const label = running ? `${running} agent${running === 1 ? '' : 's'} running`
+      : `${items.length} agent${items.length === 1 ? '' : 's'} done`;
+    const pill = element('button', 'mobile-subagent-pill');
+    pill.type = 'button';
+    pill.dataset.state = running ? 'running' : 'completed';
+    pill.setAttribute('aria-label', `${label}. View subagents`);
+    pill.append(element('i'), element('span', '', label), element('small', '', `${items.length}`));
+    pill.addEventListener('click', () => openSheet());
+    subagentPillHost.replaceChildren(pill);
+  }
+
+  function clearSubagentPill() {
+    if (!subagentPillHost) return;
+    subagentPillHost.replaceChildren();
+    subagentPillHost.hidden = true;
+  }
+
+  function openSheet() {
+    ensureSheet();
+    sheetReturnFocus = document.activeElement;
+    sheet.hidden = false;
+    sheetMode = 'list';
+    selectedChildId = undefined;
+    renderSubagentList();
+    sheetList.hidden = false;
+    sheetMessages.hidden = true;
+    sheetBack.hidden = true;
+    requestAnimationFrame(() => sheetClose.focus({ preventScroll: true }));
+  }
+
+  function openChild(nextThreadId) {
+    selectedChildId = nextThreadId;
+    sheetMode = 'child';
+    sheetList.hidden = true;
+    sheetMessages.hidden = false;
+    sheetBack.hidden = false;
+    sheetTitle.textContent = 'Opening subagent…';
+    sheetMeta.textContent = '';
+    sheetState.textContent = 'Loading';
+    closeStream();
+    threadId = nextThreadId;
+    renderedSignature = '';
+    sheetMessages.replaceChildren(element('div', 'mobile-conversation-loading', 'Opening subagent…'));
+    void refresh();
+  }
+
+  function showSheetList() {
+    if (sheetMode !== 'child') return;
+    closeStream();
+    threadId = rootThreadId;
+    selectedChildId = undefined;
+    sheetMode = 'list';
+    sheetList.hidden = false;
+    sheetMessages.hidden = true;
+    sheetBack.hidden = true;
+    renderSubagentList();
+    renderedSignature = '';
+    void refresh();
+  }
+
+  function closeSheet() {
+    if (!sheet || sheet.hidden) return;
+    closeStream();
+    sheet.hidden = true;
+    sheetMode = 'list';
+    selectedChildId = undefined;
+    threadId = rootThreadId;
+    renderedSignature = '';
+    void refresh();
+    sheetReturnFocus?.focus?.({ preventScroll: true });
+  }
+
+  function graphemes(value) {
+    if (typeof Intl.Segmenter !== 'function') return Array.from(value);
+    const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+    return Array.from(segmenter.segment(value), (entry) => entry.segment);
+  }
+
+  function revealText(content, prefix, target, followTail, scrollContainer = messages) {
+    const suffix = graphemes(target.slice(prefix.length));
+    if (!suffix.length || matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      content.textContent = target;
+      return;
+    }
+    const article = content.closest('.mobile-message');
+    const duration = Math.max(180, Math.min(1_800, suffix.length * 6));
+    const startedAt = performance.now();
+    article.dataset.streaming = 'true';
+    const frame = (now) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const visible = Math.max(1, Math.ceil(suffix.length * progress));
+      content.textContent = prefix + suffix.slice(0, visible).join('');
+      if (followTail) scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      if (progress < 1) revealFrame = requestAnimationFrame(frame);
+      else {
+        delete article.dataset.streaming;
+        revealFrame = undefined;
+      }
+    };
+    revealFrame = requestAnimationFrame(frame);
+  }
+
+  function startStream() {
+    if (!media.matches || !sessionName || !threadId || !available) return;
+    const nextKey = `${sessionName}:${threadId}`;
+    if (eventSource && streamKey === nextKey) return;
+    closeStream();
+    streamKey = nextKey;
+    const url = apiUrl(`/api/conversations/${encodeURIComponent(sessionName)}/stream`);
+    url.searchParams.set('thread', threadId);
+    eventSource = new EventSource(url);
+    eventSource.addEventListener('conversation', (event) => {
+      try {
+        const payload = JSON.parse(event.data);
+        if (payload.conversation?.thread?.id !== threadId) return;
+        providerId = payload.conversation.provider.id;
+        render(payload.conversation, { animate: true });
+      } catch {
+        schedule();
+      }
+    });
+    eventSource.addEventListener('open', () => clearTimeout(refreshTimer));
+    eventSource.addEventListener('error', () => {
+      state.textContent = 'Reconnecting';
+      state.dataset.state = 'working';
+      schedule();
+    });
+  }
+
+  function detail(panel, label, value, className = '') {
+    if (value === undefined || value === null || value === '') return;
+    const section = element('section', `mobile-event-detail ${className}`.trim());
+    section.append(element('small', '', label), element('pre', '', String(value)));
+    panel.append(section);
+  }
+
+  function eventDetails(panel, item) {
+    if (item.type === 'thought' || item.type === 'recap' || item.type === 'event') {
+      detail(panel, item.type === 'thought' ? 'Reasoning' : 'Details', item.text);
+    }
+    if (item.type === 'permission') detail(panel, 'Request', item.text || item.title);
+    if (item.type === 'tool') {
+      detail(panel, 'Input', item.input);
+      detail(panel, 'Locations', item.locations?.join('\n'));
+      detail(panel, 'Output', item.output);
+      for (const change of item.diffs || []) {
+        detail(panel, `Before · ${change.path}`, change.oldText, 'mobile-event-diff');
+        detail(panel, `After · ${change.path}`, change.newText, 'mobile-event-diff mobile-event-diff-after');
+      }
+      for (const output of item.images || []) {
+        const image = element('img', 'mobile-event-image');
+        image.alt = `${item.title || 'Tool'} output`;
+        image.loading = 'lazy';
+        image.src = `data:${output.mimeType};base64,${output.data}`;
+        panel.append(image);
+      }
+    }
+    if (item.type === 'plan') {
+      const list = element('ol', 'mobile-plan-list');
+      for (const entry of item.entries || []) {
+        const row = element('li');
+        row.dataset.state = entry.status;
+        row.append(
+          element('i'),
+          element('span', '', entry.content),
+          element('small', '', statusLabel(entry.status)),
+        );
+        list.append(row);
+      }
+      panel.append(list);
+    }
+    if (item.type === 'goal') {
+      detail(panel, 'Objective', item.objective);
+      detail(panel, 'Phase', item.phase);
+      if (item.progress) detail(panel, 'Deliverables', `${metric(item.progress.completed)} / ${metric(item.progress.total)}`);
+      if (item.metrics) detail(panel, 'Usage', [
+        `${metric(item.metrics.tokensUsed)} tokens`,
+        duration(item.metrics.elapsedMs),
+        `${metric(item.metrics.workerRounds)} worker rounds`,
+        `${metric(item.metrics.verifyRounds)} verify rounds`,
+      ].join(' · '));
+      detail(panel, 'Latest event', item.lastEvent);
+    }
+    if (item.type === 'task') {
+      detail(panel, 'Command', item.command);
+      detail(panel, 'Directory', item.cwd);
+      detail(panel, 'Output', item.output);
+      detail(panel, 'Output file', item.outputFile);
+      if (item.exitCode !== undefined) detail(panel, 'Exit code', item.exitCode);
+    }
+    if (item.type === 'turn') {
+      detail(panel, 'Stop reason', item.stopReason);
+      if (item.usage) detail(panel, 'Usage', [
+        `${metric(item.usage.inputTokens)} in`,
+        `${metric(item.usage.outputTokens)} out`,
+        `${metric(item.usage.totalTokens)} total`,
+        `${metric(item.usage.cachedReadTokens)} cached`,
+        `${metric(item.usage.modelCalls)} calls`,
+        duration(item.usage.apiDurationMs),
+      ].join(' · '));
+    }
+    if (!panel.childNodes.length) detail(panel, 'Details', 'No additional details');
+  }
+
+  function permissionActions(item, status) {
+    const actions = element('div', 'mobile-permission-actions');
+    for (const option of item.options || []) {
+      const button = element('button', '', option.label);
+      button.type = 'button';
+      button.dataset.kind = option.kind || '';
+      button.dataset.optionId = option.id;
+      button.addEventListener('click', async () => {
+        for (const sibling of actions.querySelectorAll('button')) sibling.disabled = true;
+        try {
+          await respondPermission(sessionName, item.permissionId, option.id);
+          status.textContent = 'Permission sent';
+          status.dataset.state = 'working';
+        } catch (error) {
+          for (const sibling of actions.querySelectorAll('button')) sibling.disabled = false;
+          status.textContent = error.message || 'Permission failed';
+          status.dataset.state = 'error';
+          void refresh();
+        }
+      });
+      actions.append(button);
+    }
+    return actions;
+  }
+
+  function permissionDockNode(item) {
+    const card = element('section', 'mobile-interaction-card mobile-interaction-permission');
+    card.dataset.permissionId = item.permissionId;
+    card.dataset.state = item.status || 'pending';
+    const header = element('header', 'mobile-question-header');
+    const copy = element('span');
+    copy.append(element('small', '', 'Grok needs permission'), element('strong', '', item.title || 'Permission required'));
+    const status = element('span', 'mobile-question-status', statusLabel(item.status));
+    status.dataset.state = item.status || 'pending';
+    header.append(copy, status);
+    card.append(header);
+    if (item.text) card.append(element('p', 'mobile-interaction-request', item.text));
+    card.append(permissionActions(item, status));
+    return card;
+  }
+
+  function eventNode(item) {
+    const card = element('article', `mobile-event-card mobile-event-${item.type}`);
+    card.dataset.kind = item.kind || item.type;
+    card.dataset.state = item.status || 'completed';
+    const toggle = element('button', 'mobile-event-toggle');
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', String(expandedItems.has(item.id)));
+    const copy = element('span');
+    copy.append(
+      element('small', '', item.kind || item.type),
+      element('strong', '', item.title || 'Event'),
+    );
+    const state = element('span', 'mobile-event-status', statusLabel(item.status));
+    state.dataset.state = item.status;
+    const arrow = element('i', '', '›');
+    const panel = element('div', 'mobile-event-panel');
+    panel.hidden = !expandedItems.has(item.id);
+    eventDetails(panel, item);
+    toggle.append(copy, state, arrow);
+    toggle.addEventListener('click', () => {
+      if (expandedItems.has(item.id)) expandedItems.delete(item.id);
+      else expandedItems.add(item.id);
+      const open = expandedItems.has(item.id);
+      toggle.setAttribute('aria-expanded', String(open));
+      panel.hidden = !open;
+    });
+    card.append(toggle, panel);
+    if (item.type === 'permission' && item.status === 'pending') {
+      card.append(permissionActions(item, state));
+    } else if (item.type === 'permission' && item.selectedLabel) {
+      card.append(element('div', 'mobile-permission-result', item.selectedLabel));
+    }
+    return card;
+  }
+
+  function updateQuestionState(questionId, next) {
+    pendingQuestions.set(questionId, next);
+    questionStateVersion += 1;
+  }
+
+  function questionAnswerValues(fieldset) {
+    const selected = Array.from(fieldset.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
+      .filter((control) => control.checked)
+      .map((control) => control.dataset.other === 'true'
+        ? fieldset.querySelector('[data-question-custom]')?.value.trim()
+        : control.value)
+      .filter(Boolean);
+    return selected;
+  }
+
+  function keepCustomOptionVisible(customInput) {
+    const reveal = () => customInput.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    reveal();
+    window.visualViewport?.addEventListener('resize', reveal, { once: true });
+  }
+
+  function questionNode(item, { docked = false } = {}) {
+    const localState = pendingQuestions.get(item.questionId);
+    const resolved = !['calling', 'pending', 'working'].includes(item.status);
+    if (resolved || item.answers || item.answerSummary) pendingQuestions.delete(item.questionId);
+    const pending = resolved ? undefined : localState;
+    const submitting = pending?.status === 'submitting';
+    const card = element('article', 'mobile-question-card');
+    if (docked) card.classList.add('mobile-question-docked');
+    card.dataset.questionId = item.questionId;
+    card.dataset.state = submitting ? 'working' : item.status || 'pending';
+    const header = element('header', 'mobile-question-header');
+    const copy = element('span');
+    copy.append(element('small', '', 'Grok needs your input'), element('strong', '', item.title || 'Question'));
+    const status = element('span', 'mobile-question-status', submitting ? 'Sending…' : statusLabel(item.status));
+    status.dataset.state = submitting ? 'working' : item.status || 'pending';
+    header.append(copy, status);
+    card.append(header);
+
+    if (resolved || item.answers || item.answerSummary) {
+      const summary = item.answerSummary || Object.values(item.answers || {}).flat().filter(Boolean).join(' · ');
+      if (summary) card.append(element('p', 'mobile-question-summary', summary));
+      return card;
+    }
+    if (item.status === 'calling') {
+      card.append(element('p', 'mobile-question-live', 'Preparing choices…'));
+      return card;
+    }
+    if (!(item.questions || []).length) {
+      card.append(element('p', 'mobile-question-live', 'Preparing choices…'));
+      return card;
+    }
+
+    const questions = item.questions || [];
+    const lastStep = Math.max(questions.length - 1, 0);
+    const step = Math.min(Math.max(pending?.step || 0, 0), lastStep);
+    const question = questions[step];
+    const form = element('form', 'mobile-question-form');
+    form.append(element('p', 'mobile-question-progress', `Question ${step + 1} of ${questions.length}`));
+    const live = element('p', 'mobile-question-live');
+    live.setAttribute('aria-live', 'polite');
+    if (pending?.status === 'failed') live.textContent = pending.error || 'Could not send your answer. Try again.';
+    const fieldset = element('fieldset', 'mobile-question-fieldset');
+    const legend = element('legend', '', question?.question || `Question ${step + 1}`);
+    fieldset.append(legend);
+    const options = element('div', 'mobile-question-options');
+    const inputType = question?.multiSelect ? 'checkbox' : 'radio';
+    const name = `question-${item.questionId}-${step}`;
+    for (const [optionIndex, option] of (question?.options || []).entries()) {
+      const label = element('label', 'mobile-question-option');
+      const control = element('input');
+      control.type = inputType;
+      control.name = name;
+      control.value = option.label || `Option ${optionIndex + 1}`;
+      control.disabled = submitting;
+      control.checked = Boolean(pending?.values?.[question.question]?.includes(control.value));
+      const copy = element('span');
+      copy.append(element('strong', '', option.label || `Option ${optionIndex + 1}`));
+      if (option.description) copy.append(element('small', '', option.description));
+      if (option.preview) copy.append(element('code', '', option.preview));
+      label.append(control, copy);
+      options.append(label);
+    }
+    const other = element('label', 'mobile-question-option mobile-question-other');
+    const otherControl = element('input');
+    otherControl.type = inputType;
+    otherControl.name = name;
+    otherControl.value = 'Other';
+    otherControl.dataset.other = 'true';
+    otherControl.disabled = submitting;
+    const otherCopy = element('span');
+    otherCopy.append(element('strong', '', 'Other'));
+    const custom = element('input', 'mobile-question-custom');
+    custom.type = 'text';
+    custom.placeholder = 'Add your own answer';
+    custom.setAttribute('aria-label', `Other answer for ${question?.question || `question ${step + 1}`}`);
+    custom.dataset.questionCustom = 'true';
+    custom.disabled = submitting;
+    custom.value = pending?.customs?.[question?.question] || '';
+    otherControl.checked = Boolean(custom.value);
+    custom.addEventListener('focus', () => {
+      otherControl.checked = true;
+      updateValidity();
+      keepCustomOptionVisible(custom);
+    });
+    otherCopy.append(custom);
+    other.append(otherControl, otherCopy);
+    options.append(other);
+    fieldset.append(options);
+    form.append(fieldset);
+    const actions = element('div', 'mobile-question-actions');
+    actions.dataset.firstStep = String(step === 0);
+    const back = element('button', 'mobile-question-back', 'Back');
+    back.type = 'button';
+    back.hidden = step === 0;
+    back.disabled = submitting;
+    const skip = element('button', 'mobile-question-skip', 'Skip');
+    skip.type = 'button';
+    skip.disabled = submitting;
+    const submit = element('button', 'mobile-question-submit', step < lastStep ? 'Next' : pending?.status === 'failed' ? 'Try again' : 'Continue');
+    submit.type = step < lastStep ? 'button' : 'submit';
+    submit.disabled = true;
+    actions.append(back, skip, submit);
+    form.append(live, actions);
+
+    function updateValidity() {
+      submit.disabled = submitting || questionAnswerValues(fieldset).length === 0;
+    }
+
+    function rememberSelections() {
+      if (submitting) return;
+      const previous = pendingQuestions.get(item.questionId);
+      updateQuestionState(item.questionId, {
+        status: previous?.status === 'failed' ? 'failed' : 'editing',
+        step,
+        values: { ...previous?.values, [question.question]: questionAnswerValues(fieldset) },
+        customs: { ...previous?.customs, [question.question]: custom.value.trim() },
+        ...(previous?.error ? { error: previous.error } : {}),
+      });
+    }
+
+    function showStep(nextStep) {
+      const previous = pendingQuestions.get(item.questionId) || {};
+      const { error, ...editable } = previous;
+      updateQuestionState(item.questionId, { ...editable, status: 'editing', step: nextStep });
+      renderedSignature = '';
+      if (lastConversation) render(lastConversation);
+    }
+
+    async function submitQuestion(outcome) {
+      if (submitting) return;
+      const values = { ...pending?.values, [question.question]: questionAnswerValues(fieldset) };
+      const customs = { ...pending?.customs, [question.question]: custom.value.trim() };
+      const answers = Object.fromEntries(Object.entries(values).map(([question, selected]) => [question, selected.join(', ')]));
+      updateQuestionState(item.questionId, { status: 'submitting', step, values, customs });
+      renderedSignature = '';
+      if (lastConversation) render(lastConversation);
+      try {
+        await respondQuestion(sessionName, item.threadId || threadId, item.questionId, answers, outcome);
+      } catch (error) {
+        updateQuestionState(item.questionId, {
+          ...pendingQuestions.get(item.questionId), status: 'failed', error: error.message,
+        });
+        renderedSignature = '';
+        if (lastConversation) render(lastConversation);
+        void refresh();
+      }
+    }
+
+    form.addEventListener('input', () => { updateValidity(); rememberSelections(); });
+    form.addEventListener('change', () => { updateValidity(); rememberSelections(); });
+    back.addEventListener('click', () => {
+      rememberSelections();
+      showStep(step - 1);
+    });
+    if (step < lastStep) submit.addEventListener('click', () => {
+      if (!submit.disabled) {
+        rememberSelections();
+        showStep(step + 1);
+      }
+    });
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (!submit.disabled) void submitQuestion('accepted');
+    });
+    skip.addEventListener('click', () => void submitQuestion('skip_interview'));
+    updateValidity();
+    card.append(form);
+    return card;
+  }
+
+  function toolGroupNode(item) {
+    const group = element('article', 'mobile-tool-group');
+    group.dataset.state = item.status || 'completed';
+    const toggle = element('button', 'mobile-tool-group-toggle');
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', String(expandedItems.has(item.id)));
+    toggle.append(
+      element('i', '', '›'),
+      element('strong', '', item.title || `${item.tools?.length || 0} tools`),
+      element('small', '', statusLabel(item.status)),
+    );
+    const panel = element('div', 'mobile-tool-group-panel');
+    panel.hidden = !expandedItems.has(item.id);
+    for (const tool of item.tools || []) {
+      const displayTitle = tool.subject && !tool.title?.includes(tool.subject)
+        ? [tool.title, tool.subject].filter(Boolean).join(' ')
+        : tool.title;
+      const nested = eventNode({
+        ...tool,
+        title: displayTitle,
+      });
+      panel.append(nested);
+    }
+    toggle.addEventListener('click', () => {
+      if (expandedItems.has(item.id)) expandedItems.delete(item.id);
+      else expandedItems.add(item.id);
+      const open = expandedItems.has(item.id);
+      toggle.setAttribute('aria-expanded', String(open));
+      panel.hidden = !open;
+    });
+    group.append(toggle, panel);
+    return group;
+  }
+
+  function pendingInteraction(item) {
+    if (item.type === 'permission') return item.status === 'pending';
+    return item.type === 'question' && ['calling', 'pending', 'working'].includes(item.status);
+  }
+
+  function attachmentNode(attachment, { removable = false } = {}) {
+    const item = element('div', 'mobile-conversation-attachment');
+    if (/^image\/(?:png|jpeg|webp|gif)$/.test(attachment.mimeType || '') && attachment.previewUrl) {
+      const image = document.createElement('img');
+      image.src = apiUrl(attachment.previewUrl);
+      image.alt = attachment.name || 'Attached image';
+      item.append(image);
+    } else item.append(element('span', '', attachment.name?.split('.').pop()?.toUpperCase() || 'FILE'));
+    item.append(element('small', '', attachment.name || 'Attachment'));
+    if (removable) {
+      const remove = element('button', '', '×');
+      remove.type = 'button';
+      remove.setAttribute('aria-label', `Remove ${attachment.name}`);
+      remove.addEventListener('click', () => {
+        attachments = attachments.filter((value) => value.id !== attachment.id);
+        renderAttachmentTray();
+        autoSizeInput();
+      });
+      item.append(remove);
+    }
+    return item;
+  }
+
+  function renderAttachmentTray() {
+    attachmentTray.hidden = attachments.length === 0 && uploadingAttachments === 0;
+    const fragment = document.createDocumentFragment();
+    for (const attachment of attachments) fragment.append(attachmentNode(attachment, { removable: true }));
+    if (uploadingAttachments) fragment.append(element('div', 'mobile-conversation-uploading', 'Uploading…'));
+    attachmentTray.replaceChildren(fragment);
+    attachButton.disabled = uploadingAttachments > 0 || attachments.length >= 8;
+  }
+
+  function renderQueue(conversation) {
+    const entries = Array.isArray(conversation.queue) ? conversation.queue : [];
+    queue.hidden = entries.length === 0;
+    if (!entries.length) {
+      queue.replaceChildren();
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    fragment.append(element('small', 'mobile-conversation-queue-title', `${entries.length} queued`));
+    for (const entry of entries) {
+      const row = element('article', 'mobile-conversation-queue-item');
+      const copy = element('div', 'mobile-conversation-queue-copy');
+      copy.append(element('span', '', '↳'), element('p', '', entry.text));
+      const previews = element('div', 'mobile-conversation-queue-attachments');
+      for (const attachment of entry.attachments || []) previews.append(attachmentNode(attachment));
+      if (previews.childNodes.length) copy.append(previews);
+      const actions = element('div', 'mobile-conversation-queue-actions');
+      const steer = element('button', '', '↪ Steer');
+      steer.type = 'button';
+      steer.addEventListener('click', async () => {
+        steer.disabled = true;
+        try { await steerQueuedInput(sessionName, entry.id); }
+        catch (error) {
+          state.textContent = error.message || 'Steer failed';
+          state.dataset.state = 'error';
+          steer.disabled = false;
+        }
+      });
+      const remove = element('button', '', '⌫');
+      remove.type = 'button';
+      remove.setAttribute('aria-label', 'Delete queued message');
+      remove.addEventListener('click', async () => {
+        remove.disabled = true;
+        try { await removeQueuedInput(sessionName, entry.id); }
+        catch (error) {
+          state.textContent = error.message || 'Delete failed';
+          state.dataset.state = 'error';
+          remove.disabled = false;
+        }
+      });
+      actions.append(steer, remove);
+      row.append(copy, actions);
+      fragment.append(row);
+    }
+    queue.replaceChildren(fragment);
+  }
+
+  function renderInteraction(conversation, isRoot) {
+    if (!isRoot) return;
+    const interaction = conversation.capabilities.send
+      ? [...(conversation.items || [])].reverse().find(pendingInteraction)
+      : undefined;
+    if (!interaction) {
+      interactionDock.hidden = true;
+      interactionDock.removeAttribute('data-kind');
+      interactionDock.replaceChildren();
+      composer.hidden = !conversation.capabilities.send;
+      if (composer.hidden) closeModelList();
+      return;
+    }
+    closeAllLists();
+    composer.hidden = true;
+    interactionDock.hidden = false;
+    interactionDock.dataset.kind = interaction.type;
+    interactionDock.replaceChildren(interaction.type === 'question'
+      ? questionNode(interaction, { docked: true })
+      : permissionDockNode(interaction));
+  }
+
+  function messageNode(item, conversation, { suppressPendingInteractions = false } = {}) {
+    if (item.type === 'message') {
+      const article = element('article', `mobile-message mobile-message-${item.role}`);
+      article.dataset.messageId = item.id;
+      const author = item.role === 'user'
+        ? item.pendingStatus === 'sending' ? 'Sending…'
+          : item.pendingStatus === 'accepted' ? 'Waiting for Grok…' : 'You'
+        : conversation.provider.label;
+      article.append(
+        element('span', 'mobile-message-author', author),
+        element('div', 'mobile-message-content', item.text),
+      );
+      return article;
+    }
+    if (item.type === 'tool_group') return toolGroupNode(item);
+    if (suppressPendingInteractions && pendingInteraction(item)) return document.createDocumentFragment();
+    if (item.type === 'question') return questionNode(item);
+    if (item.type === 'turn' || item.type === 'recap') return document.createDocumentFragment();
+    if (item.type === 'subagent') return document.createDocumentFragment();
+    return eventNode(item);
+  }
+
+  function render(conversation, { animate = false } = {}) {
+    const previousConversation = lastConversation;
+    lastConversation = conversation;
+    const isRoot = !conversation.parent && conversation.thread.id === rootThreadId;
+    if (isRoot) rootConversation = conversation;
+    const targetMessages = isRoot ? messages : sheetMessages || messages;
+    // Follow new output only while the reader is actually at the bottom. A
+    // generous "near bottom" threshold makes short mobile histories snap back
+    // down on every streamed update and effectively prevents scrolling.
+    const atBottom = targetMessages.scrollHeight - targetMessages.scrollTop - targetMessages.clientHeight <= 1;
+    const signature = JSON.stringify({
+      thread: conversation.thread,
+      items: conversation.items,
+      children: conversation.children,
+      controls: conversation.controls,
+      context: conversation.context,
+      queue: conversation.queue,
+      pending: pendingMessage,
+      attachments,
+      uploadingAttachments,
+      questions: questionStateVersion,
+    });
+    if (signature === renderedSignature) return;
+    stopReveal();
+    renderedSignature = signature;
+    if (isRoot) {
+      title.textContent = conversation.thread.title;
+      meta.textContent = [conversation.thread.agentName, conversation.thread.model].filter(Boolean).join(' · ');
+      state.textContent = statusLabel(conversation.thread.status);
+      state.dataset.state = conversation.thread.status;
+      onStatusChange(sessionName, conversation.thread.status);
+      renderModelControls(conversation);
+      renderChoiceControls(conversation);
+      renderQueue(conversation);
+    } else if (sheet) {
+      sheetTitle.textContent = conversation.thread.title;
+      sheetMeta.textContent = [conversation.thread.agentName, conversation.thread.model].filter(Boolean).join(' · ');
+      sheetState.textContent = statusLabel(conversation.thread.status);
+      sheetState.dataset.state = conversation.thread.status;
+    }
+    parentId = conversation.parent?.id;
+    back.hidden = true;
+    renderInteraction(conversation, isRoot);
+    input.placeholder = `Message ${conversation.provider.label}…`;
+
+    const previousMessages = new Map((previousConversation?.items || [])
+      .filter((item) => item.type === 'message')
+      .map((item) => [item.id, item.text]));
+    const reveals = [];
+    const fragment = document.createDocumentFragment();
+    for (const item of conversation.items) {
+      const node = messageNode(item, conversation, { suppressPendingInteractions: isRoot });
+      if (animate && item.type === 'message' && item.role === 'assistant') {
+        const previous = previousMessages.get(item.id) || '';
+        if (item.text.startsWith(previous) && item.text.length > previous.length) {
+          const content = node.querySelector('.mobile-message-content');
+          content.textContent = previous;
+          reveals.push({ content, prefix: previous, target: item.text });
+        }
+      }
+      fragment.append(node);
+    }
+    if (isRoot) renderSubagentPill(conversation);
+    const pendingAlreadyStored = pendingMessage && conversation.items.some(
+      (item) => item.type === 'message' && item.role === 'user' &&
+        (pendingMessage.text ? item.text.includes(pendingMessage.text) :
+          pendingMessage.attachments?.every((attachment) => item.text.includes(attachment.name))),
+    );
+    if (pendingAlreadyStored) {
+      clearTimeout(pendingAcceptanceTimer);
+      pendingMessage = undefined;
+      pendingQuestions.clear();
+    }
+    if (pendingMessage) {
+      const pending = messageNode({
+        id: 'pending', type: 'message', role: 'user', text: pendingMessage.text,
+        pendingStatus: pendingMessage.status,
+      }, conversation);
+      pending.dataset.pending = 'true';
+      if (pendingMessage.status === 'failed') {
+        pending.querySelector('.mobile-message-author').textContent = 'Not received · tap to retry';
+        pending.addEventListener('click', () => {
+          input.value = pendingMessage.text || '';
+          attachments = pendingMessage.attachments?.slice() || [];
+          mentionedFiles.clear();
+          for (const path of pendingMessage.fileMentions || []) mentionedFiles.add(path);
+          pendingMessage = undefined;
+          renderAttachmentTray();
+          autoSizeInput();
+          renderedSignature = '';
+          render(conversation);
+          input.focus({ preventScroll: true });
+        });
+      }
+      fragment.append(pending);
+    }
+    if (!fragment.childNodes.length) fragment.append(element('div', 'mobile-conversation-loading', 'No messages yet'));
+    targetMessages.replaceChildren(fragment);
+    if (atBottom || pendingMessage) targetMessages.scrollTop = targetMessages.scrollHeight;
+    // Grok's interactive TUI currently persists one whole assistant block at
+    // the end of a turn rather than token deltas. Reveal only the newly
+    // persisted suffix so live replies still grow naturally on a phone. If a
+    // future Grok version persists smaller chunks, this same path appends each
+    // chunk without replaying the existing prefix.
+    if (reveals.length) {
+      for (const reveal of reveals.slice(0, -1)) reveal.content.textContent = reveal.target;
+      const latest = reveals.at(-1);
+      revealText(latest.content, latest.prefix, latest.target, atBottom, targetMessages);
+    }
+    if (isRoot && !sheet?.hidden && sheetMode === 'list') renderSubagentList(conversation);
+  }
+
+  async function refresh() {
+    const currentGeneration = generation;
+    if (!media.matches || !sessionName) return setAvailable(false);
+    const query = threadId ? `?thread=${encodeURIComponent(threadId)}` : '';
+    try {
+      const payload = await api(`/api/conversations/${encodeURIComponent(sessionName)}${query}`);
+      if (currentGeneration !== generation) return;
+      const conversation = payload.conversation;
+      providerId = conversation.provider.id;
+      threadId = conversation.thread.id;
+      if (!rootThreadId && !conversation.parent) rootThreadId = conversation.thread.id;
+      setAvailable(true);
+      render(conversation);
+      startStream();
+    } catch (error) {
+      if (currentGeneration !== generation) return;
+      if (error.code === 'CONVERSATION_UNAVAILABLE') {
+        threadId = undefined;
+        setAvailable(false);
+      } else if (available) {
+        state.textContent = 'Reconnecting';
+        state.dataset.state = 'working';
+        // A freshly spawned subagent can be announced before its summary and
+        // update files are atomically visible. Keep opening it until the
+        // provider graph includes the child instead of leaving a dead screen.
+        schedule(1_000);
+      }
+    }
+  }
+
+  function autoSizeInput() {
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, 132)}px`;
+    sendButton.disabled = (!input.value.trim() && attachments.length === 0) || uploadingAttachments > 0;
+  }
+
+  composer.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if ((!text && attachments.length === 0) || !sessionName || !providerId || uploadingAttachments) return;
+    const sentAttachments = attachments.slice();
+    const sentFileMentions = [...mentionedFiles].filter((path) => text.includes(`@${path}`));
+    const pendingText = text || sentAttachments.map((attachment) => attachment.name).join(', ');
+    pendingMessage = {
+      text: pendingText, attachments: sentAttachments, fileMentions: sentFileMentions,
+      sentAt: Date.now(), status: 'sending',
+    };
+    input.value = '';
+    attachments = [];
+    mentionedFiles.clear();
+    closeSuggestions();
+    renderAttachmentTray();
+    autoSizeInput();
+    renderedSignature = '';
+    if (lastConversation) render(lastConversation);
+    try {
+      const result = await send(
+        sessionName, text, sentAttachments.map((attachment) => attachment.id), sentFileMentions,
+      );
+      if (result?.queued) {
+        pendingMessage = undefined;
+        clearTimeout(pendingAcceptanceTimer);
+      } else {
+        if (pendingMessage?.text === pendingText) pendingMessage.status = 'accepted';
+        clearTimeout(pendingAcceptanceTimer);
+        pendingAcceptanceTimer = setTimeout(() => {
+          if (pendingMessage?.text !== pendingText || pendingMessage.status !== 'accepted') return;
+          pendingMessage.status = 'failed';
+          renderedSignature = '';
+          if (lastConversation) render(lastConversation);
+          state.textContent = 'Grok did not receive the message';
+          state.dataset.state = 'error';
+        }, 10_000);
+      }
+      state.textContent = 'Queued';
+      state.dataset.state = 'working';
+      renderedSignature = '';
+      if (lastConversation) render(lastConversation);
+      void refresh();
+    } catch (error) {
+      pendingMessage = undefined;
+      attachments = [];
+      uploadingAttachments = 0;
+      renderAttachmentTray();
+      pendingQuestions.clear();
+      input.value = text;
+      attachments = sentAttachments;
+      for (const path of sentFileMentions) mentionedFiles.add(path);
+      renderAttachmentTray();
+      autoSizeInput();
+      renderedSignature = '';
+      if (lastConversation) render(lastConversation);
+      state.textContent = error.message || 'Send failed';
+      state.dataset.state = 'error';
+    } finally {
+      input.focus({ preventScroll: true });
+    }
+  });
+  input.addEventListener('input', () => {
+    autoSizeInput();
+    updateSuggestions();
+  });
+  input.addEventListener('click', updateSuggestions);
+  attachButton.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const files = [...fileInput.files].slice(0, Math.max(0, 8 - attachments.length));
+    fileInput.value = '';
+    if (!files.length || !sessionName) return;
+    uploadingAttachments += files.length;
+    renderAttachmentTray();
+    autoSizeInput();
+    for (const file of files) {
+      try {
+        if (file.size > 20 * 1024 * 1024) throw new Error(`${file.name} is larger than 20 MB`);
+        attachments.push(await uploadAttachment(sessionName, file));
+      } catch (error) {
+        state.textContent = error.message || 'Upload failed';
+        state.dataset.state = 'error';
+      } finally {
+        uploadingAttachments -= 1;
+        renderAttachmentTray();
+        autoSizeInput();
+      }
+    }
+  });
+  modelButton.addEventListener('click', () => {
+    if (modelButton.disabled) return;
+    const opening = modelList.hidden;
+    closeAuxiliaryLists();
+    closeSuggestions();
+    modelList.hidden = !opening;
+    modelButton.setAttribute('aria-expanded', String(opening));
+    if (opening) modelList.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+  });
+  function toggleAuxiliaryList(button, list) {
+    if (button.disabled) return;
+    const opening = list.hidden;
+    closeAllLists();
+    list.hidden = !opening;
+    button.setAttribute('aria-expanded', String(opening));
+    if (opening) list.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+  }
+  modeButton.addEventListener('click', () => toggleAuxiliaryList(modeButton, modeList));
+  permissionModeButton.addEventListener('click', () =>
+    toggleAuxiliaryList(permissionModeButton, permissionModeList));
+  modelList.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    closeModelList({ focus: true });
+  });
+  document.addEventListener('pointerdown', dismissModelList);
+  document.addEventListener('pointerdown', (event) => {
+    if (modeList.contains(event.target) || modeButton.contains(event.target) ||
+        permissionModeList.contains(event.target) || permissionModeButton.contains(event.target)) return;
+    closeAuxiliaryLists();
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (suggestions.contains(event.target) || input.contains(event.target)) return;
+    closeSuggestions();
+  });
+  input.addEventListener('keydown', (event) => {
+    if (!suggestions.hidden && suggestionItems.length) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const direction = event.key === 'ArrowDown' ? 1 : -1;
+        suggestionIndex = (suggestionIndex + direction + suggestionItems.length) % suggestionItems.length;
+        paintSuggestions();
+        return;
+      }
+      if ((event.key === 'Enter' && !event.isComposing) || event.key === 'Tab') {
+        event.preventDefault();
+        acceptSuggestion();
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeSuggestions();
+        return;
+      }
+    }
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing &&
+        matchMedia('(hover: hover) and (pointer: fine)').matches) {
+      event.preventDefault();
+      composer.requestSubmit();
+    }
+  });
+  input.addEventListener('keyup', (event) => {
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateSuggestions();
+  });
+  back.addEventListener('click', () => {
+    if (!parentId) return;
+    closeStream();
+    threadId = parentId;
+    renderedSignature = '';
+    messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Back to parent…'));
+    void refresh();
+  });
+  media.addEventListener('change', () => {
+    generation += 1;
+    closeStream();
+    closeAllLists();
+    mentionedFiles.clear();
+    threadId = undefined;
+    renderedSignature = '';
+    if (media.matches && sessionName) {
+      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Loading conversation…'));
+      setAvailable(true);
+      void refresh();
+    } else setAvailable(false);
+  });
+  autoSizeInput();
+
+  return {
+    showPending(nextSessionName) {
+      if (!media.matches || !nextSessionName) return setAvailable(false);
+      if (sessionName === nextSessionName && available) return;
+      generation += 1;
+      clearTimeout(refreshTimer);
+      closeStream();
+      sessionName = nextSessionName;
+      threadId = undefined;
+      rootThreadId = undefined;
+      rootConversation = undefined;
+      clearSubagentPill();
+      parentId = undefined;
+      providerId = undefined;
+      pendingMessage = undefined;
+      attachments = [];
+      mentionedFiles.clear();
+      uploadingAttachments = 0;
+      renderAttachmentTray();
+      lastConversation = undefined;
+      renderedSignature = '';
+      modelOptionsSignature = '';
+      closeAllLists();
+      title.textContent = 'New Grok chat';
+      meta.textContent = 'Starting ACP session';
+      state.textContent = 'Connecting';
+      state.dataset.state = 'working';
+      composer.hidden = true;
+      context.hidden = true;
+      modelButton.hidden = true;
+      modeButton.hidden = true;
+      permissionModeButton.hidden = true;
+      queue.hidden = true;
+      queue.replaceChildren();
+      interactionDock.hidden = true;
+      interactionDock.replaceChildren();
+      back.hidden = true;
+      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Connecting to Grok…'));
+      setAvailable(true);
+    },
+    select(nextSessionName) {
+      if (sessionName === (nextSessionName || undefined)) return;
+      generation += 1;
+      clearTimeout(refreshTimer);
+      closeStream();
+      sessionName = nextSessionName || undefined;
+      threadId = undefined;
+      rootThreadId = undefined;
+      rootConversation = undefined;
+      clearSubagentPill();
+      parentId = undefined;
+      providerId = undefined;
+      pendingMessage = undefined;
+      attachments = [];
+      mentionedFiles.clear();
+      uploadingAttachments = 0;
+      renderAttachmentTray();
+      clearTimeout(pendingAcceptanceTimer);
+      clearTimeout(suggestionTimer);
+      lastConversation = undefined;
+      renderedSignature = '';
+      modelOptionsSignature = '';
+      closeAllLists();
+      interactionDock.hidden = true;
+      interactionDock.replaceChildren();
+      composer.hidden = true;
+      context.hidden = true;
+      modelButton.hidden = true;
+      modeButton.hidden = true;
+      permissionModeButton.hidden = true;
+      queue.hidden = true;
+      queue.replaceChildren();
+      if (!sessionName || !media.matches) return setAvailable(false);
+      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Loading conversation…'));
+      // Claim the mobile surface while provider detection is in flight. This
+      // prevents the terminal transport from briefly attaching (and resizing)
+      // the shared tmux pane before native history is ready.
+      setAvailable(true);
+      void refresh();
+    },
+    isVisibleFor(name) {
+      return available && media.matches && name === sessionName;
+    },
+    destroy() {
+      generation += 1;
+      clearTimeout(refreshTimer);
+      clearTimeout(pendingAcceptanceTimer);
+      stopReveal();
+      closeStream();
+      document.removeEventListener('pointerdown', dismissModelList);
+    },
+  };
+}

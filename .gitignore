@@ -1,0 +1,8 @@
+node_modules/
+playwright-report/
+test-results/
+.DS_Store
+.env
+src-tauri/binaries/
+src-tauri/gen/
+src-tauri/target/

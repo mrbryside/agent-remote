@@ -1,0 +1,39 @@
+#!/usr/bin/env node
+import { appendFileSync } from 'node:fs';
+
+const args = process.argv.slice(2);
+const signalFile = process.env.CLOUDFLARED_SIGNAL_FILE;
+
+function record(value) {
+  if (signalFile) appendFileSync(signalFile, `${value}\n`);
+}
+
+if (args.length === 1 && args[0] === '--version') {
+  process.stdout.write(`cloudflared version ${process.env.CLOUDFLARED_VERSION ?? '2025.4.0'}\n`);
+  process.exit(0);
+}
+
+for (const signal of ['SIGTERM', 'SIGHUP', 'SIGINT']) {
+  process.on(signal, () => {
+    record(signal);
+    if (process.env.CLOUDFLARED_IGNORE_TERM === '1') return;
+    process.exit(0);
+  });
+}
+
+const isQuick = args.includes('--url');
+const startupDelay = Number(process.env.CLOUDFLARED_START_DELAY_MS ?? 0);
+const exitDelay = Number(process.env.CLOUDFLARED_EXIT_DELAY_MS ?? 0);
+const exitCode = Number(process.env.CLOUDFLARED_EXIT_CODE ?? 0);
+
+if (process.env.CLOUDFLARED_NO_STARTUP !== '1') {
+  setTimeout(() => {
+    if (isQuick) {
+      process.stderr.write(`INF Your quick Tunnel has been created! Visit it at https://${process.env.CLOUDFLARED_QUICK_HOST ?? 'fake.trycloudflare.com'}\n`);
+    } else {
+      process.stderr.write('INF Registered tunnel connection\n');
+    }
+  }, startupDelay);
+}
+
+if (exitDelay > 0) setTimeout(() => process.exit(exitCode), exitDelay);

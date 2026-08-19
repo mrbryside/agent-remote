@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>Agent Remote remote access</title>
+    <link rel="stylesheet" href="/remote-entry.css">
+    <script type="module" src="/remote-entry.js"></script>
+  </head>
+  <body>
+    <main class="entry-shell" aria-labelledby="entry-title">
+      <section class="entry-card">
+        <p class="eyebrow">AGENT REMOTE</p>
+        <h1 id="entry-title">Remote access is locked</h1>
+        <p id="entry-message" class="entry-message">This device is not paired.</p>
+
+        <form id="pair-form" hidden>
+          <label for="device-name">Device name</label>
+          <input id="device-name" name="deviceName" type="text" maxlength="80" autocomplete="nickname" required>
+          <button id="pair-button" type="submit">Pair this device</button>
+        </form>
+
+        <p id="connecting" class="connecting" hidden aria-live="polite">Connecting securely…</p>
+        <p id="entry-detail" class="entry-detail" hidden></p>
+      </section>
+    </main>
+  </body>
+</html>

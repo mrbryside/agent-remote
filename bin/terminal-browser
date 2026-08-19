@@ -1,0 +1,244 @@
+#!/usr/bin/env node
+
+import { accessSync, constants, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { delimiter, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawn, spawnSync } from 'node:child_process';
+
+const ownFile = fileURLToPath(import.meta.url);
+const ownDir = dirname(ownFile);
+const args = process.argv.slice(2);
+
+function executable(candidate) {
+  if (!candidate || candidate === ownFile) return false;
+  try {
+    accessSync(candidate, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function findRealBinary() {
+  const explicit = process.env.TERMINAL_BROWSER_REAL;
+  if (executable(explicit)) return explicit;
+
+  const installedApp = join(homedir(), '.local', 'share', 'terminal-browser', 'app', 'bin', 'terminal-browser');
+  if (executable(installedApp)) return installedApp;
+
+  for (const directory of (process.env.PATH || '').split(delimiter)) {
+    if (!directory || directory === ownDir) continue;
+    const candidate = join(directory, 'terminal-browser');
+    if (executable(candidate)) return candidate;
+  }
+  return null;
+}
+
+function runReal(commandArgs = args) {
+  const binary = findRealBinary();
+  if (!binary) {
+    console.error('terminal-browser: real binary not found');
+    process.exitCode = 127;
+    return;
+  }
+  const child = spawn(binary, commandArgs, { stdio: 'inherit', env: process.env });
+  child.once('error', (error) => {
+    console.error(`terminal-browser: ${error.message}`);
+    process.exitCode = 1;
+  });
+  child.once('exit', (code, signal) => {
+    if (signal) process.kill(process.pid, signal);
+    else process.exitCode = code ?? 1;
+  });
+}
+
+function browserArguments() {
+  const forwarded = [];
+  const optionsWithValues = new Set(['--split', '--split-dir', '--size', '--parent-tty']);
+  for (let index = 0; index < args.length; index += 1) {
+    if (optionsWithValues.has(args[index])) {
+      index += 1;
+      continue;
+    }
+    if ([...optionsWithValues].some((option) => args[index].startsWith(`${option}=`))) continue;
+    forwarded.push(args[index]);
+  }
+  return ['terminal-browser', ...forwarded];
+}
+
+function tmuxOutput(args) {
+  const result = spawnSync(process.env.TMUX_COMMAND || 'tmux', args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  return result.status === 0 ? result.stdout.trim() : '';
+}
+
+function ancestorTtys() {
+  const ttys = new Set();
+  let pid = process.pid;
+  for (let depth = 0; depth < 16 && pid > 1; depth += 1) {
+    const result = spawnSync('ps', ['-o', 'ppid=,tty=', '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const match = result.stdout?.trim().match(/^(\d+)\s+(\S+)$/);
+    if (!match) break;
+    const tty = match[2];
+    if (tty !== '??' && tty !== '-') ttys.add(tty.split('/').at(-1));
+    pid = Number(match[1]);
+  }
+  return ttys;
+}
+
+function detectTmuxSession() {
+  const explicit = process.env.AGENT_REMOTE_SESSION;
+  if (explicit) return explicit;
+
+  if (process.env.TMUX_PANE) {
+    const session = tmuxOutput(['display-message', '-p', '-t', process.env.TMUX_PANE, '#{session_name}']);
+    if (session) return session;
+  }
+
+  const ttys = ancestorTtys();
+  if (ttys.size === 0) return '';
+  const panes = tmuxOutput(['list-panes', '-a', '-F', '#{pane_tty}\t#{session_name}']);
+  for (const line of panes.split('\n')) {
+    const [paneTty, session] = line.split('\t');
+    if (paneTty && session && ttys.has(paneTty.split('/').at(-1))) return session;
+  }
+  return '';
+}
+
+async function deliverToBackend(pathname, body) {
+  const base = process.env.AGENT_REMOTE_URL || 'http://127.0.0.1:3000';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1_500);
+  const headers = { 'content-type': 'application/json' };
+  if (process.env.AGENT_REMOTE_TOKEN) headers.authorization = `Bearer ${process.env.AGENT_REMOTE_TOKEN}`;
+
+  try {
+    const response = await fetch(new URL(pathname, base), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    let payload = null;
+    try { payload = await response.json(); } catch {}
+    return { payload };
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function browserTarget(session) {
+  const base = process.env.AGENT_REMOTE_URL || 'http://127.0.0.1:3000';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1_500);
+  const headers = {};
+  if (process.env.AGENT_REMOTE_TOKEN) headers.authorization = `Bearer ${process.env.AGENT_REMOTE_TOKEN}`;
+  try {
+    const endpoint = new URL('/api/control/browser-target', base);
+    if (session) endpoint.searchParams.set('session', session);
+    const response = await fetch(endpoint, { headers, signal: controller.signal });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function newTabUrl() {
+  for (let index = 1; index < args.length; index += 1) {
+    if (args[index] === '--browser') {
+      index += 1;
+      continue;
+    }
+    if (!args[index].startsWith('-')) return args[index];
+  }
+  return undefined;
+}
+
+function deliverOscFallback(argv) {
+  const request = Buffer.from(JSON.stringify({ argv })).toString('base64url');
+  const sequence = `\x1b]777;agent-remote-split:${request}\x1b\\`;
+  let control = sequence;
+  if (process.env.TMUX) {
+    spawnSync(process.env.TMUX_COMMAND || 'tmux', ['set-option', '-p', 'allow-passthrough', 'on'], { stdio: 'ignore' });
+    control = `\x1bPtmux;${sequence.replaceAll('\x1b', '\x1b\x1b')}\x1b\\`;
+  }
+  try {
+    writeFileSync('/dev/tty', control);
+  } catch {
+    process.stdout.write(control);
+  }
+}
+
+const opensBrowser = args[0] === 'open' || (
+  args[0] &&
+  !args[0].startsWith('-') &&
+  !['action', 'ls', 'new-tab', 'setup', 'shutdown', 'upgrade'].includes(args[0])
+);
+const opensTab = args[0] === 'new-tab' && !args.some((argument) =>
+  argument === '--browser' || argument.startsWith('--browser='),
+);
+const proxiesAction = args[0] === 'action' && !args.some((argument) =>
+  argument === '--browser' || argument.startsWith('--browser=') || argument === '--help' || argument === '-h',
+);
+if (process.env.AGENT_REMOTE_GRAPHICS === '1' || (!opensBrowser && !opensTab && !proxiesAction)) {
+  runReal();
+} else {
+  const session = detectTmuxSession();
+  const shouldRoute = process.env.AGENT_REMOTE_WEB === '1' || Boolean(session);
+  if (!shouldRoute) {
+    runReal();
+  } else {
+    if (proxiesAction) {
+      const target = await browserTarget(session);
+      if (target?.browserKey) runReal(['action', '--browser', target.browserKey, ...args.slice(1)]);
+      else runReal();
+    } else if (opensTab) {
+      const url = newTabUrl();
+      const payload = { action: 'new-tab' };
+      if (url) payload.url = url;
+      if (session) payload.session = session;
+      const delivered = await deliverToBackend('/api/control/browser-tab', payload);
+      if (delivered) {
+        process.stdout.write(delivered.payload?.reused
+          ? '\r\nFocused the existing agent-remote browser tab.\r\n'
+          : '\r\nOpened a new tab in the existing agent-remote browser pane.\r\n');
+      } else {
+        const argv = ['terminal-browser', 'open', ...(url ? [url] : [])];
+        const splitPayload = { argv };
+        if (session) splitPayload.session = session;
+        const opened = await deliverToBackend('/api/control/split', splitPayload);
+        if (opened || process.env.AGENT_REMOTE_WEB === '1') {
+          if (!opened) deliverOscFallback(argv);
+          process.stdout.write('\r\nOpened terminal-browser in the agent-remote right pane.\r\n');
+        } else {
+          runReal();
+        }
+      }
+    } else {
+      const argv = browserArguments();
+      const payload = { argv };
+      if (session) payload.session = session;
+      const delivered = await deliverToBackend('/api/control/split', payload);
+      if (delivered) {
+        process.stdout.write('\r\nOpened terminal-browser in the agent-remote right pane.\r\n');
+      } else if (process.env.AGENT_REMOTE_WEB === '1') {
+        deliverOscFallback(argv);
+        process.stdout.write('\r\nOpened terminal-browser in the agent-remote right pane.\r\n');
+      } else {
+        runReal();
+      }
+    }
+  }
+}

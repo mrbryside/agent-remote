@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Agent Remote",
+  "version": "1.0.0",
+  "identifier": "com.sirawat.agent-remote",
+  "build": {
+    "frontendDist": "../desktop"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Agent Remote",
+        "width": 1040,
+        "height": 720,
+        "minWidth": 720,
+        "minHeight": 480,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/icon.png"],
+    "resources": ["binaries/agent-remote-runtime"],
+    "externalBin": [
+      "binaries/agent-remote-server",
+      "binaries/cloudflared"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}

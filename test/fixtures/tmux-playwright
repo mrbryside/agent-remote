@@ -1,0 +1,2 @@
+#!/bin/sh
+exec tmux -L agent-remote-playwright "$@"

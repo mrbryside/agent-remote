@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the bundled local loading window only.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

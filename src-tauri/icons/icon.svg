@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Agent Remote">
+  <rect width="128" height="128" rx="24" fill="#141416"/>
+  <path d="M31 39l25 25-25 25M68 91h29" fill="none" stroke="#8be9fd" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
