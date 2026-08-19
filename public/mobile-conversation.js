@@ -722,11 +722,22 @@ export function createMobileConversationView({
 
   function permissionActions(item, status) {
     const actions = element('div', 'mobile-permission-actions');
+    const hints = {
+      allow_once: 'Allow only this request',
+      allow_session: 'Allow for this session',
+      allow_always: 'Remember for future requests',
+      reject_once: 'Decline and return to Grok',
+      reject_always: 'Always decline this permission',
+    };
     for (const option of item.options || []) {
-      const button = element('button', '', option.label);
+      const button = element('button');
       button.type = 'button';
       button.dataset.kind = option.kind || '';
       button.dataset.optionId = option.id;
+      button.append(
+        element('strong', '', option.label),
+        element('small', '', hints[option.kind] || 'Choose this permission response'),
+      );
       button.addEventListener('click', async () => {
         for (const sibling of actions.querySelectorAll('button')) sibling.disabled = true;
         try {
@@ -757,7 +768,15 @@ export function createMobileConversationView({
     status.dataset.state = item.status || 'pending';
     header.append(copy, status);
     card.append(header);
-    if (item.text) card.append(element('p', 'mobile-interaction-request', item.text));
+    if (item.text) {
+      const details = element('details', 'mobile-permission-details');
+      details.open = true;
+      details.append(
+        element('summary', '', 'Command details'),
+        element('pre', '', item.text),
+      );
+      card.append(details);
+    }
     card.append(permissionActions(item, status));
     return card;
   }

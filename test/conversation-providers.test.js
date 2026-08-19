@@ -308,6 +308,37 @@ test('Grok provider closes stale permission actions when the same tool already r
   assert.equal(permission.resolvedBy, 'grok');
 });
 
+test('Grok provider gives command permissions a readable summary and safe action order', async () => {
+  const data = await fixture();
+  const snapshot = await data.acpClient.loadSession({ sessionId: data.parentId });
+  snapshot.events = [{ timestamp: 1, params: { update: {
+    sessionUpdate: 'permission_request', permissionId: 'command-permission',
+    title: 'Execute `mkdir -p /tmp/frames && ffmpeg ...`',
+    toolCall: { toolCallId: 'command-tool', rawInput: {
+      variant: 'Bash', command: 'mkdir -p /tmp/frames && ffmpeg -i recording.mov /tmp/frames/frame-%02d.png',
+      description: 'Extract frames from recording',
+    } },
+    options: [
+      { optionId: 'allow_always', name: 'Always allow', kind: 'allow_always' },
+      { optionId: 'reject_once', name: 'Reject', kind: 'reject_once' },
+      { optionId: 'allow_once', name: 'Allow once', kind: 'allow_once' },
+    ],
+  } } }];
+  const registry = createConversationRegistry({
+    providers: [createGrokConversationProvider({ acpClient: data.acpClient })],
+  });
+  const result = await registry.read({
+    cwd: data.cwd, command: `grok --leader --session-id ${data.parentId}`,
+    conversationThreadId: data.parentId,
+  });
+  const permission = result.items.find((item) => item.permissionId === 'command-permission');
+  assert.equal(permission.title, 'Extract frames from recording');
+  assert.match(permission.text, /ffmpeg -i recording\.mov/);
+  assert.deepEqual(permission.options.map((option) => option.id), [
+    'allow_once', 'reject_once', 'allow_always',
+  ]);
+});
+
 test('Grok provider closes a permission that arrives after its subagent is already running', async () => {
   const data = await fixture();
   const snapshot = await data.acpClient.loadSession({ sessionId: data.parentId });

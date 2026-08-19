@@ -690,20 +690,21 @@ function timeline(updates) {
     }
     if (kind === 'permission_request') {
       const id = shortText(update.permissionId, `permission-${index}`, 160);
+      const rawInput = update.toolCall?.rawInput ?? update.toolCall?.input;
       const permission = {
         id: `permission-${id}`, type: 'permission', permissionId: id,
         toolCallId: typeof update.toolCall?.toolCallId === 'string' ? update.toolCall.toolCallId : undefined,
-        title: shortText(update.title, 'Permission required', 500),
-        text: serialized(update.toolCall?.rawInput ?? update.toolCall?.input),
+        title: shortText(rawInput?.description || update.title, 'Permission required', 500),
+        text: serialized(rawInput),
         options: (Array.isArray(update.options) ? update.options : []).flatMap((option) =>
           typeof option?.optionId === 'string' ? [{
             id: option.optionId,
             label: shortText(option.name || option.label, option.optionId, 120),
             kind: shortText(option.kind, '', 40),
           }] : []).sort((left, right) => {
-            const order = (option) => option.id === 'allow-once' ? 0
-              : option.id.startsWith('reject') ? 1
-                : option.id.includes('session') ? 2 : 3;
+            const order = (option) => ['allow_once', 'allow-once'].includes(option.kind || option.id) ? 0
+              : (option.kind || option.id).startsWith('reject') ? 1
+                : (option.kind || option.id).includes('session') ? 2 : 3;
             return order(left) - order(right);
           }),
         status: 'pending', timestamp: record.timestamp,

@@ -344,6 +344,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-message[data-pending="true"] .mobile-message-author { color: var(--color-status-connecting); }
   .mobile-subagent-pill-host { position: absolute; z-index: 4; right: max(14px, env(safe-area-inset-right)); bottom: calc(68px + env(safe-area-inset-bottom)); left: max(14px, env(safe-area-inset-left)); display: flex; justify-content: center; pointer-events: none; }
   .mobile-subagent-pill-host[hidden] { display: none; }
+  .mobile-conversation[data-interaction="true"] .mobile-subagent-pill-host { display: none; }
   .mobile-subagent-pill { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 44px; max-width: 100%; padding: 9px 13px; border: 1px solid var(--color-border-strong); border-radius: 999px; background: color-mix(in srgb, var(--color-surface-raised) 96%, transparent); box-shadow: 0 8px 24px color-mix(in srgb, #000 24%, transparent); color: var(--color-text-strong); font: 600 13px/1 var(--font-family-sans); cursor: pointer; pointer-events: auto; transition: transform var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard); }
   .mobile-subagent-pill:active { transform: scale(.97); }
   .mobile-subagent-pill > i { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--color-status-connecting); box-sizing: border-box; }
@@ -503,12 +504,19 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-conversation-interaction .mobile-question-card, .mobile-interaction-card { box-sizing: border-box; width: 100%; max-height: none; margin: 0; overflow: visible; border-radius: 12px; box-shadow: none; }
   .mobile-conversation-interaction [data-motion="enter"] { animation: mobile-interaction-in var(--duration-slow) var(--ease-spring); transform-origin: bottom; }
   .mobile-interaction-card { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--color-border-strong); background: var(--color-surface); }
-  .mobile-interaction-request { margin: 0; color: var(--color-text-secondary); font: 11px/1.45 var(--font-family-mono); overflow-wrap: anywhere; white-space: pre-wrap; }
-  .mobile-interaction-card .mobile-permission-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 8px; padding: 0; }
-  .mobile-interaction-card .mobile-permission-actions button { min-height: 44px; font: 650 12px/1.2 var(--font-family-sans); }
+  .mobile-permission-details { overflow: hidden; border: 1px solid var(--color-border-faint); border-radius: 10px; background: var(--color-canvas); }
+  .mobile-permission-details summary { display: flex; min-height: 38px; align-items: center; justify-content: space-between; padding: 0 11px; color: var(--color-text-secondary); font: 650 10px/1.2 var(--font-family-mono); cursor: pointer; list-style: none; }
+  .mobile-permission-details summary::-webkit-details-marker { display: none; }
+  .mobile-permission-details summary::after { content: '⌄'; color: var(--color-text-muted); font: 14px/1 var(--font-family-sans); transition: transform var(--duration-fast) var(--ease-out); }
+  .mobile-permission-details[open] summary::after { transform: rotate(180deg); }
+  .mobile-permission-details pre { box-sizing: border-box; max-height: min(24dvh, 180px); margin: 0; padding: 10px 11px 12px; overflow: auto; border-top: 1px solid var(--color-border-faint); color: var(--color-text-secondary); font: 10px/1.5 var(--font-family-mono); overflow-wrap: anywhere; scrollbar-color: var(--color-border-emphasis) transparent; white-space: pre-wrap; word-break: break-word; }
+  .mobile-interaction-card .mobile-permission-actions { display: flex; flex-direction: column; gap: 8px; padding: 0; }
+  .mobile-interaction-card .mobile-permission-actions button { display: grid; width: 100%; min-height: 52px; gap: 3px; align-content: center; padding: 9px 12px; text-align: left; transition: transform var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard); }
+  .mobile-interaction-card .mobile-permission-actions button:not(:disabled):active { transform: scale(.985); }
   .mobile-permission-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 12px 12px; }
   .mobile-permission-actions button { min-height: 34px; padding: 7px 11px; border: 1px solid var(--color-border-strong); border-radius: 9px; background: var(--color-surface-subtle); color: var(--color-text-strong); font: 11px/1.2 var(--font-family-mono); }
-  .mobile-permission-actions button[data-option-id="allow-once"] { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-canvas); }
+  .mobile-permission-actions button strong { font: 650 13px/1.2 var(--font-family-sans); }
+  .mobile-permission-actions button small { color: var(--color-text-muted); font: 9px/1.3 var(--font-family-mono); }
   .mobile-permission-actions button:disabled { opacity: .5; }
   .mobile-permission-result { padding: 0 12px 12px; color: var(--color-text-muted); font: 10px/1.3 var(--font-family-mono); }
   .mobile-question-card { display: grid; gap: 12px; margin-block: -4px 18px; padding: 14px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-surface-raised); box-shadow: 0 8px 24px color-mix(in srgb, var(--color-canvas) 42%, transparent); }
@@ -529,9 +537,9 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-question-options { display: grid; gap: 8px; }
   .mobile-question-option { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; gap: 10px; min-height: 46px; box-sizing: border-box; padding: 10px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-sm); background: var(--color-surface); color: var(--color-text); cursor: pointer; transition: transform var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard); }
   .mobile-question-option:active { transform: scale(.99); }
-  .mobile-question-option:has(input:checked) { border-color: var(--color-accent); background: var(--color-surface-selected); }
+  .mobile-question-option:has(input:checked) { border-color: var(--color-border-emphasis); background: var(--color-surface); }
   .mobile-question-option:has(input:focus-visible) { outline: 2px solid var(--color-accent-strong); outline-offset: 2px; }
-  .mobile-question-option > input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--color-accent); }
+  .mobile-question-option > input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--color-text-secondary); }
   .mobile-question-option > span { display: grid; gap: 4px; min-width: 0; }
   .mobile-question-option strong { color: var(--color-text-strong); font: 600 13px/1.25 var(--font-family-sans); }
   .mobile-question-option small { color: var(--color-text-secondary); font: 12px/1.4 var(--font-family-sans); }
@@ -545,10 +553,15 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-question-actions[data-first-step="true"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); }
   .mobile-question-actions button { min-height: 44px; padding: 10px 14px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-surface-subtle); color: var(--color-text-strong); font: 650 13px/1.2 var(--font-family-sans); transition: transform var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard); }
   .mobile-question-actions button:not(:disabled):active { transform: scale(.97); }
-  .mobile-question-actions .mobile-question-submit { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-canvas); }
+  .mobile-question-actions .mobile-question-submit { border-color: var(--color-border-strong); background: var(--color-surface-subtle); color: var(--color-text-strong); }
   .mobile-question-actions button:disabled { opacity: .5; }
   .mobile-question-summary { margin: -2px 0 0; color: var(--color-text-secondary); font: 13px/1.45 var(--font-family-sans); white-space: pre-wrap; }
   .workspace[data-mobile-conversation="true"] ~ .remote-fab { display: none; }
+}
+@media (hover: hover) and (pointer: fine) {
+  .mobile-interaction-card .mobile-permission-actions button:not(:disabled):hover,
+  .mobile-question-option:hover,
+  .mobile-question-actions button:not(:disabled):hover { border-color: var(--color-accent); }
 }
 @keyframes mobile-stream-caret { 50% { opacity: .18; } }
 @keyframes mobile-activity-spin { to { transform: rotate(1turn); } }
@@ -567,6 +580,8 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-conversation[data-interaction="true"] .mobile-conversation-messages { min-height: 44px; max-height: 72px; padding-block: 6px; }
   .mobile-conversation-interaction { padding-block: 8px; }
   .mobile-conversation-interaction .mobile-question-card, .mobile-interaction-card { gap: 8px; padding: 10px; }
+  .mobile-permission-details pre { max-height: 120px; }
+  .mobile-interaction-card .mobile-permission-actions button { min-height: 48px; }
   .mobile-question-form { gap: 8px; }
   .mobile-question-options { gap: 6px; }
   .mobile-question-option { min-height: 40px; gap: 8px; padding: 7px 8px; }

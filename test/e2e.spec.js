@@ -556,10 +556,17 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await page.setViewportSize({ width: 390, height: 667 });
   const permissionItem = {
     id: 'permission-77', type: 'permission', permissionId: '77',
-    title: 'Spawn explorer', text: 'Create a child agent', status: 'pending',
+    title: 'Extract frames from recording',
+    text: JSON.stringify({
+      variant: 'Bash',
+      command: `mkdir -p /tmp/mov-frames && ffmpeg -y -i /tmp/recording.mov -vf "fps=1" /tmp/mov-frames/frame-%02d.png 2>&1 | tail -20 && ls -la /tmp/mov-frames/${' output'.repeat(18)}`,
+      description: 'Extract 1fps frames from recording',
+    }, null, 2),
+    status: 'pending',
     options: [
       { id: 'allow_once', label: 'Allow once', kind: 'allow_once' },
       { id: 'reject_once', label: 'Reject', kind: 'reject_once' },
+      { id: 'allow_always', label: 'Always allow', kind: 'allow_always' },
     ],
   };
   rootItems.push(permissionItem);
@@ -576,7 +583,41 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => interactionDock.locator('.mobile-interaction-permission').evaluate(
     (node) => getComputedStyle(node).animationName,
   )).toBe('mobile-interaction-in');
+  const permissionDetails = interactionDock.locator('.mobile-permission-details');
+  await expect(permissionDetails).toHaveAttribute('open', '');
+  await expect(permissionDetails.getByText('Command details')).toBeVisible();
+  await expect.poll(() => permissionDetails.locator('pre').evaluate(
+    (node) => node.scrollHeight > node.clientHeight,
+  )).toBe(true);
+  const permissionButtons = interactionDock.locator('.mobile-permission-actions button');
+  await expect(permissionButtons).toHaveCount(3);
+  const permissionButtonBoxes = await permissionButtons.evaluateAll((buttons) => buttons.map((button) => {
+    const box = button.getBoundingClientRect();
+    return { x: box.x, y: box.y, width: box.width };
+  }));
+  expect(permissionButtonBoxes[0].y).toBeLessThan(permissionButtonBoxes[1].y);
+  expect(permissionButtonBoxes[1].y).toBeLessThan(permissionButtonBoxes[2].y);
+  expect(Math.max(...permissionButtonBoxes.map(({ width }) => width)) -
+    Math.min(...permissionButtonBoxes.map(({ width }) => width))).toBeLessThan(1);
+  expect(Math.max(...permissionButtonBoxes.map(({ x }) => x)) -
+    Math.min(...permissionButtonBoxes.map(({ x }) => x))).toBeLessThan(1);
+  const permissionColors = await permissionButtons.evaluateAll((buttons) => buttons.map((button) => ({
+    background: getComputedStyle(button).backgroundColor,
+    color: getComputedStyle(button).color,
+  })));
+  expect(new Set(permissionColors.map(({ background }) => background)).size).toBe(1);
+  expect(new Set(permissionColors.map(({ color }) => color)).size).toBe(1);
+  const permissionRestStyle = await permissionButtons.first().evaluate((button) => ({
+    background: getComputedStyle(button).backgroundColor,
+    border: getComputedStyle(button).borderColor,
+  }));
+  await permissionButtons.first().hover();
+  await expect.poll(() => permissionButtons.first().evaluate((button) =>
+    getComputedStyle(button).borderColor)).not.toBe(permissionRestStyle.border);
+  expect(await permissionButtons.first().evaluate((button) =>
+    getComputedStyle(button).backgroundColor)).toBe(permissionRestStyle.background);
   await expect(conversation.locator('#mobile-conversation-composer')).toBeHidden();
+  await expect(conversation.locator('.mobile-subagent-pill-host')).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-messages [data-permission-id="77"]')).toHaveCount(0);
   await conversation.getByRole('button', { name: 'Allow once' }).click();
   await expect.poll(() => permissionResponses).toContainEqual({ permissionId: '77', optionId: 'allow_once' });
@@ -625,7 +666,17 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const nextButton = questionCard.getByRole('button', { name: 'Next' });
   await expect(nextButton).toBeDisabled();
   await expect(questionCard.getByRole('button', { name: 'Back' })).toBeHidden();
-  await questionCard.getByRole('radio', { name: /Preview deployment/ }).check();
+  const previewOption = questionCard.getByRole('radio', { name: /Preview deployment/ });
+  const previewLabel = previewOption.locator('xpath=ancestor::label');
+  const previewBackground = await previewLabel.evaluate((label) => getComputedStyle(label).backgroundColor);
+  await previewLabel.hover();
+  expect(await previewLabel.evaluate((label) => getComputedStyle(label).backgroundColor)).toBe(previewBackground);
+  await previewOption.check();
+  expect(await previewLabel.evaluate((label) => getComputedStyle(label).backgroundColor)).toBe(previewBackground);
+  const questionActionBackgrounds = await questionCard.locator('.mobile-question-actions button').evaluateAll(
+    (buttons) => buttons.map((button) => getComputedStyle(button).backgroundColor),
+  );
+  expect(new Set(questionActionBackgrounds).size).toBe(1);
   await expect(nextButton).toBeEnabled();
   await expect(input).not.toBeFocused();
   await nextButton.click();
