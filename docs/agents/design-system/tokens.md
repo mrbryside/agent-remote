@@ -14,6 +14,8 @@
 
 Layout state such as `--sidebar-width` and `--graphics-width` is also declared there, then may be updated at runtime or in responsive media queries.
 
+Scrollbar colors use the semantic `--color-scrollbar-thumb`, `--color-scrollbar-thumb-hover`, and `--color-scrollbar-thumb-active` tokens. `public/styles.css` applies one cross-browser 6px scrollbar contract to every scroll surface: transparent, borderless tracks and corners; rounded low-contrast thumbs; and no arrow buttons. Do not hide a component scrollbar or add a component-specific track frame.
+
 ## Consumption rules
 
 - Prefer semantic names such as `--color-surface-hover` over palette-position names or raw hex values.
