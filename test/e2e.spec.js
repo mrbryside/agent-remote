@@ -839,6 +839,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       data: JSON.stringify({ conversation: nextConversation }),
     });
   }, rootConversation());
+  await expect(streamedCodeViewport).toContainText('appended 8');
   await expect.poll(() => streamedCodeViewport.evaluate((node) => ({
     top: node.scrollTop, left: node.scrollLeft,
   }))).toEqual(readingPosition);

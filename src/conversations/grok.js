@@ -1046,32 +1046,67 @@ export function createGrokConversationProvider({
   async function watchConversation(handle, options, listener) {
     let stopped = false;
     let timer;
+    let revision = 0;
+    let publishing = false;
+    let rerun = false;
     const subscriptions = new Map();
+
+    const requestPublish = (delay = 20) => {
+      revision += 1;
+      clearTimeout(timer);
+      timer = setTimeout(() => void publish(), delay);
+    };
 
     const arm = (ids) => {
       for (const id of ids) {
         if (subscriptions.has(id)) continue;
-        subscriptions.set(id, acpClient.watch(id, () => {
-          clearTimeout(timer);
-          timer = setTimeout(() => void publish(), 20);
-        }));
+        subscriptions.set(id, acpClient.watch(id, () => requestPublish()));
       }
     };
     const publish = async () => {
       if (stopped) return;
+      if (publishing) {
+        rerun = true;
+        return;
+      }
+      publishing = true;
       try {
-        const relationship = await graph(handle.cwd, handle.rootThreadId);
-        arm(relationship.threads.keys());
-        listener(await readConversation(handle, options));
-      } catch {
-        clearTimeout(timer);
-        timer = setTimeout(() => void publish(), 120);
+        do {
+          rerun = false;
+          const expectedRevision = revision;
+          try {
+            const relationship = await graph(handle.cwd, handle.rootThreadId);
+            arm(relationship.threads.keys());
+            const conversation = await readConversation(handle, options);
+            if (stopped) return;
+            // Graph reads include child sessions and filesystem signals. If
+            // an ACP update arrives while that work is in flight, discard the
+            // stale snapshot and rebuild it. Otherwise a slow “Responding…”
+            // read can arrive after the newer completed-turn snapshot.
+            if (expectedRevision !== revision) {
+              rerun = true;
+              continue;
+            }
+            listener(conversation);
+          } catch {
+            if (stopped) return;
+            if (expectedRevision !== revision) {
+              rerun = true;
+              continue;
+            }
+            clearTimeout(timer);
+            timer = setTimeout(() => void publish(), 120);
+            return;
+          }
+        } while (rerun && !stopped);
+      } finally {
+        publishing = false;
       }
     };
 
     const relationship = await graph(handle.cwd, handle.rootThreadId);
     arm(relationship.threads.keys());
-    listener(await readConversation(handle, options));
+    await publish();
     return async () => {
       stopped = true;
       clearTimeout(timer);

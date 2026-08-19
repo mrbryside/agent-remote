@@ -174,7 +174,10 @@ graph.
 
 After the initial HTTP read, `/api/conversations/:session/stream` publishes the
 provider-neutral snapshots over SSE. Provider watchers are released when the
-browser disconnects or the server stops. Assistant text is painted immediately
+browser disconnects or the server stops. Grok snapshot reads are serialized and
+revision-checked: an ACP update received during a graph read invalidates that
+read and rebuilds it before publishing. A slow active-turn snapshot therefore
+cannot overwrite a newer completed-turn snapshot. Assistant text is painted immediately
 from those provider chunks; the browser does not add a synthetic typewriter
 delay after a chunk arrives. The mobile renderer keeps timeline nodes keyed by
 message/event id and reconciles the changing contents in place. Tool-group and

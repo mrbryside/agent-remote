@@ -684,7 +684,9 @@ export function createTerminalServer(options = {}) {
       while (renderer.pendingViewport && active()) {
         const viewport = renderer.pendingViewport;
         renderer.pendingViewport = undefined;
-        const unchanged = renderer.viewport &&
+        const force = renderer.forceViewportConfiguration === true;
+        renderer.forceViewportConfiguration = false;
+        const unchanged = !force && renderer.viewport &&
           renderer.viewport.width === viewport.width &&
           renderer.viewport.height === viewport.height;
         if (!unchanged) {
@@ -725,6 +727,17 @@ export function createTerminalServer(options = {}) {
         });
         if (!active()) return;
         renderer.screencastStarted = true;
+        // Chrome occasionally waits for a compositor invalidation before the
+        // first screencast frame (especially on an idle page). Capture one
+        // exact-viewport fallback so the loading cover never depends on the
+        // user resizing the pane. A live frame always wins if it arrives.
+        const sequenceBeforeCapture = renderer.frameSequence;
+        const screenshot = await sendCdp(renderer, 'Page.captureScreenshot', {
+          format: 'jpeg', quality: 90, fromSurface: true,
+        }).catch(() => undefined);
+        if (active() && screenshot?.data && renderer.frameSequence === sequenceBeforeCapture) {
+          publishRendererFrame(renderer, screenshot.data, renderer.viewport);
+        }
       }
     } finally {
       if (renderer.configuringViewport !== configuration) return;
@@ -810,6 +823,14 @@ export function createTerminalServer(options = {}) {
         if (renderer.screencastStarted && rendererHasVisibleClient(renderer)) {
           publishRendererFrame(renderer, message.params.data, renderer.viewport);
         }
+      } else if (message.method === 'Page.frameNavigated' && !message.params?.frame?.parentId) {
+        // Cross-document navigation can silently end Chrome's screencast and
+        // reset page metrics while leaving the CDP target unchanged. Reapply
+        // the exact client viewport and restart capture without waiting for a
+        // ResizeObserver event from the frontend.
+        renderer.forceViewportConfiguration = true;
+        renderer.pendingViewport ||= renderer.viewport;
+        if (renderer.pendingViewport) void configureRendererViewport(renderer).catch(() => {});
       }
     });
     cdp.once('close', () => {
@@ -829,6 +850,11 @@ export function createTerminalServer(options = {}) {
     });
     await sendCdp(renderer, 'Page.enable');
     await sendCdp(renderer, 'DOM.enable');
+    // Tell the frontend that the target changed before any frame can arrive.
+    // Sending this after configureRendererViewport lets an idle page's only
+    // frame paint first and then get covered by the new-target loading state,
+    // leaving the cover stuck until a manual resize produces another frame.
+    broadcastSurfaceInfo(renderer);
     await configureRendererViewport(renderer);
     renderer.outputChunks = [];
     renderer.outputBytes = 0;
@@ -1026,6 +1052,7 @@ export function createTerminalServer(options = {}) {
       viewport: undefined,
       viewportGeneration: 0,
       pendingViewport: undefined,
+      forceViewportConfiguration: false,
       configuringViewport: false,
       screencastStarted: false,
       cursor: 'default',

@@ -124,6 +124,46 @@ test('agent terminal-browser command opens a rendered web split on the right', a
 
     const browserFrame = page.locator('.graphics-terminal-instance:not([hidden]) .browser-frame');
     const graphicsHost = page.locator('.graphics-terminal-instance:not([hidden])');
+    const frameBeforeNavigationFixture = Number(await graphicsHost.getAttribute('data-frame-version') || 0);
+    const navigationFixture = terminalBrowserAction(
+      observedBrowser.key,
+      'eval',
+      `document.body.innerHTML='<a id="navigate-test" href="${origin}/health" ` +
+        `style="position:fixed;inset:0;display:block;background:#17221b;color:white">Navigate</a>'; ` +
+        `'navigation-ready'`,
+    );
+    expect(navigationFixture.status, navigationFixture.stderr).toBe(0);
+    await expect.poll(() => graphicsHost.evaluate((host, before) =>
+      Number(host.dataset.frameVersion || 0) - before, frameBeforeNavigationFixture),
+    { timeout: 10_000 }).toBeGreaterThan(0);
+    const viewportGenerationBeforeNavigation = Number(
+      await graphicsHost.getAttribute('data-frame-viewport-generation') || 0,
+    );
+    const frameBeforeNavigation = Number(await graphicsHost.getAttribute('data-frame-version') || 0);
+    await browserFrame.click({ position: { x: 40, y: 40 } });
+    await expect.poll(() => {
+      const result = terminalBrowserAction(observedBrowser.key, 'eval', 'location.pathname');
+      return result.stdout;
+    }, { timeout: 10_000 }).toContain('/health');
+    await expect.poll(() => graphicsHost.evaluate((host, before) =>
+      Number(host.dataset.frameVersion || 0) - before, frameBeforeNavigation),
+    { timeout: 10_000 }).toBeGreaterThan(0);
+    await expect.poll(() => graphicsHost.evaluate((host) =>
+      Number(host.dataset.frameViewportGeneration || 0)), { timeout: 10_000 })
+      .toBeGreaterThan(viewportGenerationBeforeNavigation);
+    const requestedViewport = await graphicsHost.getAttribute('data-requested-viewport');
+    const navigatedViewport = terminalBrowserAction(
+      observedBrowser.key, 'eval', '`${innerWidth}x${innerHeight}`',
+    );
+    expect(navigatedViewport.status, navigatedViewport.stderr).toBe(0);
+    expect(navigatedViewport.stdout).toContain(requestedViewport);
+    await expect.poll(() => browserFrame.evaluate((canvas) => {
+      const viewport = canvas.parentElement;
+      if (!canvas.width || !canvas.height || !viewport?.clientWidth || !viewport.clientHeight) return false;
+      return Math.abs((canvas.width / canvas.height) -
+        (viewport.clientWidth / viewport.clientHeight)) < 0.02;
+    }), { timeout: 10_000 }).toBe(true);
+
     const frameBeforeCursorFixture = Number(await graphicsHost.getAttribute('data-frame-version') || 0);
     const cursorFixture = terminalBrowserAction(
       observedBrowser.key,

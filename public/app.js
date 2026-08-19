@@ -1277,6 +1277,7 @@ function queueBrowserFrame(pane, incoming) {
         height: Number(next.height) || decodedHeight,
       };
       pane.frameViewportGeneration = Number(next.viewportGeneration) || pane.frameViewportGeneration;
+      pane.host.dataset.frameViewportGeneration = String(pane.frameViewportGeneration);
       pane.displayedFrameSequence = Number(next.sequence) || pane.displayedFrameSequence + 1;
       pane.host.dataset.frameSequence = String(pane.displayedFrameSequence);
       pane.host.dataset.frameViewport = `${pane.frameViewport.width}x${pane.frameViewport.height}`;
@@ -1431,39 +1432,52 @@ function setBrowserDevtoolsVisible(pane, visible) {
 }
 
 function renderBrowserTabs(pane, tabs) {
-  pane.tabs.replaceChildren();
+  const existing = new Map([...pane.tabs.children]
+    .map((item) => [item.dataset.tabId, item]));
+  const kept = new Set();
   for (const tab of Array.isArray(tabs) ? tabs : []) {
     if (!Number.isInteger(tab.id)) continue;
-    const item = document.createElement('div');
-    item.className = 'browser-tab';
+    const key = String(tab.id);
+    let item = existing.get(key);
+    if (!item) {
+      item = document.createElement('div');
+      item.className = 'browser-tab';
+      item.dataset.tabId = key;
+      item.setAttribute('role', 'tab');
+
+      const select = document.createElement('button');
+      select.type = 'button';
+      select.className = 'browser-tab-select';
+      select.addEventListener('click', () => {
+        if (pane.socket?.readyState === WebSocket.OPEN && item.dataset.active !== 'true') {
+          pane.socket.send(JSON.stringify({ type: 'tab-switch', tab: Number(item.dataset.tabId) }));
+        }
+      });
+
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'browser-tab-close';
+      close.textContent = '×';
+      close.addEventListener('click', () => {
+        if (pane.socket?.readyState === WebSocket.OPEN) {
+          pane.socket.send(JSON.stringify({ type: 'tab-close', tab: Number(item.dataset.tabId) }));
+        }
+      });
+      item.append(select, close);
+    }
     item.dataset.active = String(Boolean(tab.active));
-    item.setAttribute('role', 'tab');
     item.setAttribute('aria-selected', String(Boolean(tab.active)));
     item.title = tab.title || tab.url || 'New tab';
-
-    const select = document.createElement('button');
-    select.type = 'button';
-    select.className = 'browser-tab-select';
+    const select = item.querySelector('.browser-tab-select');
+    const close = item.querySelector('.browser-tab-close');
     select.textContent = tab.title || tab.url || 'New tab';
     select.setAttribute('aria-label', `Switch to ${select.textContent}`);
-    select.addEventListener('click', () => {
-      if (pane.socket?.readyState === WebSocket.OPEN && !tab.active) {
-        pane.socket.send(JSON.stringify({ type: 'tab-switch', tab: tab.id }));
-      }
-    });
-
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'browser-tab-close';
-    close.textContent = '×';
     close.setAttribute('aria-label', `Close ${select.textContent}`);
-    close.addEventListener('click', () => {
-      if (pane.socket?.readyState === WebSocket.OPEN) {
-        pane.socket.send(JSON.stringify({ type: 'tab-close', tab: tab.id }));
-      }
-    });
-    item.append(select, close);
+    kept.add(item);
     pane.tabs.append(item);
+  }
+  for (const item of [...pane.tabs.children]) {
+    if (!kept.has(item)) item.remove();
   }
 }
 

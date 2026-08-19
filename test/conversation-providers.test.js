@@ -624,6 +624,57 @@ test('Grok provider streams file changes through the provider-neutral registry',
   assert.equal(updates.at(-1).conversation.provider.id, 'grok');
 });
 
+test('Grok provider never lets a slow active snapshot overwrite a completed turn', async () => {
+  const data = await fixture();
+  const provider = createGrokConversationProvider({ acpClient: data.acpClient });
+  const registry = createConversationRegistry({ providers: [provider] });
+  const session = {
+    name: 'ar-chat', cwd: data.cwd,
+    command: `grok --leader --session-id ${data.parentId}`, conversationThreadId: data.parentId,
+  };
+  const updates = [];
+  const stop = await registry.watch(session, {}, (event) => updates.push(event));
+
+  const originalLoadSession = data.acpClient.loadSession;
+  let rootLoads = 0;
+  let releaseSlowRead;
+  let markSlowReadStarted;
+  const slowReadGate = new Promise((resolve) => { releaseSlowRead = resolve; });
+  const slowReadStarted = new Promise((resolve) => { markSlowReadStarted = resolve; });
+  data.acpClient.loadSession = async (input) => {
+    const snapshot = await originalLoadSession(input);
+    if (input.sessionId !== data.parentId || ++rootLoads !== 2) return snapshot;
+    const captured = structuredClone(snapshot);
+    markSlowReadStarted();
+    await slowReadGate;
+    return captured;
+  };
+
+  const root = data.snapshots.get(data.parentId);
+  root.turn = { active: true, cancelRequested: false };
+  data.acpClient.append(data.parentId, { timestamp: 8, params: { update: {
+    sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Finishing the answer.' },
+  } } });
+  await slowReadStarted;
+
+  root.turn = { active: false, cancelRequested: false };
+  data.acpClient.append(data.parentId, { timestamp: 9, params: { update: {
+    sessionUpdate: 'turn_completed', stop_reason: 'end_turn',
+  } } });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  releaseSlowRead();
+
+  const deadline = Date.now() + 2_000;
+  while (updates.length < 2 || updates.at(-1).conversation.thread.status !== 'idle') {
+    if (Date.now() > deadline) assert.fail('Timed out waiting for the completed turn');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.deepEqual(updates.slice(1).map((event) => event.conversation.thread.status), ['idle']);
+  assert.deepEqual(updates.at(-1).conversation.activity, { active: false });
+  await stop();
+});
+
 test('Grok provider keeps questions separate from tool groups and answers descendant questions only in its root graph', async () => {
   const data = await fixture();
   const childSnapshot = await data.acpClient.loadSession({ sessionId: data.childId });
