@@ -222,6 +222,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     name: 'Mobile conversation', marker: '__MOBILE_CONVERSATION__',
   });
   const sessionName = await project.locator('.session-row').getAttribute('data-session');
+  const sidebarSession = project.locator(`.session-row[data-session="${sessionName}"]`);
   const rootItems = Array.from({ length: 18 }, (_, index) => ({
     id: `assistant-${index}`, type: 'message', role: index % 2 ? 'user' : 'assistant',
     text: index === 0 ? [
@@ -288,7 +289,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const queuedInputs = [];
   const rootConversation = () => ({
     provider: { id: 'grok', label: 'Grok' },
-    thread: { id: 'root-thread', title: 'Mobile root', agentName: 'grok-build-plan', model: currentModelId, status: 'idle' },
+    thread: {
+      id: 'root-thread', title: 'Mobile root', agentName: 'grok-build-plan', model: currentModelId,
+      status: currentActivity.active ? 'working' : 'idle',
+    },
     parent: null, rootThreadId: 'root-thread', items: rootItems,
     children: [
       ...(subagentItem.threadId
@@ -595,6 +599,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(activity.locator('i')).toHaveCount(1);
   await expect(sendButton).toHaveAttribute('data-action', 'stop');
   await expect(sendButton).toHaveAttribute('aria-label', 'Stop response');
+  await expect(sidebarSession).toHaveClass(/working/);
 
   currentActivity = {
     active: true, phase: 'tool', label: 'Preparing read_file…',
@@ -625,6 +630,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(activity).toBeHidden();
   await expect(sendButton).toHaveAttribute('data-action', 'send');
   await expect(sendButton).toBeDisabled();
+  await expect(sidebarSession).not.toHaveClass(/working/);
 
   await input.fill('/goal');
   const suggestions = conversation.locator('#mobile-conversation-suggestions');

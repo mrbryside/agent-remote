@@ -803,7 +803,18 @@ test('Grok provider exposes turn lifecycle status without rendering lifecycle ev
   data.acpClient.append(data.parentId, { timestamp: 9, params: { update: {
     sessionUpdate: 'turn_completed', stop_reason: 'end_turn',
   } } });
+  data.snapshots.get(data.parentId).turn = { active: false, cancelRequested: false };
   assert.equal(await registry.status(session), 'idle');
+  assert.deepEqual((await registry.read(session)).activity, { active: false });
+
+  // Grok can flush a final tool update after its authoritative turn boundary.
+  // That event belongs to the completed turn and must not restart activity.
+  data.acpClient.append(data.parentId, { timestamp: 9.1, params: { update: {
+    sessionUpdate: 'tool_call_update', toolCallId: 'activity-tool',
+    title: 'Read package manifest', status: 'completed',
+  } } });
+  assert.equal(await registry.status(session), 'idle');
+  assert.equal((await registry.read(session)).thread.status, 'idle');
   assert.deepEqual((await registry.read(session)).activity, { active: false });
 });
 

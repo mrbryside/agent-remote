@@ -213,9 +213,9 @@ const mobileConversation = createMobileConversationView({
     if (!visible && activeSession && !selectedSession()?.pending) connect();
   },
   onStatusChange(sessionName, status) {
-    if (status === 'working' || status === 'idle') {
-      setSessionWorking(sessionName, status === 'working', { authoritative: true });
-    }
+    // Conversation lifecycle is authoritative. Any settled provider state
+    // must clear an optimistic spinner started when the prompt was submitted.
+    setSessionWorking(sessionName, status === 'working', { authoritative: true });
   },
   onBrowserOpen(sessionName, argv) {
     openGraphicsSplit(argv, 'backend', sessionName);

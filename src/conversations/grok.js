@@ -938,6 +938,11 @@ export function createGrokConversationProvider({
   async function readThread(cwd, threadId, { includeControls = false } = {}) {
     const snapshot = await acpClient.loadSession({ sessionId: threadId, cwd });
     const parsed = timeline(snapshot.events);
+    // The ACP client owns the live turn lifecycle. Tool notifications can be
+    // delivered after `turn_completed`, so replaying the timeline is only a
+    // fallback for older/test snapshots that do not expose `turn.active`.
+    // Otherwise a late tool update can incorrectly resurrect the sidebar
+    // spinner after Grok has already finished the turn.
     const active = snapshot.turn?.active ?? parsed.status === 'working';
     const cancelRequested = snapshot.turn?.cancelRequested === true;
     const activity = active ? {
@@ -964,7 +969,7 @@ export function createGrokConversationProvider({
         title: shortText(detail.title, detail.kind || 'Grok'),
         agentName: shortText(detail.kind, 'grok', 80),
         model: shortText(detail.currentModelId || snapshot.metadata?.models?.currentModelId, '', 80),
-        status: active ? 'working' : parsed.status,
+        status: active ? 'working' : snapshot.turn?.active === false ? 'idle' : parsed.status,
       },
       activity,
       ...(controls && Object.keys(controls).length ? { controls } : {}),
@@ -975,7 +980,9 @@ export function createGrokConversationProvider({
 
   async function readStatus(handle) {
     const snapshot = await acpClient.loadSession({ sessionId: handle.rootThreadId, cwd: handle.cwd });
-    return snapshot.turn?.active ? 'working' : timeline(snapshot.events).status;
+    if (snapshot.turn?.active === true) return 'working';
+    if (snapshot.turn?.active === false) return 'idle';
+    return timeline(snapshot.events).status;
   }
 
   async function graph(cwd, rootThreadId) {
