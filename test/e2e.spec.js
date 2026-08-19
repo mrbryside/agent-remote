@@ -180,6 +180,14 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   test.setTimeout(30_000);
   await page.addInitScript(() => {
     window.__conversationStreams = [];
+    window.__mobileConversationScrollCalls = [];
+    const nativeScrollTo = Element.prototype.scrollTo;
+    Element.prototype.scrollTo = function scrollTo(...args) {
+      if (this.id === 'mobile-conversation-messages') {
+        window.__mobileConversationScrollCalls.push(args[0]);
+      }
+      return nativeScrollTo.apply(this, args);
+    };
     window.EventSource = class MockEventSource {
       constructor(url) {
         this.url = url;
@@ -384,6 +392,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await page.setViewportSize({ width: 390, height: 844 });
 
   const conversation = page.locator('#mobile-conversation');
+  const messages = conversation.locator('#mobile-conversation-messages');
   await expect(conversation).toBeVisible();
   await expect(page.locator('.topbar')).toBeHidden();
   const mobileStageBox = await page.locator('#terminal-stage').boundingBox();
@@ -405,6 +414,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('#mobile-conversation-state')).toHaveText('Ready', { timeout: 8_000 });
   await expect(conversation.locator('.mobile-conversation-loading')).toHaveCount(0, { timeout: 8_000 });
   await expect(conversation.locator('.mobile-message')).toHaveCount(18);
+  await expect(messages).toHaveCSS('scroll-behavior', 'auto');
+  await expect.poll(() => messages.evaluate((element) =>
+    element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(1);
+  expect(await page.evaluate(() => window.__mobileConversationScrollCalls
+    .filter((call) => call?.behavior === 'smooth'))).toEqual([]);
   await expect(conversation.locator('.mobile-event-card')).toHaveCount(10);
   await expect(conversation.locator('#mobile-conversation-context')).toContainText('6K / 190K');
   const modelButton = conversation.locator('#mobile-conversation-model');
@@ -573,9 +587,17 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await conversation.getByRole('button', { name: /Read AGENTS\.md/ }).click();
   await expect(conversation.getByText('Provider instructions loaded')).toBeVisible();
   await expect(conversation.locator('.mobile-subagent-pill')).toContainText('1 agent running');
-  const messages = conversation.locator('#mobile-conversation-messages');
   await messages.evaluate((element) => { element.scrollTop = 0; });
   await expect.poll(() => messages.evaluate((element) => element.scrollTop)).toBe(0);
+  const jumpToLatest = conversation.locator('#mobile-conversation-jump');
+  await expect(jumpToLatest).toBeVisible();
+  await jumpToLatest.click();
+  await expect.poll(() => messages.evaluate((element) =>
+    element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(1);
+  await expect(jumpToLatest).toBeHidden();
+  expect(await page.evaluate(() => window.__mobileConversationScrollCalls.at(-1))).toEqual(expect.objectContaining({
+    behavior: 'smooth',
+  }));
 
   await input.fill('hello from phone');
   await conversation.locator('#mobile-conversation-send').click();

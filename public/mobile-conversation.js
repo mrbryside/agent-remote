@@ -44,6 +44,7 @@ export function createMobileConversationView({
   const menu = document.querySelector('#mobile-conversation-menu');
   const back = document.querySelector('#mobile-conversation-back');
   const messages = document.querySelector('#mobile-conversation-messages');
+  const jumpToLatest = document.querySelector('#mobile-conversation-jump');
   const interactionDock = document.querySelector('#mobile-conversation-interaction');
   const queue = document.querySelector('#mobile-conversation-queue');
   const composer = document.querySelector('#mobile-conversation-composer');
@@ -115,7 +116,16 @@ export function createMobileConversationView({
     if (available === next) return;
     available = next;
     root.hidden = !next;
+    if (!next) jumpToLatest.hidden = true;
     onVisibilityChange(next);
+  }
+
+  function distanceFromBottom(container = messages) {
+    return Math.max(0, container.scrollHeight - container.scrollTop - container.clientHeight);
+  }
+
+  function updateJumpToLatest() {
+    jumpToLatest.hidden = !available || root.dataset.interaction === 'true' || distanceFromBottom() <= 48;
   }
 
   function closeModelList({ focus = false } = {}) {
@@ -1231,13 +1241,15 @@ export function createMobileConversationView({
   function render(conversation, { animate = false } = {}) {
     const previousConversation = lastConversation;
     lastConversation = conversation;
+    const initialThreadRender = !previousConversation ||
+      previousConversation.thread?.id !== conversation.thread.id;
     const isRoot = !conversation.parent && conversation.thread.id === rootThreadId;
     if (isRoot) rootConversation = conversation;
     const targetMessages = isRoot ? messages : sheetMessages || messages;
     // Follow new output only while the reader is actually at the bottom. A
     // generous "near bottom" threshold makes short mobile histories snap back
     // down on every streamed update and effectively prevents scrolling.
-    const atBottom = targetMessages.scrollHeight - targetMessages.scrollTop - targetMessages.clientHeight <= 1;
+    const atBottom = distanceFromBottom(targetMessages) <= 1;
     const signature = JSON.stringify({
       thread: conversation.thread,
       activity: conversation.activity,
@@ -1319,7 +1331,8 @@ export function createMobileConversationView({
     }
     if (!fragment.childNodes.length) fragment.append(element('div', 'mobile-conversation-loading', 'No messages yet'));
     targetMessages.replaceChildren(fragment);
-    if (atBottom || pendingMessage) targetMessages.scrollTop = targetMessages.scrollHeight;
+    if (initialThreadRender || atBottom || pendingMessage) targetMessages.scrollTop = targetMessages.scrollHeight;
+    if (isRoot) updateJumpToLatest();
     if (isRoot) updateComposerAction();
     if (isRoot && !sheet?.hidden && sheetMode === 'list') renderSubagentList(conversation);
   }
@@ -1548,6 +1561,13 @@ export function createMobileConversationView({
   input.addEventListener('keyup', (event) => {
     if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateSuggestions();
   });
+  messages.addEventListener('scroll', updateJumpToLatest, { passive: true });
+  jumpToLatest.addEventListener('click', () => {
+    messages.scrollTo({
+      top: messages.scrollHeight,
+      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+    });
+  });
   back.addEventListener('click', () => {
     if (!parentId) return;
     closeStream();
@@ -1611,6 +1631,7 @@ export function createMobileConversationView({
       root.dataset.interaction = 'false';
       interactionDock.replaceChildren();
       back.hidden = true;
+      jumpToLatest.hidden = true;
       messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Connecting to Grok…'));
       setAvailable(true);
     },
@@ -1650,6 +1671,7 @@ export function createMobileConversationView({
       queue.hidden = true;
       queue.replaceChildren();
       if (!sessionName || !media.matches) return setAvailable(false);
+      jumpToLatest.hidden = true;
       messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Loading conversation…'));
       // Claim the mobile surface while provider detection is in flight. This
       // prevents the terminal transport from briefly attaching (and resizing)

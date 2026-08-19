@@ -77,7 +77,10 @@
                 <div><strong id="mobile-conversation-title">Conversation</strong><small id="mobile-conversation-meta"></small></div>
                 <span id="mobile-conversation-state" data-state="idle">Ready</span>
               </header>
-              <div id="mobile-conversation-messages" class="mobile-conversation-messages" role="log" aria-live="polite"></div>
+              <div class="mobile-conversation-scroll-shell">
+                <div id="mobile-conversation-messages" class="mobile-conversation-messages" role="log" aria-live="polite"></div>
+                <button id="mobile-conversation-jump" class="mobile-conversation-jump" type="button" aria-label="Scroll to latest message" hidden>↓</button>
+              </div>
               <section id="mobile-conversation-queue" class="mobile-conversation-queue" aria-label="Queued messages" hidden></section>
               <div id="mobile-conversation-interaction" class="mobile-conversation-interaction" aria-label="Grok interaction" hidden></div>
               <form id="mobile-conversation-composer" class="mobile-conversation-composer">
