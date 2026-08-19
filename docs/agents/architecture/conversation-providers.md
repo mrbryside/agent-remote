@@ -157,6 +157,15 @@ scroll animation. Later stream updates follow the tail only while the reader
 is already there. Scrolling up reveals a jump-to-latest control; that explicit
 action scrolls smoothly unless the device requests reduced motion.
 
+Assistant message text is reparsed on each snapshot as GitHub-flavored Markdown
+with the locally bundled Marked runtime. Its HTML output must pass through
+DOMPurify's HTML-only profile before entering the DOM; raw forms and styling are
+forbidden, unsafe URLs are removed, external links receive `noopener noreferrer`,
+and remote images omit referrers. Code blocks and tables get bounded scroll
+containers, while code blocks also receive a client-created Copy control. User
+messages remain plain text. Both browser libraries are packaged into the macOS
+runtime, so Markdown rendering cannot depend on a CDN or network availability.
+
 During initial ACP connection, the
 native mobile surface continues to own the viewport and shows reconnecting
 state; it does not briefly attach xterm and resize the shared tmux pane. A new
