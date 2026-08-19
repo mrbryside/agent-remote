@@ -76,6 +76,11 @@ test('ACP client initializes once, replays history, deduplicates events, and pro
   const prompting = client.prompt({ sessionId, cwd: '/tmp/project', text: 'next' });
   const prompt = await waitForRequest(fake, 'session/prompt');
   assert.deepEqual(prompt.params.prompt, [{ type: 'text', text: 'next' }]);
+  assert.equal(client.read(sessionId).turn.active, true);
+  notify(child, sessionId, { sessionUpdate: 'turn_completed', stop_reason: 'end_turn' }, 'turn-finished');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(client.read(sessionId).turn.active, false,
+    'turn completion must stop mobile activity even while the prompt RPC is still settling');
   reply(child, prompt.id, { stopReason: 'end_turn' });
   await prompting;
   await new Promise((resolve) => setTimeout(resolve, 0));

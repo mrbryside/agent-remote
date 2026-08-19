@@ -378,6 +378,15 @@ test('uses native mobile conversation history, input, and subagent navigation', 
 
   const conversation = page.locator('#mobile-conversation');
   await expect(conversation).toBeVisible();
+  await expect(page.locator('.topbar')).toBeHidden();
+  const mobileStageBox = await page.locator('#terminal-stage').boundingBox();
+  const mobileShellBox = await page.locator('.terminal-shell').boundingBox();
+  expect(mobileStageBox.y).toBe(mobileShellBox.y);
+  expect(mobileStageBox.height).toBe(mobileShellBox.height);
+  await conversation.locator('#mobile-conversation-menu').click();
+  await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'expanded');
+  await page.locator('#toggle-sidebar').click();
+  await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'collapsed');
   await expect(page.locator('#terminal')).toBeHidden();
   await expect.poll(() => conversationReads).toBeGreaterThan(0);
   await expect(conversation.locator('#mobile-conversation-state')).toHaveText(/Reconnecting|Ready/);
@@ -500,17 +509,25 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }, rootConversation());
   await expect(subagentPill).toHaveCount(1);
   await expect(subagentPill).toContainText('1 agent running');
-  const streamText = 'This reply should visibly grow on the phone. '.repeat(24).trim();
-  rootItems.push({ id: 'assistant-stream', type: 'message', role: 'assistant', text: streamText });
+  const streamPrefix = 'This reply arrived as a real provider chunk.';
+  const streamText = `${streamPrefix} The next provider chunk appends without a simulated delay.`;
+  rootItems.push({ id: 'assistant-stream', type: 'message', role: 'assistant', text: streamPrefix });
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', {
       data: JSON.stringify({ conversation: nextConversation }),
     });
   }, rootConversation());
   const streamedMessage = conversation.locator('[data-message-id="assistant-stream"]');
-  await expect(streamedMessage).toHaveAttribute('data-streaming', 'true');
-  expect((await streamedMessage.locator('.mobile-message-content').textContent()).length).toBeLessThan(streamText.length);
-  await expect(streamedMessage.locator('.mobile-message-content')).toHaveText(streamText, { timeout: 3_000 });
+  await expect(streamedMessage.locator('.mobile-message-content')).toHaveText(streamPrefix);
+  rootItems[rootItems.findIndex((item) => item.id === 'assistant-stream')] = {
+    id: 'assistant-stream', type: 'message', role: 'assistant', text: streamText,
+  };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(streamedMessage.locator('.mobile-message-content')).toHaveText(streamText);
   await expect(streamedMessage).not.toHaveAttribute('data-streaming', 'true');
   await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
   await conversation.getByRole('button', { name: /Read AGENTS\.md/ }).click();

@@ -41,6 +41,7 @@ export function createMobileConversationView({
   const title = document.querySelector('#mobile-conversation-title');
   const meta = document.querySelector('#mobile-conversation-meta');
   const state = document.querySelector('#mobile-conversation-state');
+  const menu = document.querySelector('#mobile-conversation-menu');
   const back = document.querySelector('#mobile-conversation-back');
   const messages = document.querySelector('#mobile-conversation-messages');
   const interactionDock = document.querySelector('#mobile-conversation-interaction');
@@ -76,7 +77,6 @@ export function createMobileConversationView({
   let pendingMessage;
   let pendingAcceptanceTimer;
   let lastConversation;
-  let revealFrame;
   let rootThreadId;
   let rootConversation;
   let sheet;
@@ -396,11 +396,6 @@ export function createMobileConversationView({
     streamKey = '';
   }
 
-  function stopReveal() {
-    if (revealFrame !== undefined) cancelAnimationFrame(revealFrame);
-    revealFrame = undefined;
-  }
-
   function subagentState(item) {
     if (item.phase === 'calling') return 'calling';
     if (item.status === 'completed' || item.phase === 'done') return 'completed';
@@ -603,36 +598,6 @@ export function createMobileConversationView({
     renderedSignature = '';
     void refresh();
     sheetReturnFocus?.focus?.({ preventScroll: true });
-  }
-
-  function graphemes(value) {
-    if (typeof Intl.Segmenter !== 'function') return Array.from(value);
-    const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-    return Array.from(segmenter.segment(value), (entry) => entry.segment);
-  }
-
-  function revealText(content, prefix, target, followTail, scrollContainer = messages) {
-    const suffix = graphemes(target.slice(prefix.length));
-    if (!suffix.length || matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      content.textContent = target;
-      return;
-    }
-    const article = content.closest('.mobile-message');
-    const duration = Math.max(180, Math.min(1_800, suffix.length * 6));
-    const startedAt = performance.now();
-    article.dataset.streaming = 'true';
-    const frame = (now) => {
-      const progress = Math.min(1, (now - startedAt) / duration);
-      const visible = Math.max(1, Math.ceil(suffix.length * progress));
-      content.textContent = prefix + suffix.slice(0, visible).join('');
-      if (followTail) scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      if (progress < 1) revealFrame = requestAnimationFrame(frame);
-      else {
-        delete article.dataset.streaming;
-        revealFrame = undefined;
-      }
-    };
-    revealFrame = requestAnimationFrame(frame);
   }
 
   function startStream() {
@@ -1226,7 +1191,6 @@ export function createMobileConversationView({
       cancellingTurn,
     });
     if (signature === renderedSignature) return;
-    stopReveal();
     renderedSignature = signature;
     if (isRoot) {
       title.textContent = conversation.thread.title;
@@ -1248,24 +1212,12 @@ export function createMobileConversationView({
     renderInteraction(conversation, isRoot);
     input.placeholder = `Message ${conversation.provider.label}…`;
 
-    const previousMessages = new Map((previousConversation?.items || [])
-      .filter((item) => item.type === 'message')
-      .map((item) => [item.id, item.text]));
     const previousItemIds = new Set((previousConversation?.items || []).map((item) => item.id));
-    const reveals = [];
     const fragment = document.createDocumentFragment();
     for (const item of conversation.items) {
       const node = messageNode(item, conversation, { suppressPendingInteractions: isRoot });
       if (animate && node.nodeType === Node.ELEMENT_NODE && !previousItemIds.has(item.id)) {
         node.classList.add('mobile-conversation-enter');
-      }
-      if (animate && item.type === 'message' && item.role === 'assistant') {
-        const previous = previousMessages.get(item.id) || '';
-        if (item.text.startsWith(previous) && item.text.length > previous.length) {
-          const content = node.querySelector('.mobile-message-content');
-          content.textContent = previous;
-          reveals.push({ content, prefix: previous, target: item.text });
-        }
       }
       fragment.append(node);
     }
@@ -1306,16 +1258,6 @@ export function createMobileConversationView({
     if (!fragment.childNodes.length) fragment.append(element('div', 'mobile-conversation-loading', 'No messages yet'));
     targetMessages.replaceChildren(fragment);
     if (atBottom || pendingMessage) targetMessages.scrollTop = targetMessages.scrollHeight;
-    // Grok's interactive TUI currently persists one whole assistant block at
-    // the end of a turn rather than token deltas. Reveal only the newly
-    // persisted suffix so live replies still grow naturally on a phone. If a
-    // future Grok version persists smaller chunks, this same path appends each
-    // chunk without replaying the existing prefix.
-    if (reveals.length) {
-      for (const reveal of reveals.slice(0, -1)) reveal.content.textContent = reveal.target;
-      const latest = reveals.at(-1);
-      revealText(latest.content, latest.prefix, latest.target, atBottom, targetMessages);
-    }
     if (isRoot) updateComposerAction();
     if (isRoot && !sheet?.hidden && sheetMode === 'list') renderSubagentList(conversation);
   }
@@ -1500,6 +1442,7 @@ export function createMobileConversationView({
     if (opening) list.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
   }
   modeButton.addEventListener('click', () => toggleAuxiliaryList(modeButton, modeList));
+  menu.addEventListener('click', () => document.querySelector('#open-sidebar')?.click());
   modelList.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     event.preventDefault();
@@ -1659,7 +1602,6 @@ export function createMobileConversationView({
       generation += 1;
       clearTimeout(refreshTimer);
       clearTimeout(pendingAcceptanceTimer);
-      stopReveal();
       closeStream();
       document.removeEventListener('pointerdown', dismissModelList);
     },

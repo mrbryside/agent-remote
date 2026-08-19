@@ -462,7 +462,11 @@ export function createGrokAcpClient({
         id, text: displayText, createdAt, attachments,
       })),
       turn: {
-        active: Boolean(current.activePrompt || current.turnActive),
+        // `activePrompt` tracks the still-pending JSON-RPC request so queued
+        // prompts remain serialized. Grok's `turn_completed` notification is
+        // the authoritative user-visible lifecycle boundary and can arrive
+        // before that request promise settles.
+        active: current.turnActive,
         cancelRequested: current.cancelRequested,
       },
       controls: {
