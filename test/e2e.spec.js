@@ -507,6 +507,23 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const input = conversation.locator('#mobile-conversation-input');
   const activity = conversation.locator('#mobile-conversation-activity');
   const sendButton = conversation.locator('#mobile-conversation-send');
+  const scrollbarStyles = await conversation.locator(
+    '#mobile-conversation-messages, #mobile-conversation-input',
+  ).evaluateAll((nodes) => nodes.map((node) => ({
+    width: getComputedStyle(node).scrollbarWidth,
+    color: getComputedStyle(node).scrollbarColor,
+    webkitWidth: getComputedStyle(node, '::-webkit-scrollbar').width,
+    trackBorder: getComputedStyle(node, '::-webkit-scrollbar-track').borderTopWidth,
+    trackBackground: getComputedStyle(node, '::-webkit-scrollbar-track').backgroundColor,
+  })));
+  expect(scrollbarStyles).toHaveLength(2);
+  for (const style of scrollbarStyles) {
+    expect(style.width).toBe('thin');
+    expect(style.color).not.toContain('auto');
+    expect(style.webkitWidth).toBe('6px');
+    expect(style.trackBorder).toBe('0px');
+    expect(style.trackBackground).toBe('rgba(0, 0, 0, 0)');
+  }
   await input.focus();
   await page.evaluate(() => window.__setVisualViewport({ height: 510, offsetTop: 24 }));
   await expect(page.locator('html')).toHaveAttribute('data-visual-keyboard', 'true');

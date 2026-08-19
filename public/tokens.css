@@ -29,6 +29,9 @@
   --color-border-strong: #343438;
   --color-border-emphasis: #49494e;
   --color-focus-ring: #777f7c;
+  --color-scrollbar-thumb: #3a3a3f;
+  --color-scrollbar-thumb-hover: #505057;
+  --color-scrollbar-thumb-active: #626269;
 
   /* Text and icons */
   --color-text-strong: #dedee0;
