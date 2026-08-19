@@ -949,7 +949,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     text: 'inspect screenshot', attachmentIds: ['11111111-1111-4111-8111-111111111111'],
   }));
 
-  await page.setViewportSize({ width: 390, height: 667 });
+  // Match the 576x1024 CSS viewport of a 2x 1152x2048 phone capture. A tall
+  // viewport previously let the flexing interaction dock create a huge blank
+  // area above permission and question cards.
+  await page.setViewportSize({ width: 576, height: 1024 });
   const permissionItem = {
     id: 'permission-77', type: 'permission', permissionId: '77',
     title: 'Extract frames from recording',
@@ -975,6 +978,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(interactionDock).toBeVisible();
   await expect(interactionDock).toHaveAttribute('data-kind', 'permission');
   await expect.poll(() => interactionDock.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+  await expect.poll(() => interactionDock.evaluate((node) => {
+    const card = node.firstElementChild;
+    return card ? Math.round(node.getBoundingClientRect().height - card.getBoundingClientRect().height) : Infinity;
+  })).toBeLessThanOrEqual(22);
   const permissionDetails = interactionDock.locator('.mobile-permission-details');
   await expect(permissionDetails).toHaveAttribute('open', '');
   await expect(permissionDetails.getByText('Command details')).toBeVisible();
@@ -1049,6 +1056,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(questionCard).toHaveCount(1);
   await expect(interactionDock).toHaveAttribute('data-kind', 'question');
   await expect.poll(() => interactionDock.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+  await expect.poll(() => interactionDock.evaluate((node) => {
+    const card = node.firstElementChild;
+    return card ? Math.round(node.getBoundingClientRect().height - card.getBoundingClientRect().height) : Infinity;
+  })).toBeLessThanOrEqual(22);
   await expect.poll(() => questionCard.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
   await expect(interactionDock.locator('[data-question-id="question-99"]')).toHaveCount(1);
   await expect(conversation.locator('#mobile-conversation-composer')).toBeHidden();
