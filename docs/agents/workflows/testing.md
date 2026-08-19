@@ -22,7 +22,7 @@ Playwright runs serially because the tmux fixture, browser renderer, SQLite file
 - Project/sidebar/terminal UX and responsive behavior: `test/e2e.spec.js`
 - Grok ACP request/response extensions (permissions, questions, and Plan Review): `test/grok-acp.test.js`
 - Provider-neutral timeline mapping, child-thread ownership, and interaction projection: `test/conversation-providers.test.js`
-- Real terminal-browser routing (including cwd fallback with tmux and routing environment removed), desktop split, mobile sheet persistence, tabs, frames, DevTools, Record, cursor, refresh, and cleanup: `test/terminal-browser.spec.js`
+- Real terminal-browser routing (including cwd fallback with tmux and routing environment removed), invariant 2x frame quality during sustained motion, cadence/backpressure, desktop split, mobile sheet persistence, tabs, DevTools, Record, cursor, refresh, and cleanup: `test/terminal-browser.spec.js`
 - Remote configuration: `test/config.test.js`
 - Remote SQLite state and device audit lifecycle: `test/remote-store.test.js`
 - Keychain, Cloudflare API, ownership provisioning, auth, controller, and tunnel state machines: `test/remote-*.test.js`

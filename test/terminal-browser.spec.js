@@ -151,6 +151,17 @@ test('agent terminal-browser command opens a rendered web split on the right', a
     await expect(browserFrame).toHaveCSS('cursor', 'default', { timeout: 10_000 });
 
     const frameBeforeMotion = Number(await graphicsHost.getAttribute('data-frame-version') || 0);
+    await graphicsHost.evaluate((host) => {
+      window.__agentRemoteFrameQualitySamples = [];
+      new MutationObserver(() => {
+        window.__agentRemoteFrameQualitySamples.push({
+          version: Number(host.dataset.frameVersion || 0),
+          scale: Number(host.dataset.frameScale || 0),
+          source: host.dataset.frameSource,
+          at: performance.now(),
+        });
+      }).observe(host, { attributes: true, attributeFilter: ['data-frame-version'] });
+    });
     const motionFixture = terminalBrowserAction(
       observedBrowser.key,
       'eval',
@@ -163,8 +174,16 @@ test('agent terminal-browser command opens a rendered web split on the right', a
     await expect.poll(() => graphicsHost.evaluate((host, before) =>
       Number(host.dataset.frameVersion || 0) - before, frameBeforeMotion),
     { timeout: 1_300, intervals: [100] }).toBeGreaterThanOrEqual(8);
-    await expect(graphicsHost).toHaveAttribute('data-frame-source', 'stream');
-    await expect(graphicsHost).toHaveAttribute('data-frame-source', 'sharp', { timeout: 5_000 });
+    await expect(graphicsHost).toHaveAttribute('data-frame-source', 'sharp');
+    await expect.poll(() => graphicsHost.evaluate((host) => Number(host.dataset.frameScale || 0)), {
+      timeout: 5_000,
+    }).toBeGreaterThanOrEqual(1.8);
+    const qualitySamples = await graphicsHost.evaluate(() => window.__agentRemoteFrameQualitySamples);
+    expect(qualitySamples.length).toBeGreaterThanOrEqual(8);
+    expect(new Set(qualitySamples.map((sample) => sample.source))).toEqual(new Set(['sharp']));
+    expect(Math.min(...qualitySamples.map((sample) => sample.scale))).toBeGreaterThanOrEqual(1.8);
+    await page.waitForTimeout(600);
+    await expect(graphicsHost).toHaveAttribute('data-frame-source', 'sharp');
     await expect.poll(() => graphicsHost.evaluate((host) => Number(host.dataset.frameScale || 0)), {
       timeout: 5_000,
     }).toBeGreaterThanOrEqual(1.8);
@@ -229,7 +248,10 @@ test('agent terminal-browser command opens a rendered web split on the right', a
       const result = terminalBrowserAction(observedBrowser.key, 'eval', 'Math.round(scrollY)');
       return Number(result.stdout.match(/\d+/)?.[0] || 0);
     }, { timeout: 10_000 }).toBeGreaterThan(300);
-    await expect(graphicsHost).toHaveAttribute('data-frame-source', 'sharp', { timeout: 5_000 });
+    await expect(graphicsHost).toHaveAttribute('data-frame-source', 'sharp');
+    await expect.poll(() => graphicsHost.evaluate((host) => Number(host.dataset.frameScale || 0)), {
+      timeout: 5_000,
+    }).toBeGreaterThanOrEqual(1.8);
     await expect.poll(() => browserFrame.evaluate((canvas) => {
       const context = canvas.getContext('2d');
       const pixel = context.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height * 0.1), 1, 1).data;

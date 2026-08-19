@@ -158,13 +158,6 @@ function jpegDimensions(data) {
   return undefined;
 }
 
-function frameMatchesViewport(data, viewport) {
-  const dimensions = jpegDimensions(data);
-  if (!dimensions) return true;
-  return Math.abs(dimensions.width - viewport.pixelWidth) <= 2 &&
-    Math.abs(dimensions.height - viewport.pixelHeight) <= 2;
-}
-
 const staticRoutes = new Map([
   ['/', join(publicDir, 'index.html')],
   ['/app.js', join(publicDir, 'app.js')],
@@ -656,99 +649,59 @@ export function createTerminalServer(options = {}) {
     }
   }
 
-  function scheduleRendererCapture(renderer, fallbackData, { queueWhileRunning = false } = {}) {
-    if (fallbackData) renderer.captureFallback = fallbackData;
-    if (renderer.captureRunning) {
-      if (queueWhileRunning) renderer.captureQueued = true;
-      return;
-    }
-    if (!renderer.cdp || renderer.closing) return;
-    if (Date.now() < renderer.interactionUntil) {
-      scheduleSettledCapture(renderer, renderer.interactionUntil - Date.now() + 100);
-      return;
-    }
-    renderer.captureQueued = false;
+  function rendererHasVisibleClient(renderer) {
+    return [...renderer.clients].some((client) =>
+      client.readyState === WebSocket.OPEN && client.rendererVisible !== false);
+  }
+
+  function requestRendererFrameCapture(renderer, metadata = {}) {
+    if (!renderer.cdp || !renderer.viewport || renderer.closing || !rendererHasVisibleClient(renderer)) return;
+    renderer.captureRequest = {
+      metadata,
+      targetId: renderer.surface?.targetId,
+      viewport: renderer.viewport,
+      viewportGeneration: renderer.viewportGeneration,
+    };
+    if (renderer.captureRunning) return;
     renderer.captureRunning = true;
     void (async () => {
-      const fallback = renderer.captureFallback;
-      renderer.captureFallback = undefined;
-      const viewport = renderer.viewport;
-      const viewportGeneration = renderer.viewportGeneration;
-      const targetId = renderer.surface?.targetId;
-      let data = fallback;
       try {
-        const metrics = await sendCdp(renderer, 'Page.getLayoutMetrics');
-        const visual = metrics?.cssVisualViewport || metrics?.visualViewport;
-        const capture = await sendCdp(renderer, 'Page.captureScreenshot', {
-          format: 'jpeg',
-          quality: 90,
-          fromSurface: true,
-          captureBeyondViewport: false,
-          optimizeForSpeed: true,
-          clip: {
-            // Screenshot clips use document coordinates. Capturing from 0,0
-            // while the page is scrolled only paints the viewport intersection,
-            // leaving the large blank area seen above the page. Anchor the clip
-            // to the visual viewport and scale that exact visible rectangle.
-            x: Number(visual?.pageX) || 0,
-            y: Number(visual?.pageY) || 0,
-            // Keep the raster exactly the pane size. cssVisualViewport excludes
-            // scrollbar gutters, which otherwise makes the sharp frame narrower
-            // and starts an endless capture retry loop on scrollable pages.
-            width: viewport.width,
-            height: viewport.height,
-            scale: viewport.scaleFactor,
-          },
-        });
-        if (capture?.data) data = capture.data;
-      } catch {
-        // The regular screencast frame is still usable while a target changes.
-      } finally {
-        if (renderer.surface?.targetId === targetId && renderer.viewportGeneration === viewportGeneration &&
-            Date.now() >= renderer.interactionUntil) {
-          if (frameMatchesViewport(data, viewport)) {
-            renderer.ignoreScreencastUntil = Date.now() + 120;
-            publishRendererFrame(renderer, data, viewport, 'sharp');
-          } else {
-            clearTimeout(renderer.captureRetryTimer);
-            renderer.captureRetryTimer = setTimeout(() => {
-              renderer.captureRetryTimer = undefined;
-              if (renderer.viewportGeneration === viewportGeneration && renderer.cdp && !renderer.closing) {
-                scheduleRendererCapture(renderer, undefined, { queueWhileRunning: true });
-              }
-            }, 75);
-            renderer.captureRetryTimer.unref?.();
+        while (renderer.captureRequest && renderer.cdp && !renderer.closing && rendererHasVisibleClient(renderer)) {
+          // A new compositor tick replaces any tick that has not started its
+          // capture yet. Only one full-resolution capture can be in flight.
+          const request = renderer.captureRequest;
+          renderer.captureRequest = undefined;
+          let capture;
+          try {
+            capture = await sendCdp(renderer, 'Page.captureScreenshot', {
+              format: 'jpeg',
+              quality: 84,
+              fromSurface: true,
+              captureBeyondViewport: false,
+              optimizeForSpeed: true,
+              clip: {
+                x: Number(request.metadata.scrollOffsetX) || 0,
+                y: Number(request.metadata.scrollOffsetY) || 0,
+                width: request.viewport.width,
+                height: request.viewport.height,
+                scale: request.viewport.scaleFactor,
+              },
+            });
+          } catch {
+            continue;
+          }
+          if (capture?.data && renderer.surface?.targetId === request.targetId &&
+              renderer.viewportGeneration === request.viewportGeneration) {
+            publishRendererFrame(renderer, capture.data, request.viewport, 'sharp');
           }
         }
+      } finally {
         renderer.captureRunning = false;
-        if (Date.now() < renderer.interactionUntil) {
-          renderer.captureQueued = false;
-          scheduleSettledCapture(renderer, renderer.interactionUntil - Date.now() + 100);
-        } else if (renderer.captureQueued && renderer.cdp && !renderer.closing) {
-          scheduleRendererCapture(renderer, renderer.captureFallback);
+        if (renderer.captureRequest && renderer.cdp && !renderer.closing && rendererHasVisibleClient(renderer)) {
+          requestRendererFrameCapture(renderer, renderer.captureRequest.metadata);
         }
       }
     })();
-  }
-
-  function scheduleSettledCapture(renderer, delay = 280) {
-    clearTimeout(renderer.settledCaptureTimer);
-    const effectiveDelay = Math.max(delay, renderer.interactionUntil - Date.now() + 80);
-    renderer.settledCaptureTimer = setTimeout(() => {
-      renderer.settledCaptureTimer = undefined;
-      if (Date.now() < renderer.interactionUntil) {
-        scheduleSettledCapture(renderer, renderer.interactionUntil - Date.now() + 80);
-      } else if (renderer.cdp && !renderer.closing) {
-        scheduleRendererCapture(renderer, undefined, { queueWhileRunning: true });
-      }
-    }, effectiveDelay);
-    renderer.settledCaptureTimer.unref?.();
-  }
-
-  function markRendererInteraction(renderer, duration = 260) {
-    renderer.interactionUntil = Math.max(renderer.interactionUntil, Date.now() + duration);
-    clearTimeout(renderer.settledCaptureTimer);
-    renderer.settledCaptureTimer = undefined;
   }
 
   function broadcastCursor(renderer, value) {
@@ -801,8 +754,8 @@ export function createTerminalServer(options = {}) {
         await sendCdp(renderer, 'Emulation.setDeviceMetricsOverride', {
           width: viewport.width,
           height: viewport.height,
-          // Keep the live compositor at 1x. The idle screenshot path produces
-          // Retina detail without making every scroll frame expensive.
+          // Keep page layout and input in CSS pixels. Compositor ticks are
+          // converted into one consistently high-DPI capture stream below.
           deviceScaleFactor: 1,
           mobile: false,
           screenWidth: viewport.width,
@@ -824,23 +777,20 @@ export function createTerminalServer(options = {}) {
         renderer.viewportGeneration += 1;
         renderer.lastFrame = undefined;
         renderer.lastScreencastFrame = undefined;
-        renderer.captureFallback = undefined;
+        renderer.lastScreencastMetadata = undefined;
+        renderer.captureRequest = undefined;
         await sendCdp(renderer, 'Page.startScreencast', {
           format: 'jpeg',
-          quality: 72,
-          // Stream motion at native CSS resolution for low encode/decode
-          // latency. The debounced capture below restores full Retina detail
-          // as soon as motion stops.
-          maxWidth: viewport.width,
-          maxHeight: viewport.height,
+          // This small stream is only a cheap compositor-change signal. Its
+          // raster is never shown; each tick requests the high-DPI frame that
+          // is sent to clients.
+          quality: 24,
+          maxWidth: Math.min(viewport.width, 320),
+          maxHeight: Math.min(viewport.height, 240),
           everyNthFrame: 1,
         });
         if (!active()) return;
         renderer.screencastStarted = true;
-        // Screencast frames handle motion. One debounced 2x screenshot replaces
-        // the final frame after the page settles instead of capturing every
-        // animation frame at full Retina resolution.
-        scheduleSettledCapture(renderer, 320);
       }
     } finally {
       if (renderer.configuringViewport !== configuration) return;
@@ -899,8 +849,8 @@ export function createTerminalServer(options = {}) {
     }, renderer);
     renderer.lastFrame = undefined;
     renderer.lastScreencastFrame = undefined;
-    renderer.captureQueued = false;
-    renderer.captureFallback = undefined;
+    renderer.lastScreencastMetadata = undefined;
+    renderer.captureRequest = undefined;
     renderer.screencastStarted = false;
     renderer.viewport = undefined;
     renderer.pendingViewport = desiredViewport;
@@ -924,14 +874,12 @@ export function createTerminalServer(options = {}) {
           method: 'Page.screencastFrameAck',
           params: { sessionId: message.params.sessionId },
         }));
-        // The screencast is the motion path: acknowledge and forward it without
-        // waiting for a second Page.captureScreenshot round trip. A single
-        // sharp capture is debounced until the content stops changing.
-        if (message.params.data !== renderer.lastScreencastFrame &&
-            Date.now() >= renderer.ignoreScreencastUntil) {
+        // The low-resolution screencast is only a compositor clock. CDP, the
+        // sharp capture loop, and both WebSocket hops are latest-frame-wins.
+        if (message.params.data !== renderer.lastScreencastFrame) {
           renderer.lastScreencastFrame = message.params.data;
-          publishRendererFrame(renderer, message.params.data, renderer.viewport, 'stream');
-          scheduleSettledCapture(renderer);
+          renderer.lastScreencastMetadata = message.params.metadata;
+          requestRendererFrameCapture(renderer, message.params.metadata);
         }
       }
     });
@@ -1146,6 +1094,7 @@ export function createTerminalServer(options = {}) {
       surface: undefined,
       lastFrame: undefined,
       lastScreencastFrame: undefined,
+      lastScreencastMetadata: undefined,
       frameSequence: 0,
       viewport: undefined,
       viewportGeneration: 0,
@@ -1153,12 +1102,7 @@ export function createTerminalServer(options = {}) {
       configuringViewport: false,
       screencastStarted: false,
       captureRunning: false,
-      captureQueued: false,
-      captureFallback: undefined,
-      captureRetryTimer: undefined,
-      settledCaptureTimer: undefined,
-      ignoreScreencastUntil: 0,
-      interactionUntil: 0,
+      captureRequest: undefined,
       cursor: 'default',
       cursorProbePoint: undefined,
       cursorProbeTimer: undefined,
@@ -1185,8 +1129,6 @@ export function createTerminalServer(options = {}) {
       renderer.exit?.dispose();
       clearInterval(renderer.tabPoll);
       clearTimeout(renderer.cursorProbeTimer);
-      clearTimeout(renderer.captureRetryTimer);
-      clearTimeout(renderer.settledCaptureTimer);
       for (const client of renderer.clients) {
         sendJson(client, renderer.surface
           ? { type: 'closed', reason: 'Browser process exited' }
@@ -1205,8 +1147,6 @@ export function createTerminalServer(options = {}) {
     renderer.closing = true;
     clearInterval(renderer.tabPoll);
     clearTimeout(renderer.cursorProbeTimer);
-    clearTimeout(renderer.captureRetryTimer);
-    clearTimeout(renderer.settledCaptureTimer);
     if (renderer.cdp && renderer.cdp.readyState < WebSocket.CLOSING) renderer.cdp.close();
     for (const client of renderer.clients) {
       sendJson(client, { type: 'closed', reason });
@@ -1280,6 +1220,7 @@ export function createTerminalServer(options = {}) {
           const frame = rendererFrameMessage(renderer);
           if (frame) sendRendererFrame(socket, frame);
           sendJson(socket, { type: 'cursor', value: renderer.cursor || 'default' });
+          requestRendererFrameCapture(renderer, renderer.lastScreencastMetadata);
         }
       } else if (message.type === 'viewport' &&
           Number.isInteger(message.width) && message.width >= 160 && message.width <= 4096 &&
@@ -1301,23 +1242,17 @@ export function createTerminalServer(options = {}) {
           deltaX: Number.isFinite(message.deltaX) ? message.deltaX : 0,
           deltaY: Number.isFinite(message.deltaY) ? message.deltaY : 0,
         }).catch(() => {});
-        if (message.event === 'mouseWheel' || message.event === 'mousePressed' || message.event === 'mouseReleased') {
-          markRendererInteraction(renderer, message.event === 'mouseWheel' ? 320 : 220);
-          scheduleSettledCapture(renderer);
-        }
         if (message.event === 'mouseMoved') scheduleCursorProbe(renderer, message.x, message.y);
       } else if (message.type === 'pointer-leave') {
         renderer.cursorProbePoint = undefined;
         broadcastCursor(renderer, 'default');
       } else if (message.type === 'key' && renderer.cdp && ['keyDown', 'keyUp', 'rawKeyDown'].includes(message.event)) {
-        markRendererInteraction(renderer, 220);
         void sendCdp(renderer, 'Input.dispatchKeyEvent', {
           type: message.event,
           key: typeof message.key === 'string' ? message.key : '',
           code: typeof message.code === 'string' ? message.code : '',
           text: message.event === 'keyDown' && typeof message.text === 'string' ? message.text : '',
         }).catch(() => {});
-        scheduleSettledCapture(renderer);
       } else if (message.type === 'tab-new') {
         void controlRendererTab(renderer, { cmd: 'open-tab', url: 'about:blank' })
           .catch((error) => sendJson(socket, { type: 'error', message: error.message }));
@@ -1332,13 +1267,11 @@ export function createTerminalServer(options = {}) {
           .catch((error) => sendJson(socket, { type: 'error', message: error.message }));
       } else if (message.type === 'browser-action' && renderer.cdp &&
           ['back', 'forward', 'reload'].includes(message.action)) {
-        markRendererInteraction(renderer, 400);
         const action = message.action;
         const command = action === 'reload'
           ? sendCdp(renderer, 'Page.reload', { ignoreCache: false })
           : sendCdp(renderer, 'Runtime.evaluate', { expression: action === 'back' ? 'history.back()' : 'history.forward()' });
         void command.catch(() => {});
-        scheduleSettledCapture(renderer, 450);
       } else if (message.type === 'close') {
         closeRenderer(key, 'Browser pane closed', false, renderer);
       } else if (

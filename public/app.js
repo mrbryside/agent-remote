@@ -990,8 +990,8 @@ function fitTerminals() {
       const viewportRequest = `${viewportWidth}x${viewportHeight}@2`;
       if (pane.lastViewportRequest !== viewportRequest) {
         pane.lastViewportRequest = viewportRequest;
-        // Motion is streamed continuously and the settled frame is replaced
-        // by a sharp 2x capture. Input remains in CSS-pixel coordinates.
+        // A single high-DPI stream owns motion and idle frames. Input remains
+        // in CSS-pixel coordinates while the raster stays consistently sharp.
         pane.socket.send(JSON.stringify({
           type: 'viewport',
           width: viewportWidth,
