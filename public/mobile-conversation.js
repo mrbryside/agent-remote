@@ -634,19 +634,76 @@ export function createMobileConversationView({
     panel.append(section);
   }
 
+  function changeLine(kind, oldNumber, newNumber, text) {
+    const row = element('div', 'mobile-event-change-line');
+    row.dataset.kind = kind;
+    row.append(
+      element('span', '', oldNumber || ''),
+      element('span', '', newNumber || ''),
+      element('i', '', kind === 'add' ? '+' : kind === 'remove' ? '−' : ' '),
+      element('code', '', text),
+    );
+    return row;
+  }
+
+  function changeNode(change) {
+    const splitLines = (value) => {
+      const text = String(value || '').replace(/\n$/, '');
+      return text ? text.split('\n') : [];
+    };
+    const before = splitLines(change.oldText);
+    const after = splitLines(change.newText);
+    let prefix = 0;
+    while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
+    let suffix = 0;
+    while (suffix < before.length - prefix && suffix < after.length - prefix &&
+      before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix += 1;
+    const removed = before.slice(prefix, before.length - suffix);
+    const added = after.slice(prefix, after.length - suffix);
+    const section = element('section', 'mobile-event-change');
+    const header = element('header');
+    header.append(
+      element('strong', '', change.path || 'Changed file'),
+      element('small', '', `+${added.length} −${removed.length}`),
+    );
+    const scroll = element('div', 'mobile-event-change-scroll');
+    const lines = element('div', 'mobile-event-change-lines');
+    const contextStart = Math.max(0, prefix - 3);
+    if (contextStart > 0) lines.append(changeLine('skip', '', '', '…'));
+    for (let index = contextStart; index < prefix; index += 1) {
+      lines.append(changeLine('context', index + 1, index + 1, before[index]));
+    }
+    removed.forEach((line, index) => {
+      lines.append(changeLine('remove', prefix + index + 1, '', line));
+    });
+    added.forEach((line, index) => {
+      lines.append(changeLine('add', '', prefix + index + 1, line));
+    });
+    const contextCount = Math.min(3, suffix);
+    for (let index = 0; index < contextCount; index += 1) {
+      lines.append(changeLine(
+        'context', before.length - suffix + index + 1, after.length - suffix + index + 1,
+        before[before.length - suffix + index],
+      ));
+    }
+    if (suffix > contextCount) lines.append(changeLine('skip', '', '', '…'));
+    if (!lines.childNodes.length) lines.append(changeLine('context', 1, 1, before[0] || after[0] || ''));
+    scroll.append(lines);
+    section.append(header, scroll);
+    return section;
+  }
+
   function eventDetails(panel, item) {
     if (item.type === 'thought' || item.type === 'recap' || item.type === 'event') {
       detail(panel, item.type === 'thought' ? 'Reasoning' : 'Details', item.text);
     }
     if (item.type === 'permission') detail(panel, 'Request', item.text || item.title);
     if (item.type === 'tool') {
-      detail(panel, 'Input', item.input);
+      if (item.command) detail(panel, 'Shell', item.command, 'mobile-event-shell');
+      else if (!item.diffs?.length) detail(panel, 'Input', item.input);
       detail(panel, 'Locations', item.locations?.join('\n'));
+      for (const change of item.diffs || []) panel.append(changeNode(change));
       detail(panel, 'Output', item.output);
-      for (const change of item.diffs || []) {
-        detail(panel, `Before · ${change.path}`, change.oldText, 'mobile-event-diff');
-        detail(panel, `After · ${change.path}`, change.newText, 'mobile-event-diff mobile-event-diff-after');
-      }
       for (const output of item.images || []) {
         const image = element('img', 'mobile-event-image');
         image.alt = `${item.title || 'Tool'} output`;
@@ -769,13 +826,18 @@ export function createMobileConversationView({
     const toggle = element('button', 'mobile-event-toggle');
     toggle.type = 'button';
     toggle.setAttribute('aria-expanded', String(expandedItems.has(item.id)));
+    const thinking = item.type === 'thought' && ['working', 'running'].includes(item.status);
     const copy = element('span');
     copy.append(
-      element('small', '', item.kind || item.type),
-      element('strong', '', item.title || 'Event'),
+      element('small', '', item.type === 'thought' ? 'Reasoning' : item.kind || item.type),
+      element('strong', '', item.type === 'thought' ? thinking ? 'Thinking…' : 'Thought' : item.title || 'Event'),
     );
-    const state = element('span', 'mobile-event-status', statusLabel(item.status));
+    const state = element('span', 'mobile-event-status', item.type === 'thought' ? '' : statusLabel(item.status));
     state.dataset.state = item.status;
+    if (thinking) {
+      state.classList.add('mobile-thinking-indicator');
+      state.setAttribute('aria-label', 'Thinking');
+    } else if (item.type === 'thought') state.hidden = true;
     const arrow = element('i', '', '›');
     const panel = element('div', 'mobile-event-panel');
     panel.hidden = !expandedItems.has(item.id);

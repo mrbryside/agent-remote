@@ -155,6 +155,66 @@ test('Grok provider maps a managed tmux process to messages and subagents', asyn
   assert.equal(data.prompts[0].text, 'hello from phone');
 });
 
+test('Grok provider groups adjacent mixed tools across resolved permissions and closes thoughts at boundaries', async () => {
+  const data = await fixture();
+  const snapshot = await data.acpClient.loadSession({ sessionId: data.parentId });
+  snapshot.events = [
+    { timestamp: 1, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'shell-1', title: 'Run checks', status: 'running',
+      rawInput: { variant: 'Bash', command: 'npm test -- --runInBand' },
+      _meta: { 'x.ai/tool': { name: 'run_command', kind: 'execute', label: 'Shell' } },
+    } } },
+    { timestamp: 1.1, params: { update: {
+      sessionUpdate: 'permission_request', permissionId: 'shell-permission', title: 'Run checks',
+      toolCall: { toolCallId: 'shell-1' }, options: [{ optionId: 'allow_once', name: 'Allow once' }],
+    } } },
+    { timestamp: 1.2, params: { update: {
+      sessionUpdate: 'permission_resolved', permissionId: 'shell-permission', optionId: 'allow_once', label: 'Yes',
+    } } },
+    { timestamp: 1.3, params: { update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'shell-1', status: 'completed', rawOutput: 'passed',
+    } } },
+    { timestamp: 2, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'edit-1', title: 'Edit app.js', status: 'running',
+      rawInput: { path: '/tmp/project/app.js' },
+      _meta: { 'x.ai/tool': { name: 'edit_file', kind: 'edit', label: 'Edit' } },
+    } } },
+    { timestamp: 2.1, params: { update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'edit-1', status: 'completed', content: [{
+        type: 'diff', path: '/tmp/project/app.js', oldText: 'const old = true;\n', newText: 'const ready = true;\n',
+      }],
+    } } },
+    { timestamp: 3, params: { update: {
+      sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'I should verify this. ' },
+    } } },
+    { timestamp: 3.1, params: { update: {
+      sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'The boundary matters.' },
+    } } },
+    { timestamp: 4, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'read-1', title: 'Read app.js', status: 'running',
+      rawInput: { target_file: '/tmp/project/app.js' },
+      _meta: { 'x.ai/tool': { name: 'read_file', kind: 'read', label: 'Read' } },
+    } } },
+  ];
+  const registry = createConversationRegistry({
+    providers: [createGrokConversationProvider({ acpClient: data.acpClient })],
+  });
+  const result = await registry.read({
+    cwd: data.cwd, command: `grok --leader --session-id ${data.parentId}`,
+    conversationThreadId: data.parentId,
+  });
+
+  assert.deepEqual(result.items.map((item) => item.type), ['tool_group', 'thought', 'tool']);
+  assert.equal(result.items[0].title, 'Ran 1 command, Edited 1 file');
+  assert.deepEqual(result.items[0].tools.map((tool) => tool.toolCallId), ['shell-1', 'edit-1']);
+  assert.equal(result.items[0].tools[0].command, 'npm test -- --runInBand');
+  assert.equal(result.items[1].text, 'I should verify this. The boundary matters.');
+  assert.equal(result.items[1].status, 'completed');
+  assert.equal(result.items[2].toolCallId, 'read-1');
+  assert.equal(result.items[2].status, 'working');
+  assert.ok(!result.items.some((item) => item.type === 'permission'));
+});
+
 test('Grok provider only opens descendants of the mapped root thread', async () => {
   const data = await fixture();
   const provider = createGrokConversationProvider({
@@ -284,7 +344,7 @@ test('Grok provider binds the captured permission-first spawn lifecycle without 
     ['plan', 'default'].includes(item.text)), 'subagent lifecycle mode noise is suppressed');
 });
 
-test('Grok provider closes stale permission actions when the same tool already ran in Grok', async () => {
+test('Grok provider removes a stale permission once the same tool already ran in Grok', async () => {
   const data = await fixture();
   const snapshot = await data.acpClient.loadSession({ sessionId: data.parentId });
   snapshot.events = [{ timestamp: 1, params: { update: {
@@ -302,10 +362,8 @@ test('Grok provider closes stale permission actions when the same tool already r
     cwd: data.cwd, command: `grok --leader --session-id ${data.parentId}`,
     conversationThreadId: data.parentId,
   });
-  const permission = result.items.find((item) => item.permissionId === 'stale-permission');
-  assert.equal(permission.status, 'completed');
-  assert.equal(permission.selectedLabel, 'Approved in Grok');
-  assert.equal(permission.resolvedBy, 'grok');
+  assert.ok(!result.items.some((item) => item.type === 'permission' &&
+    item.permissionId === 'stale-permission'));
 });
 
 test('Grok provider gives command permissions a readable summary and safe action order', async () => {
@@ -339,7 +397,7 @@ test('Grok provider gives command permissions a readable summary and safe action
   ]);
 });
 
-test('Grok provider closes a permission that arrives after its subagent is already running', async () => {
+test('Grok provider removes a permission that arrives after its subagent is already running', async () => {
   const data = await fixture();
   const snapshot = await data.acpClient.loadSession({ sessionId: data.parentId });
   snapshot.events = [{ timestamp: 1, params: { update: {
@@ -364,9 +422,8 @@ test('Grok provider closes a permission that arrives after its subagent is alrea
     cwd: data.cwd, command: `grok --leader --session-id ${data.parentId}`,
     conversationThreadId: data.parentId,
   });
-  const permission = result.items.find((item) => item.type === 'permission' && item.permissionId === 'late-permission');
-  assert.equal(permission.status, 'completed');
-  assert.equal(permission.selectedLabel, 'Approved in Grok');
+  assert.ok(!result.items.some((item) => item.type === 'permission' &&
+    item.permissionId === 'late-permission'));
 });
 
 test('Grok provider keeps concurrent permission-first subagents distinct through binding', async () => {

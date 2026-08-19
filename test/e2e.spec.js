@@ -209,10 +209,17 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }));
   rootItems.push(
     { id: 'thought-1', type: 'thought', title: 'Thought', text: 'I should inspect the provider.', status: 'working' },
-    { id: 'tool-group-1', type: 'tool_group', title: 'Listed 1 dir, Read 2 files', status: 'completed', tools: [
+    { id: 'tool-group-1', type: 'tool_group', title: 'Listed 1 dir, Read 2 files, Edited 1 file, Ran 1 command', status: 'completed', tools: [
       { id: 'tool-list', type: 'tool', title: 'List Files', subject: 'src', kind: 'list', status: 'completed', output: 'Found files' },
       { id: 'tool-read-agents', type: 'tool', title: 'Read', subject: 'AGENTS.md', kind: 'read', status: 'completed', input: '{"path":"AGENTS.md"}', output: 'Provider instructions loaded', locations: ['AGENTS.md'] },
       { id: 'tool-read-package', type: 'tool', title: 'Read', subject: 'package.json', kind: 'read', status: 'completed', output: 'Package loaded' },
+      { id: 'tool-edit-app', type: 'tool', title: 'Edited', subject: 'app.js', kind: 'edit', status: 'completed', diffs: [{
+        path: 'public/app.js', oldText: 'const status = "old";\nrender(status);\n',
+        newText: 'const status = "ready";\nrender(status);\n',
+      }] },
+      { id: 'tool-shell', type: 'tool', title: 'Shell', kind: 'execute', status: 'completed',
+        command: `node --test ${'a-very-long-path/'.repeat(12)}test.js`,
+        output: Array.from({ length: 80 }, (_, line) => `test output line ${line + 1}`).join('\n') },
     ] },
     { id: 'plan-1', type: 'plan', title: 'Plan', status: 'working', entries: [{ id: 'p1', content: 'Inspect events', status: 'completed' }, { id: 'p2', content: 'Render cards', status: 'working' }] },
     { id: 'goal-1', type: 'goal', title: 'Goal', objective: 'Render all Grok events', phase: 'executing', status: 'working', progress: { completed: 1, total: 2 } },
@@ -398,7 +405,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('#mobile-conversation-state')).toHaveText('Ready', { timeout: 8_000 });
   await expect(conversation.locator('.mobile-conversation-loading')).toHaveCount(0, { timeout: 8_000 });
   await expect(conversation.locator('.mobile-message')).toHaveCount(18);
-  await expect(conversation.locator('.mobile-event-card')).toHaveCount(8);
+  await expect(conversation.locator('.mobile-event-card')).toHaveCount(10);
   await expect(conversation.locator('#mobile-conversation-context')).toContainText('6K / 190K');
   const modelButton = conversation.locator('#mobile-conversation-model');
   await expect(modelButton).toContainText('Qwen 3.8 27B');
@@ -486,7 +493,30 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => mobileInputs).toContainEqual(expect.objectContaining({
     text: 'Review @public/mobile-conversation.js', fileMentions: ['public/mobile-conversation.js'],
   }));
-  await expect(conversation.locator('.mobile-tool-group')).toContainText('Listed 1 dir, Read 2 files');
+  const thoughtCard = conversation.locator('.mobile-event-thought').first();
+  await expect(thoughtCard.getByRole('button')).toContainText('Thinking…');
+  await expect(thoughtCard.locator('.mobile-thinking-indicator')).toHaveCount(1);
+  await thoughtCard.getByRole('button').click();
+  await expect(thoughtCard.getByText('I should inspect the provider.')).toBeVisible();
+  rootItems[rootItems.findIndex((item) => item.id === 'thought-1')] = {
+    id: 'thought-1', type: 'thought', title: 'Thought',
+    text: 'I should inspect the provider. The streamed reasoning is now visible.', status: 'working',
+  };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(thoughtCard.getByText('The streamed reasoning is now visible.')).toBeVisible();
+  rootItems[rootItems.findIndex((item) => item.id === 'thought-1')].status = 'completed';
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(thoughtCard.getByRole('button')).toContainText('Thought');
+  await expect(thoughtCard.locator('.mobile-thinking-indicator')).toHaveCount(0);
+  await expect(conversation.locator('.mobile-tool-group')).toContainText('Listed 1 dir, Read 2 files, Edited 1 file, Ran 1 command');
   await expect(conversation.getByText('Turn completed')).toHaveCount(0);
   await expect(conversation.getByText('Session recap')).toHaveCount(0);
   const subagentPill = conversation.locator('.mobile-subagent-pill');
@@ -530,6 +560,16 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(streamedMessage.locator('.mobile-message-content')).toHaveText(streamText);
   await expect(streamedMessage).not.toHaveAttribute('data-streaming', 'true');
   await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
+  const toolPanel = conversation.locator('.mobile-tool-group-panel');
+  await expect.poll(() => toolPanel.evaluate((panel) => panel.clientHeight)).toBeGreaterThan(200);
+  await conversation.getByRole('button', { name: /Edited app\.js/ }).click();
+  await expect(conversation.locator('.mobile-event-change')).toContainText('public/app.js');
+  await expect(conversation.locator('.mobile-event-change-line[data-kind="remove"]')).toContainText('const status = "old";');
+  await expect(conversation.locator('.mobile-event-change-line[data-kind="add"]')).toContainText('const status = "ready";');
+  await conversation.getByRole('button', { name: /Shell/ }).click();
+  const shellDetail = conversation.locator('.mobile-event-shell pre');
+  await expect.poll(() => shellDetail.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+  await expect.poll(() => toolPanel.evaluate((panel) => panel.scrollHeight > panel.clientHeight)).toBe(true);
   await conversation.getByRole('button', { name: /Read AGENTS\.md/ }).click();
   await expect(conversation.getByText('Provider instructions loaded')).toBeVisible();
   await expect(conversation.locator('.mobile-subagent-pill')).toContainText('1 agent running');

@@ -184,9 +184,13 @@ function summarizeTools(tools) {
 }
 
 function groupToolBatches(items) {
+  // Resolved permissions are transient interaction state. Keeping them in the
+  // history duplicates the tool that was approved and incorrectly splits one
+  // contiguous run of mixed tool activity into several singleton cards.
+  const visibleItems = items.filter((item) => item.type !== 'permission' || item.status === 'pending');
   const grouped = [];
-  for (let index = 0; index < items.length;) {
-    const item = items[index];
+  for (let index = 0; index < visibleItems.length;) {
+    const item = visibleItems[index];
     if (item.type !== 'tool') {
       grouped.push(item);
       index += 1;
@@ -198,8 +202,8 @@ function groupToolBatches(items) {
     // the next visible conversation item. A later tool may start after an
     // earlier result (and therefore have a different timestamp) while still
     // belonging to that same group.
-    while (items[cursor]?.type === 'tool') {
-      batch.push(items[cursor]);
+    while (visibleItems[cursor]?.type === 'tool') {
+      batch.push(visibleItems[cursor]);
       cursor += 1;
     }
     if (batch.length === 1) grouped.push(item);
@@ -357,6 +361,11 @@ function timeline(updates) {
     if (!update) return;
     const kind = update.sessionUpdate;
     if (kind === 'available_commands_update' || kind === 'session_info_update') return;
+    const activeThought = items.at(-1);
+    if (kind !== 'agent_thought_chunk' && activeThought?.type === 'thought' &&
+        activeThought.status === 'working') {
+      activeThought.status = 'completed';
+    }
     if (kind === 'user_message_chunk') {
       status = 'working';
       activity = { phase: 'waiting', label: 'Waiting for response…' };
@@ -510,7 +519,9 @@ function timeline(updates) {
         if (nextKind !== 'other' || item.kind === 'tool' || item.kind === 'other') item.kind = nextKind;
       }
       if (update.rawInput !== undefined || meta?.input !== undefined) {
-        item.input = serialized(update.rawInput ?? meta.input);
+        const rawInput = update.rawInput ?? meta.input;
+        item.input = serialized(rawInput);
+        if (typeof rawInput?.command === 'string') item.command = boundedText(rawInput.command, 32_768);
         item.subject = toolSubject(update) || item.subject;
       }
       if (Array.isArray(update.locations)) {
