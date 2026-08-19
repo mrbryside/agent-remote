@@ -181,6 +181,17 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await page.addInitScript(() => {
     window.__conversationStreams = [];
     window.__mobileConversationScrollCalls = [];
+    const visualViewportState = { width: 390, height: 844, offsetTop: 0, offsetLeft: 0, scale: 1 };
+    const visualViewport = new EventTarget();
+    for (const property of Object.keys(visualViewportState)) {
+      Object.defineProperty(visualViewport, property, { get: () => visualViewportState[property] });
+    }
+    window.__setVisualViewport = (next) => {
+      Object.assign(visualViewportState, next);
+      visualViewport.dispatchEvent(new Event('resize'));
+      visualViewport.dispatchEvent(new Event('scroll'));
+    };
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: visualViewport });
     const nativeScrollTo = Element.prototype.scrollTo;
     Element.prototype.scrollTo = function scrollTo(...args) {
       if (this.id === 'mobile-conversation-messages') {
@@ -496,6 +507,38 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const input = conversation.locator('#mobile-conversation-input');
   const activity = conversation.locator('#mobile-conversation-activity');
   const sendButton = conversation.locator('#mobile-conversation-send');
+  await input.focus();
+  await page.evaluate(() => window.__setVisualViewport({ height: 510, offsetTop: 24 }));
+  await expect(page.locator('html')).toHaveAttribute('data-visual-keyboard', 'true');
+  await expect.poll(() => page.evaluate(() => {
+    const root = document.querySelector('#mobile-conversation').getBoundingClientRect();
+    const composer = document.querySelector('#mobile-conversation-composer').getBoundingClientRect();
+    const messages = document.querySelector('#mobile-conversation-messages').getBoundingClientRect();
+    return {
+      rootTop: Math.round(root.top),
+      rootHeight: Math.round(root.height),
+      composerBottom: Math.round(composer.bottom),
+      composerTop: Math.round(composer.top),
+      messagesHeight: Math.round(messages.height),
+    };
+  })).toEqual({
+    rootTop: 24,
+    rootHeight: 510,
+    composerBottom: 534,
+    composerTop: expect.any(Number),
+    messagesHeight: expect.any(Number),
+  });
+  const keyboardLayout = await page.evaluate(() => {
+    const root = document.querySelector('#mobile-conversation').getBoundingClientRect();
+    const composer = document.querySelector('#mobile-conversation-composer').getBoundingClientRect();
+    const messages = document.querySelector('#mobile-conversation-messages').getBoundingClientRect();
+    return { composerTop: composer.top, messagesHeight: messages.height, rootTop: root.top };
+  });
+  expect(keyboardLayout.composerTop).toBeGreaterThan(keyboardLayout.rootTop + 160);
+  expect(keyboardLayout.messagesHeight).toBeGreaterThan(120);
+  await page.evaluate(() => window.__setVisualViewport({ height: 844, offsetTop: 0 }));
+  await expect(page.locator('html')).toHaveAttribute('data-visual-keyboard', 'false');
+  await input.evaluate((element) => element.blur());
   currentActivity = {
     active: true, phase: 'waiting', label: 'Waiting for response…',
     canCancel: true, cancelRequested: false,

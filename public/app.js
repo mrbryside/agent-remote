@@ -2857,13 +2857,20 @@ installHorizontalResizer(sidebarResizer, 'sidebar');
 installHorizontalResizer(graphicsResizer, 'graphics');
 compactSidebarMedia.addEventListener('change', syncSidebarForViewport);
 syncSidebarForViewport();
-function syncVisualViewportHeight() {
+function syncVisualViewport() {
   if (!window.visualViewport) return;
-  document.documentElement.style.setProperty('--visual-viewport-height', `${Math.round(window.visualViewport.height)}px`);
+  const viewport = window.visualViewport;
+  const root = document.documentElement;
+  root.style.setProperty('--visual-viewport-height', `${Math.max(1, Math.round(viewport.height))}px`);
+  root.style.setProperty('--visual-viewport-width', `${Math.max(1, Math.round(viewport.width))}px`);
+  root.style.setProperty('--visual-viewport-offset-top', `${Math.max(0, Math.round(viewport.offsetTop))}px`);
+  root.style.setProperty('--visual-viewport-offset-left', `${Math.max(0, Math.round(viewport.offsetLeft))}px`);
+  root.dataset.visualKeyboard = String(window.innerHeight - viewport.height - viewport.offsetTop > 120);
   requestAnimationFrame(resize);
 }
-window.visualViewport?.addEventListener('resize', syncVisualViewportHeight);
-syncVisualViewportHeight();
+window.visualViewport?.addEventListener('resize', syncVisualViewport);
+window.visualViewport?.addEventListener('scroll', syncVisualViewport);
+syncVisualViewport();
 requestAnimationFrame(() => requestAnimationFrame(() => {
   delete document.documentElement.dataset.sidebarBooting;
   delete document.documentElement.dataset.initialSidebar;
@@ -2876,7 +2883,8 @@ const poller = setInterval(() => {
 }, 3000);
 window.addEventListener('beforeunload', () => {
   compactSidebarMedia.removeEventListener('change', syncSidebarForViewport);
-  window.visualViewport?.removeEventListener('resize', syncVisualViewportHeight);
+  window.visualViewport?.removeEventListener('resize', syncVisualViewport);
+  window.visualViewport?.removeEventListener('scroll', syncVisualViewport);
   observer.disconnect();
   clearInterval(poller);
   mobileConversation.destroy();
