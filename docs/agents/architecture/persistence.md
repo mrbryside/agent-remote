@@ -4,7 +4,7 @@
 
 `src/projects.js` uses Node's synchronous SQLite API. The default file is `~/.agent-remote/agent-remote.db`; its parent directory is created with user-only permissions on startup. `AGENT_REMOTE_DB_PATH` overrides the location for development and tests.
 
-The `projects` table stores display name, working directory, startup command, and timestamps. The `chats` table stores tmux session name, owning project, title/auto-title state, creation time, and latest activity. Foreign keys cascade chat deletion when a project is removed. Startup migrations add missing chat activity data without discarding existing rows.
+The `projects` table stores display name, working directory, selected `agent_id`, and timestamps. It never stores an editable launch command. `src/agents.js` is the authoritative server-side catalog that maps an agent ID to its command and UI/provider metadata; production currently exposes only Grok. The `chats` table stores tmux session name, owning project, title/auto-title state, creation time, and latest activity. Foreign keys cascade chat deletion when a project is removed. Startup migrations add missing chat activity data without discarding existing rows.
 
 ## Durable versus cached state
 

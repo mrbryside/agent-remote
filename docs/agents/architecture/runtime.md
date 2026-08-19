@@ -7,15 +7,16 @@
 - `src/remote/` owns Remote persistence, macOS Keychain credentials, Cloudflare API/DNS ownership checks, tunnel child lifecycle, device authentication, and remote gateway policy. Read [Remote access](remote-access.md) before changing these boundaries.
 - `src-tauri/src/main.rs` is a thin macOS wrapper. It attaches to a compatible local backend or owns a spawned sidecar; it does not duplicate backend behavior or grant the webview privileged IPC.
 - `src/sessions.js` creates and discovers only tmux sessions carrying the `@agent_remote` marker. Those sessions outlive browser connections.
+- `src/agents.js` owns the project-agent catalog. Project APIs accept an agent ID, and only the server resolves it to a launch command. Browser responses never expose those commands.
 - `public/app.js` owns mounted xterm runtimes, optimistic project/chat UI, session switching, per-session browser panes, and viewport resizing.
 - `src/conversations/` maps managed agent metadata to provider-owned conversation data. Grok uses a shared ACP leader for replay, live updates, input, and nested subagents; `public/mobile-conversation.js` renders its provider-neutral schema only on compact viewports.
 - `bin/agent-remote.js` is the standalone session launcher. `bin/terminal-browser` routes agent browser commands back to the owning web session.
 
 ## Main terminal flow
 
-1. A project saves a folder and startup command through the HTTP API.
+1. A project saves a folder and validated agent ID through the HTTP API.
 2. Creating a chat reserves a unique name and starts a detached tmux session in that folder.
-3. The startup command is sent into the tmux pane after agent-remote environment variables are exported.
+3. The server resolves the agent ID through `src/agents.js`, then sends its catalog-owned command into the tmux pane after agent-remote environment variables are exported.
 4. The browser connects to `/ws` with the selected session key and viewport geometry.
 5. The server attaches a PTY to tmux; xterm writes input and consumes output over the socket.
 6. Disconnecting the page closes the PTY attachment, not the tmux session. Reconnect restores it.
@@ -29,7 +30,7 @@ tmux viewport without changing the desktop or shared pane. Visual-viewport
 changes refit the terminal when the software keyboard opens. When a provider
 can map the selected agent process, the phone replaces xterm with native message
 history and a textarea composer; desktop remains attached to xterm. Unsupported
-commands retain the terminal fallback.
+standalone commands retain the terminal fallback.
 
 Desktop Grok startup is also provider-gated. Its xterm runtime may attach and
 buffer output behind one opaque startup surface until the conversation endpoint
@@ -37,7 +38,7 @@ confirms ACP readiness. The successful readiness response removes that cover in
 one atomic hand-off; the client does not inspect Grok's terminal text, inject
 focus keys, or otherwise drive the TUI. If readiness is delayed, the same cover
 reports the delay and keeps polling instead of flashing the terminal. Other
-terminal commands retain the bounded quiet-window reveal path.
+catalog agents and standalone terminal commands retain the bounded quiet-window reveal path.
 
 ## State ownership
 

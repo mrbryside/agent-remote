@@ -1,6 +1,6 @@
 # agent-remote
 
-A local multi-session browser terminal built with xterm.js, WebSocket, Node.js, node-pty, and tmux. Start commands from the CLI or the web UI, keep them alive across browser reconnects, switch between sessions from the sidebar, or pair a browser through an authenticated Cloudflare Tunnel on macOS.
+A local multi-session browser terminal built with xterm.js, WebSocket, Node.js, node-pty, and tmux. Start agents from the CLI or the web UI, keep them alive across browser reconnects, switch between sessions from the sidebar, or pair a browser through an authenticated Cloudflare Tunnel on macOS.
 
 The frontend supports Kitty graphics through xterm's image addon. For `terminal-browser`, a dedicated PTY launches the browser and the web UI streams its page surface directly over CDP for smooth, unclipped rendering.
 
@@ -23,9 +23,9 @@ cd agent-remote
 npm start
 ```
 
-Open <http://127.0.0.1:3000>. Click **New project**, choose a working folder, and set the command that should start every new chat (for example `grok`, `claude`, or a command with arguments). The project name is optional and falls back to the selected folder name. Its **New chat** button then creates a persistent tmux session in that folder and runs the saved command.
+Open <http://127.0.0.1:3000>. Click **New project**, choose a working folder, and select an agent. Grok is the only project agent currently available. The project name is optional and falls back to the selected folder name. Its **New chat** button then creates a persistent tmux session in that folder and launches the selected agent using the server-owned agent catalog.
 
-Projects, chat titles, commands, and working folders are stored in `~/.agent-remote/agent-remote.db`. The directory and SQLite database are created automatically on first startup. Terminal processes remain in tmux, while the database provides the project/chat organization shown in the sidebar.
+Projects, chat titles, selected agent IDs, and working folders are stored in `~/.agent-remote/agent-remote.db`. Launch commands stay in the server-owned catalog and are not editable project data. The directory and SQLite database are created automatically on first startup. Terminal processes remain in tmux, while the database provides the project/chat organization shown in the sidebar.
 
 On a phone, a managed Grok chat switches to a native conversation view: normal
 scrolling history, a system-keyboard textarea, live tool activity, and cards
@@ -44,7 +44,7 @@ agent-remote --name api-agent --cwd /path/to/project claude
 
 The order is flexible: sessions can be started before or after `npm start`; the web UI discovers them automatically. Starting the same command more than once creates `-2`, `-3`, and so on.
 
-Resize the project sidebar by dragging its edge. Collapse or reopen it with the top-bar button, or press `Ctrl+B` (`Cmd+B` on macOS). The width and collapsed state are remembered after reload. Each project menu can edit its name/folder/command, clear only that project's chats, or delete the project. Every chat can be closed independently.
+Resize the project sidebar by dragging its edge. Collapse or reopen it with the top-bar button, or press `Ctrl+B` (`Cmd+B` on macOS). The width and collapsed state are remembered after reload. Each project menu can edit its name, folder, or agent, clear only that project's chats, or delete the project. Every chat can be closed independently.
 
 Manage CLI sessions:
 
@@ -162,4 +162,4 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 Remote Playwright coverage uses fake Cloudflare and tunnel services on isolated loopback test ports; it never needs a live Cloudflare account. `npm run sidecar:smoke` starts the packaged launcher with temporary state, confirms both listeners and real PTY WebSocket output, then asserts shutdown leaves no sidecar or cloudflared process behind. The desktop package and sidecar smoke checks require Darwin ARM64.
 
-The integration suite creates real projects through the browser, checks the folder-name fallback, starts real tmux chats with each project's saved command, derives the chat title from the first prompt, clears projects independently, and closes chats. It also covers real PTYs, backend-to-WebSocket split routing, renderer persistence across reconnects and page refreshes, per-session split isolation, sidebar/split resizing, viewport containment, SQLite persistence and cascading cleanup, tmux persistence, folder restrictions, authentication, and origin protection. When `terminal-browser` is installed, Playwright calls the machine-level dispatcher, verifies backend routing, launches the real binary outside tmux, checks streaming animation frames followed by the settled 2× frame, opens the browser a second time and revalidates its viewport, verifies live pointer/default cursor changes, loads the full Chrome DevTools frontend and element picker, resizes the target around the docked tools, records and downloads a real WebM, verifies duplicate-URL reuse, opens, switches, and closes real daemon tabs through the toolbar, verifies refresh persistence, and checks full cleanup; that case is skipped automatically elsewhere.
+The integration suite creates real projects through the browser, checks the folder-name fallback and agent selector, starts real tmux chats through the server-owned test catalog, derives the chat title from the first prompt, clears projects independently, and closes chats. It also covers real PTYs, backend-to-WebSocket split routing, renderer persistence across reconnects and page refreshes, per-session split isolation, sidebar/split resizing, viewport containment, SQLite persistence and cascading cleanup, tmux persistence, folder restrictions, authentication, and origin protection. When `terminal-browser` is installed, Playwright calls the machine-level dispatcher, verifies backend routing, launches the real binary outside tmux, checks streaming animation frames followed by the settled 2× frame, opens the browser a second time and revalidates its viewport, verifies live pointer/default cursor changes, loads the full Chrome DevTools frontend and element picker, resizes the target around the docked tools, records and downloads a real WebM, verifies duplicate-URL reuse, opens, switches, and closes real daemon tabs through the toolbar, verifies refresh persistence, and checks full cleanup; that case is skipped automatically elsewhere.
