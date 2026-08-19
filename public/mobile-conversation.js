@@ -101,6 +101,7 @@ export function createMobileConversationView({
   let modelOptionsSignature = '';
   let controlBusy = false;
   let cancellingTurn = false;
+  let interactionMotionKey = '';
   let attachments = [];
   let uploadingAttachments = 0;
   let suggestionItems = [];
@@ -744,8 +745,9 @@ export function createMobileConversationView({
     return actions;
   }
 
-  function permissionDockNode(item) {
+  function permissionDockNode(item, { motion = false } = {}) {
     const card = element('section', 'mobile-interaction-card mobile-interaction-permission');
+    if (motion) card.dataset.motion = 'enter';
     card.dataset.permissionId = item.permissionId;
     card.dataset.state = item.status || 'pending';
     const header = element('header', 'mobile-question-header');
@@ -816,7 +818,7 @@ export function createMobileConversationView({
     window.visualViewport?.addEventListener('resize', reveal, { once: true });
   }
 
-  function questionNode(item, { docked = false } = {}) {
+  function questionNode(item, { docked = false, motion = false } = {}) {
     const localState = pendingQuestions.get(item.questionId);
     const resolved = !['calling', 'pending', 'working'].includes(item.status);
     if (resolved || item.answers || item.answerSummary) pendingQuestions.delete(item.questionId);
@@ -824,6 +826,7 @@ export function createMobileConversationView({
     const submitting = pending?.status === 'submitting';
     const card = element('article', 'mobile-question-card');
     if (docked) card.classList.add('mobile-question-docked');
+    if (motion) card.dataset.motion = 'enter';
     card.dataset.questionId = item.questionId;
     card.dataset.state = submitting ? 'working' : item.status || 'pending';
     const header = element('header', 'mobile-question-header');
@@ -1110,6 +1113,8 @@ export function createMobileConversationView({
       ? [...(conversation.items || [])].reverse().find(pendingInteraction)
       : undefined;
     if (!interaction) {
+      root.dataset.interaction = 'false';
+      interactionMotionKey = '';
       interactionDock.hidden = true;
       interactionDock.removeAttribute('data-kind');
       interactionDock.replaceChildren();
@@ -1118,12 +1123,19 @@ export function createMobileConversationView({
       return;
     }
     closeAllLists();
+    const questionStep = interaction.type === 'question'
+      ? pendingQuestions.get(interaction.questionId)?.step || 0
+      : 0;
+    const nextMotionKey = `${interaction.type}:${interaction.questionId || interaction.permissionId}:${questionStep}`;
+    const motion = interactionMotionKey !== nextMotionKey;
+    interactionMotionKey = nextMotionKey;
+    root.dataset.interaction = 'true';
     composer.hidden = true;
     interactionDock.hidden = false;
     interactionDock.dataset.kind = interaction.type;
     interactionDock.replaceChildren(interaction.type === 'question'
-      ? questionNode(interaction, { docked: true })
-      : permissionDockNode(interaction));
+      ? questionNode(interaction, { docked: true, motion })
+      : permissionDockNode(interaction, { motion }));
   }
 
   function messageNode(item, conversation, { suppressPendingInteractions = false } = {}) {
@@ -1198,10 +1210,14 @@ export function createMobileConversationView({
     const previousMessages = new Map((previousConversation?.items || [])
       .filter((item) => item.type === 'message')
       .map((item) => [item.id, item.text]));
+    const previousItemIds = new Set((previousConversation?.items || []).map((item) => item.id));
     const reveals = [];
     const fragment = document.createDocumentFragment();
     for (const item of conversation.items) {
       const node = messageNode(item, conversation, { suppressPendingInteractions: isRoot });
+      if (animate && node.nodeType === Node.ELEMENT_NODE && !previousItemIds.has(item.id)) {
+        node.classList.add('mobile-conversation-enter');
+      }
       if (animate && item.type === 'message' && item.role === 'assistant') {
         const previous = previousMessages.get(item.id) || '';
         if (item.text.startsWith(previous) && item.text.length > previous.length) {
@@ -1525,6 +1541,7 @@ export function createMobileConversationView({
       providerId = undefined;
       pendingMessage = undefined;
       cancellingTurn = false;
+      interactionMotionKey = '';
       attachments = [];
       mentionedFiles.clear();
       uploadingAttachments = 0;
@@ -1545,6 +1562,7 @@ export function createMobileConversationView({
       queue.hidden = true;
       queue.replaceChildren();
       interactionDock.hidden = true;
+      root.dataset.interaction = 'false';
       interactionDock.replaceChildren();
       back.hidden = true;
       messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Connecting to Grok…'));
@@ -1564,6 +1582,7 @@ export function createMobileConversationView({
       providerId = undefined;
       pendingMessage = undefined;
       cancellingTurn = false;
+      interactionMotionKey = '';
       attachments = [];
       mentionedFiles.clear();
       uploadingAttachments = 0;
@@ -1575,6 +1594,7 @@ export function createMobileConversationView({
       modelOptionsSignature = '';
       closeAllLists();
       interactionDock.hidden = true;
+      root.dataset.interaction = 'false';
       interactionDock.replaceChildren();
       composer.hidden = true;
       context.hidden = true;

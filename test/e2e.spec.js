@@ -553,6 +553,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     text: 'inspect screenshot', attachmentIds: ['11111111-1111-4111-8111-111111111111'],
   }));
 
+  await page.setViewportSize({ width: 390, height: 667 });
   const permissionItem = {
     id: 'permission-77', type: 'permission', permissionId: '77',
     title: 'Spawn explorer', text: 'Create a child agent', status: 'pending',
@@ -570,6 +571,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const interactionDock = conversation.locator('#mobile-conversation-interaction');
   await expect(interactionDock).toBeVisible();
   await expect(interactionDock).toHaveAttribute('data-kind', 'permission');
+  await expect.poll(() => interactionDock.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+  await expect(interactionDock.locator('.mobile-interaction-permission')).toHaveAttribute('data-motion', 'enter');
+  await expect.poll(() => interactionDock.locator('.mobile-interaction-permission').evaluate(
+    (node) => getComputedStyle(node).animationName,
+  )).toBe('mobile-interaction-in');
   await expect(conversation.locator('#mobile-conversation-composer')).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-messages [data-permission-id="77"]')).toHaveCount(0);
   await conversation.getByRole('button', { name: 'Allow once' }).click();
@@ -609,6 +615,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const questionCard = conversation.locator('[data-question-id="question-99"]');
   await expect(questionCard).toHaveCount(1);
   await expect(interactionDock).toHaveAttribute('data-kind', 'question');
+  await expect.poll(() => interactionDock.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+  await expect.poll(() => questionCard.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
   await expect(interactionDock.locator('[data-question-id="question-99"]')).toHaveCount(1);
   await expect(conversation.locator('#mobile-conversation-composer')).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-messages [data-question-id="question-99"]')).toHaveCount(0);
@@ -713,6 +721,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(interactionDock).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-composer')).toBeVisible();
 
+  await page.setViewportSize({ width: 390, height: 844 });
   await conversation.locator('.mobile-subagent-pill').click();
   const sheet = conversation.locator('.mobile-subagent-sheet');
   await expect(sheet).toBeVisible();
