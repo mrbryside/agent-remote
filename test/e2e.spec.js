@@ -765,6 +765,23 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }));
   expect(shortToolPanelSize.height).toBe(shortToolPanelSize.contentHeight);
   expect(shortToolPanelSize.height).toBeLessThan(200);
+  const shortToolPanelGeometry = await shortToolPanel.evaluate((panel) => {
+    const item = panel.querySelector('.mobile-event-card');
+    const panelBox = panel.getBoundingClientRect();
+    const itemBox = item.getBoundingClientRect();
+    const style = getComputedStyle(panel);
+    return {
+      leftGap: itemBox.left - panelBox.left,
+      rightGap: panelBox.right - itemBox.right,
+      itemWidth: itemBox.width,
+      contentWidth: panel.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+      paddingLeft: style.paddingLeft,
+      paddingRight: style.paddingRight,
+    };
+  });
+  expect(shortToolPanelGeometry.paddingLeft).toBe(shortToolPanelGeometry.paddingRight);
+  expect(Math.abs(shortToolPanelGeometry.leftGap - shortToolPanelGeometry.rightGap)).toBeLessThanOrEqual(1);
+  expect(Math.abs(shortToolPanelGeometry.itemWidth - shortToolPanelGeometry.contentWidth)).toBeLessThanOrEqual(1);
 
   await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
   const toolPanel = conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-panel');

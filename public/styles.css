@@ -478,8 +478,8 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-event-thought { border-style: dashed; background: color-mix(in srgb, var(--color-surface) 88%, transparent); }
   .mobile-thinking-indicator { box-sizing: border-box; width: 12px; height: 12px; border: 1.5px solid var(--color-border-strong); border-top-color: var(--color-status-connecting); border-radius: 50%; animation: mobile-activity-spin .8s linear infinite; }
   .mobile-event-recap { border-color: var(--color-border-strong); background: var(--color-surface-raised); }
-  .mobile-tool-group { margin-block: -4px 16px; overflow: hidden; border: 1px solid var(--color-border-faint); border-radius: 12px; background: var(--color-surface); }
-  .mobile-tool-group-toggle { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 10px 11px; border: 0; background: transparent; color: var(--color-text-secondary); text-align: left; cursor: pointer; }
+  .mobile-tool-group { margin-block: -4px 16px; overflow: hidden; border: 1px solid var(--color-border-faint); border-radius: 14px; background: var(--color-surface); }
+  .mobile-tool-group-toggle { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 11px 12px; border: 0; background: transparent; color: var(--color-text-secondary); text-align: left; cursor: pointer; }
   .mobile-tool-group-toggle:active { background: var(--color-surface-pressed); }
   .mobile-tool-group-toggle > i { color: var(--color-text-muted); font: normal 17px/1 var(--font-family-sans); transition: transform var(--duration-fast) var(--ease-standard); }
   .mobile-tool-group-toggle[aria-expanded="true"] > i { transform: rotate(90deg); }
@@ -487,11 +487,12 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-tool-group-toggle small { color: var(--color-text-muted); font: 9px/1 var(--font-family-mono); }
   .mobile-tool-group[data-state="working"] .mobile-tool-group-toggle small { color: var(--color-status-connecting); }
   .mobile-tool-group[data-state="failed"] .mobile-tool-group-toggle small { color: var(--color-danger); }
-  .mobile-tool-group-panel { display: grid; gap: 6px; padding: 5px 7px 7px 25px; border-top: 1px solid var(--color-border-faint); }
+  .mobile-tool-group-panel { display: grid; grid-auto-rows: max-content; align-content: start; gap: 8px; padding: 10px; border-top: 1px solid var(--color-border-faint); }
   .mobile-tool-group-panel[hidden] { display: none; }
-  .mobile-tool-group-panel:not([hidden]) { display: flex; max-height: min(44dvh, 340px); flex-direction: column; align-items: stretch; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
-  .mobile-tool-group-panel .mobile-event-card { flex: 0 0 auto; margin: 0; border: 0; border-radius: 7px; background: var(--color-canvas); }
-  .mobile-tool-group-panel .mobile-event-toggle { min-height: 38px; padding-block: 7px; }
+  .mobile-tool-group-panel:not([hidden]) { max-height: min(44dvh, 340px); overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .mobile-tool-group-panel .mobile-event-card { width: 100%; min-width: 0; margin: 0; border: 1px solid color-mix(in srgb, var(--color-border-faint) 78%, transparent); border-radius: 10px; background: var(--color-canvas); transition: border-color var(--duration-fast) var(--ease-standard); }
+  .mobile-tool-group-panel .mobile-event-card:has(.mobile-event-toggle:hover) { border-color: var(--color-border-subtle); }
+  .mobile-tool-group-panel .mobile-event-toggle { min-height: 46px; padding: 8px 11px; }
   .mobile-tool-group-panel .mobile-event-panel { max-height: none; overflow: visible; }
   .mobile-conversation-loading { display: grid; min-height: 40vh; place-items: center; color: var(--color-text-muted); font: 11px/1.5 var(--font-family-mono); }
   .mobile-conversation-composer { position: relative; display: block; flex: 0 0 auto; padding: 8px max(12px, env(safe-area-inset-right)) calc(10px + var(--safe-area-bottom)) max(12px, env(safe-area-inset-left)); border-top: 1px solid var(--color-border-subtle); background: var(--color-surface-raised); }
