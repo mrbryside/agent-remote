@@ -341,6 +341,14 @@ export function createGrokAcpClient({
       current.turnChangedAt = record.timestamp;
       current.cancelRequested = false;
     } else if (update.sessionUpdate === 'turn_completed') {
+      // Grok can publish the authoritative lifecycle boundary before the
+      // corresponding session/prompt RPC settles. Release that request from
+      // the active slot now so the next user prompt starts a fresh turn
+      // instead of being misclassified (and rendered) as queued.
+      if (current.activePrompt) {
+        current.activePrompt = undefined;
+        current.drainingPrompts = undefined;
+      }
       current.turnActive = false;
       current.turnSource = 'idle';
       current.turnChangedAt = record.timestamp;
@@ -761,12 +769,17 @@ export function createGrokAcpClient({
           } },
         });
       } finally {
-        current.activePrompt = undefined;
-        current.turnActive = false;
-        current.turnSource = 'idle';
-        current.turnChangedAt = Date.now();
-        current.cancelRequested = false;
-        publish(sessionId);
+        // A lifecycle notification may have released this RPC before it
+        // settled and allowed a newer prompt to start. Never let completion
+        // of the older request clear the newer turn.
+        if (current.activePrompt === entry) {
+          current.activePrompt = undefined;
+          current.turnActive = false;
+          current.turnSource = 'idle';
+          current.turnChangedAt = Date.now();
+          current.cancelRequested = false;
+          publish(sessionId);
+        }
       }
     })();
     current.drainingPrompts = draining;
@@ -786,7 +799,9 @@ export function createGrokAcpClient({
     const current = state(sessionId);
     const queued = Boolean(current.activePrompt || current.turnActive || current.queuedPrompts.length);
     current.queuedPrompts.push(entry);
-    publish(sessionId);
+    // An idle prompt is dispatched immediately. Publishing before the drain
+    // moves it into the active slot produces a one-frame fake queue row.
+    if (queued) publish(sessionId);
     void drainPrompts(sessionId);
     return { accepted: true, queued, queueId: entry.id };
   }

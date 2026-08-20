@@ -101,6 +101,58 @@ test('ACP client initializes once, replays history, deduplicates events, and pro
   assert.equal(child.killedWith, 'SIGTERM');
 });
 
+test('ACP client starts a fresh prompt after turn completion even while the previous RPC is settling', async () => {
+  const fake = harness();
+  const client = createGrokAcpClient({ spawn: fake.spawn });
+  const sessionId = '01a015a9-61df-7052-a5d0-17de77a201fb';
+  const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  const load = await waitForRequest(fake, 'session/load');
+  const child = fake.children[0].child;
+  reply(child, load.id, {});
+  await loading;
+  const publishedQueues = [];
+  const stopWatching = client.watch(sessionId, (snapshot) => {
+    publishedQueues.push(snapshot.queue.map((entry) => entry.id));
+  });
+
+  const firstPrompting = client.prompt({ sessionId, cwd: '/tmp/project', id: 'first', text: 'first' });
+  const first = await waitForRequest(fake, 'session/prompt');
+  notify(child, sessionId, { sessionUpdate: 'turn_completed', stop_reason: 'end_turn' }, 'first-completed');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(client.read(sessionId).turn.active, false);
+  assert.deepEqual(client.read(sessionId).queue, []);
+
+  const secondResult = await client.prompt({
+    sessionId, cwd: '/tmp/project', id: 'second', text: 'second',
+  });
+  assert.deepEqual(secondResult, { accepted: true, queued: false, queueId: 'second' });
+  const deadline = Date.now() + 1_000;
+  while (fake.requests.filter((entry) => entry.method === 'session/prompt').length < 2) {
+    if (Date.now() > deadline) assert.fail('Timed out waiting for the fresh prompt');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const second = fake.requests.filter((entry) => entry.method === 'session/prompt')[1];
+  assert.equal(second.params.prompt[0].text, 'second');
+  assert.deepEqual(client.read(sessionId).queue, []);
+  assert.equal(client.read(sessionId).turn.active, true);
+
+  reply(child, first.id, { stopReason: 'end_turn' });
+  await firstPrompting;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(client.read(sessionId).turn.active, true,
+    'the late first RPC must not clear the newer turn');
+
+  notify(child, sessionId, { sessionUpdate: 'turn_completed', stop_reason: 'end_turn' }, 'second-completed');
+  reply(child, second.id, { stopReason: 'end_turn' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(client.read(sessionId).turn.active, false);
+  assert.deepEqual(client.read(sessionId).queue, []);
+  assert.equal(publishedQueues.some((queue) => queue.includes('first') || queue.includes('second')), false,
+    'an immediately dispatchable prompt must never flash as a queued row');
+  stopWatching();
+  await client.close();
+});
+
 test('ACP client settles a replayed turn when session load reaches the persisted boundary', async () => {
   const fake = harness();
   const client = createGrokAcpClient({ spawn: fake.spawn });
