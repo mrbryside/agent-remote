@@ -1529,7 +1529,11 @@ export function createMobileConversationView({
   }
 
   function eventDetails(panel, item) {
-    if (item.type === 'thought' || item.type === 'recap' || item.type === 'event') {
+    if (item.type === 'recap') {
+      panel.append(markdownNode(item.text || '', {
+        onFileReference: (reference) => void openFileReference(reference),
+      }));
+    } else if (item.type === 'thought' || item.type === 'event') {
       detail(panel, item.type === 'thought' ? 'Reasoning' : 'Details', item.text);
     }
     if (item.type === 'permission') detail(panel, 'Request', item.text || item.title);
@@ -1648,7 +1652,8 @@ export function createMobileConversationView({
   }
 
   function eventNode(item) {
-    if (item.type === 'tool' && ['edit', 'write'].includes(item.kind) && !autoExpandedItems.has(item.id)) {
+    if ((item.type === 'recap' || (item.type === 'tool' && ['edit', 'write'].includes(item.kind))) &&
+        !autoExpandedItems.has(item.id)) {
       autoExpandedItems.add(item.id);
       expandedItems.add(item.id);
     }
@@ -2583,7 +2588,7 @@ export function createMobileConversationView({
     if (suppressPendingInteractions && pendingInteraction(item)) return document.createDocumentFragment();
     if (['question', 'permission', 'plan_review'].includes(item.type)) return document.createDocumentFragment();
     if (item.type === 'plan') return document.createDocumentFragment();
-    if (item.type === 'turn' || item.type === 'recap') return document.createDocumentFragment();
+    if (item.type === 'turn') return document.createDocumentFragment();
     if (item.type === 'subagent') return document.createDocumentFragment();
     return eventNode(item);
   }

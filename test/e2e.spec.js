@@ -357,6 +357,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     { id: 'goal-1', type: 'goal', title: 'Goal', objective: 'Render all Grok events', phase: 'executing', status: 'working', progress: { completed: 1, total: 2 } },
     { id: 'task-1', type: 'task', title: 'Run tests', command: 'npm test', output: 'all green', exitCode: 0, status: 'completed' },
     { id: 'event-1', type: 'event', kind: 'future_event', title: 'future_event', text: '{"kept":true}', status: 'completed' },
+    { id: 'recap-1', type: 'recap', title: 'Recap', text: 'Work completed so far, with the remaining verification still pending.', auto: true, status: 'completed' },
   );
   const subagentItem = {
     id: 'subagent-call-spawn-1', type: 'subagent',
@@ -717,7 +718,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     fileSheetHandleBox.y + fileSheetHandleBox.height / 2 + 120, { steps: 4 });
   await page.mouse.up();
   await expect(fileSheet).toBeHidden();
-  await expect(conversation.locator('.mobile-event-card')).toHaveCount(10);
+  await expect(conversation.locator('.mobile-event-card')).toHaveCount(11);
   await expect(conversation.locator('#mobile-conversation-context')).toContainText('6K / 190K');
   const modelButton = conversation.locator('#mobile-conversation-model');
   const modeButton = conversation.locator('#mobile-conversation-mode');
@@ -1056,7 +1057,16 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   });
   await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
   await expect(conversation.getByText('Turn completed')).toHaveCount(0);
-  await expect(conversation.getByText('Session recap')).toHaveCount(0);
+  const recap = conversation.locator('[data-event-id="recap-1"]');
+  await expect(recap.getByRole('button', { name: /Recap/ })).toHaveAttribute('aria-expanded', 'true');
+  await expect(recap.getByText('Work completed so far, with the remaining verification still pending.')).toBeVisible();
+  await expect.poll(() => recap.evaluate((node) => ({
+    opacity: Number(getComputedStyle(node).opacity),
+    background: getComputedStyle(node).backgroundColor,
+  }))).toEqual({ opacity: 0.58, background: 'rgba(0, 0, 0, 0)' });
+  await recap.getByRole('button', { name: /Recap/ }).click();
+  await expect(recap.getByRole('button', { name: /Recap/ })).toHaveAttribute('aria-expanded', 'false');
+  await expect(recap.locator('.mobile-event-panel')).toBeHidden();
   await expect(conversation.locator('.mobile-event-plan')).toHaveCount(0);
   const planPill = conversation.locator('.mobile-plan-pill');
   await expect(planPill).toContainText('Plan 1 / 2');

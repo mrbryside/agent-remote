@@ -140,7 +140,10 @@ test('Grok provider maps a managed tmux process to messages and subagents', asyn
   for (const type of ['thought', 'tool_group', 'plan', 'goal', 'event', 'task', 'subagent']) {
     assert.ok(result.items.some((item) => item.type === type), `missing ${type} event`);
   }
-  assert.ok(!result.items.some((item) => item.type === 'recap' || item.type === 'turn'));
+  assert.ok(!result.items.some((item) => item.type === 'turn'));
+  assert.deepEqual(result.items.filter((item) => item.type === 'recap').map(({ id, text, auto, status }) => ({
+    id, text, auto, status,
+  })), [{ id: 'recap-16', text: 'Work so far', auto: true, status: 'completed' }]);
   assert.equal(result.recap.text, 'Work so far');
   for (const kind of ['hook', 'retry']) {
     assert.ok(result.items.some((item) => item.type === 'event' && item.kind === kind), `missing ${kind} event`);

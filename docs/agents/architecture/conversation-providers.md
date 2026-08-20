@@ -260,8 +260,11 @@ splitting the tool activity they approved. A thought remains `Thinking…` and
 streams into its expandable reasoning panel until the next non-thought update
 closes it; completed thoughts no longer remain falsely marked `Running`.
 `turn_completed` updates lifecycle state but is not rendered. `session_recap`
-is retained as metadata instead of becoming a chat message. Unknown future
-events remain visible as generic expandable cards.
+is both retained as the latest recap metadata and inserted at its protocol
+position as a dedicated recap timeline item. Mobile renders that item expanded
+by default as a muted, collapsible recap rather than an assistant message or a
+generic tool card. Unknown future events remain visible as generic expandable
+cards.
 
 On mobile, both a collapsed tool group and an ungrouped tool use the same
 borderless activity row. Each row owns one semantic leading icon and one

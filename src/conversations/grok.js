@@ -897,10 +897,14 @@ function timeline(updates, { turnActive } = {}) {
       return;
     }
     if (kind === 'session_recap') {
-      recap = {
-        text: boundedText(update.summary, 32_768), auto: update.auto === true,
-        timestamp: record.timestamp,
-      };
+      const text = boundedText(update.summary, 32_768);
+      recap = { text, auto: update.auto === true, timestamp: record.timestamp };
+      if (text) {
+        items.push({
+          id: `recap-${index}`, type: 'recap', title: 'Recap', text,
+          auto: update.auto === true, status: 'completed', timestamp: record.timestamp,
+        });
+      }
       return;
     }
     if (kind === 'permission_request') {
