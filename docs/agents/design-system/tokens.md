@@ -35,6 +35,13 @@ keyboard resize event arrives. Keep the document non-scrollable at compact
 widths and preserve this focus path when changing the composer or viewport
 layout.
 
+When a compact conversation changes sessions, keep its header and composer
+mounted and visible. The busy surface belongs inside
+`.mobile-conversation-scroll-shell` and may cover only message history; make
+the composer inert until the first snapshot arrives instead of replacing or
+hiding the entire conversation surface. This keeps navigation spatially stable
+and still prevents the terminal from flashing during provider discovery.
+
 Scrollbar colors use the semantic `--color-scrollbar-thumb`, `--color-scrollbar-thumb-hover`, and `--color-scrollbar-thumb-active` tokens. `public/styles.css` applies one cross-browser 6px scrollbar contract to every scroll surface: transparent, borderless tracks and corners; rounded low-contrast thumbs; and no arrow buttons. Do not hide a component scrollbar or add a component-specific track frame.
 
 Syntax colors use the `--color-syntax-*` tokens. `public/syntax.js` applies the
