@@ -137,6 +137,7 @@ export function createMobileConversationView({
   let fileSheetMeta;
   let fileSheetBody;
   let fileSheetClose;
+  let fileSheetPointer;
   let filePreviewGeneration = 0;
   let browserAvailable = false;
   let pillDismissed = false;
@@ -1246,7 +1247,9 @@ export function createMobileConversationView({
     fileSheet.setAttribute('aria-modal', 'true');
     fileSheet.setAttribute('aria-label', 'File preview');
     fileSheetPanel = element('div', 'mobile-file-sheet-panel');
-    const handle = element('div', 'mobile-file-sheet-handle');
+    const handle = element('button', 'mobile-file-sheet-handle');
+    handle.type = 'button';
+    handle.setAttribute('aria-label', 'Drag down to close file preview');
     const header = element('header', 'mobile-file-sheet-header');
     const copy = element('span');
     fileSheetTitle = element('strong', '', 'File');
@@ -1266,6 +1269,26 @@ export function createMobileConversationView({
     fileSheet.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') closeFileSheet();
     });
+    handle.addEventListener('pointerdown', (event) => {
+      fileSheetPointer = { id: event.pointerId, startY: event.clientY, distance: 0 };
+      handle.setPointerCapture?.(event.pointerId);
+      fileSheetPanel.dataset.dragging = 'true';
+    });
+    handle.addEventListener('pointermove', (event) => {
+      if (!fileSheetPointer || event.pointerId !== fileSheetPointer.id) return;
+      fileSheetPointer.distance = Math.max(0, event.clientY - fileSheetPointer.startY);
+      fileSheetPanel.style.setProperty('--mobile-sheet-drag', `${fileSheetPointer.distance}px`);
+    });
+    const finishFileSheetDrag = (event) => {
+      if (!fileSheetPointer || event.pointerId !== fileSheetPointer.id) return;
+      const shouldClose = fileSheetPointer.distance > 96;
+      fileSheetPointer = undefined;
+      delete fileSheetPanel.dataset.dragging;
+      fileSheetPanel.style.removeProperty('--mobile-sheet-drag');
+      if (shouldClose) closeFileSheet();
+    };
+    handle.addEventListener('pointerup', finishFileSheetDrag);
+    handle.addEventListener('pointercancel', finishFileSheetDrag);
     root.append(fileSheet);
   }
 

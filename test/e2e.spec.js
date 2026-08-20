@@ -665,7 +665,26 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(fileSheet.locator('.mobile-file-lines')).toContainText('const status = "ready";');
   await expect(fileSheet.locator('.mobile-file-line .hljs-keyword').first()).toHaveText('const');
   await expect(fileSheet.locator('.mobile-file-line .hljs-string').first()).toHaveText('"ready"');
-  await fileSheet.getByRole('button', { name: 'Close file preview' }).click();
+  const fileSheetPanel = fileSheet.locator('.mobile-file-sheet-panel');
+  expect((await fileSheetPanel.boundingBox()).height).toBeLessThan(400);
+  await fileSheet.locator('.mobile-file-lines').evaluate((lines) => {
+    const row = lines.querySelector('.mobile-file-line');
+    for (let index = 0; index < 120; index += 1) lines.append(row.cloneNode(true));
+  });
+  await expect.poll(() => fileSheetPanel.evaluate((panel) => panel.getBoundingClientRect().height))
+    .toBeLessThanOrEqual(844 * .8 + 1);
+  await expect.poll(() => fileSheet.locator('.mobile-file-lines').evaluate((lines) =>
+    lines.scrollHeight > lines.clientHeight)).toBe(true);
+  const fileSheetHandle = fileSheet.getByRole('button', { name: 'Drag down to close file preview' });
+  await fileSheetHandle.evaluate((node) => Promise.all(node.closest('.mobile-file-sheet-panel')
+    .getAnimations().map((animation) => animation.finished)));
+  const fileSheetHandleBox = await fileSheetHandle.boundingBox();
+  await page.mouse.move(fileSheetHandleBox.x + fileSheetHandleBox.width / 2,
+    fileSheetHandleBox.y + fileSheetHandleBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(fileSheetHandleBox.x + fileSheetHandleBox.width / 2,
+    fileSheetHandleBox.y + fileSheetHandleBox.height / 2 + 120, { steps: 4 });
+  await page.mouse.up();
   await expect(fileSheet).toBeHidden();
   await expect(conversation.locator('.mobile-event-card')).toHaveCount(10);
   await expect(conversation.locator('#mobile-conversation-context')).toContainText('6K / 190K');
@@ -1583,7 +1602,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await searchMatch.click();
   await expect(fileSheet).toBeVisible();
   await expect(fileSheet.locator('.mobile-file-line[data-highlighted="true"]')).toHaveCount(1);
-  await fileSheet.getByRole('button', { name: 'Close file preview' }).click();
+  await fileSheet.getByRole('button', { name: 'Close file preview', exact: true }).click();
   await conversation.getByRole('button', { name: /Ran node --test/ }).click();
   const shellDetail = conversation.locator('[data-event-id="tool-shell"] .mobile-tool-command');
   await expect(shellDetail.locator('.mobile-tool-command-line > i')).toHaveText('$');
