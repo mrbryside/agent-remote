@@ -2039,7 +2039,19 @@ export function createMobileConversationView({
     });
   }
 
-  async function runQueueAction(row, action, fallback) {
+  function schedulePendingAcceptanceFailure(pendingText) {
+    clearTimeout(pendingAcceptanceTimer);
+    pendingAcceptanceTimer = setTimeout(() => {
+      if (pendingMessage?.text !== pendingText || pendingMessage.status !== 'accepted') return;
+      pendingMessage.status = 'failed';
+      renderedSignature = '';
+      if (lastConversation) render(lastConversation);
+      state.textContent = 'Grok did not receive the message';
+      state.dataset.state = 'error';
+    }, 10_000);
+  }
+
+  async function runQueueAction(row, action, fallback, { onSuccess } = {}) {
     if (queueMutationPending) return;
     queueMutationPending = true;
     queue.dataset.busy = 'true';
@@ -2054,10 +2066,11 @@ export function createMobileConversationView({
       await exitAnimation.finished.catch(() => {});
     }
     try {
-      await action();
+      const result = await action();
       row.remove();
       const remaining = queueRows().length;
       if (!remaining) queue.hidden = true;
+      onSuccess?.(result);
     } catch (error) {
       exitAnimation?.cancel();
       row.classList.remove('is-leaving');
@@ -2100,6 +2113,19 @@ export function createMobileConversationView({
       steer.type = 'button';
       steer.addEventListener('click', () => runQueueAction(
         row, () => steerQueuedInput(sessionName, entry.id), 'Steer failed',
+        { onSuccess: () => {
+          const pendingText = entry.text || 'Queued message';
+          pendingMessage = {
+            text: pendingText, attachments: [], fileMentions: [],
+            sentAt: Date.now(), status: 'accepted', source: 'steer', queueId: entry.id,
+          };
+          schedulePendingAcceptanceFailure(pendingText);
+          renderedSignature = '';
+          if (lastConversation) render(lastConversation);
+          messages.scrollTop = messages.scrollHeight;
+          updateJumpToLatest();
+          void refresh();
+        } },
       ));
       const remove = element('button', 'mobile-conversation-queue-delete', '⌫');
       remove.type = 'button';
@@ -2534,15 +2560,7 @@ export function createMobileConversationView({
         clearTimeout(pendingAcceptanceTimer);
       } else {
         if (pendingMessage?.text === pendingText) pendingMessage.status = 'accepted';
-        clearTimeout(pendingAcceptanceTimer);
-        pendingAcceptanceTimer = setTimeout(() => {
-          if (pendingMessage?.text !== pendingText || pendingMessage.status !== 'accepted') return;
-          pendingMessage.status = 'failed';
-          renderedSignature = '';
-          if (lastConversation) render(lastConversation);
-          state.textContent = 'Grok did not receive the message';
-          state.dataset.state = 'error';
-        }, 10_000);
+        schedulePendingAcceptanceFailure(pendingText);
       }
       state.textContent = 'Queued';
       state.dataset.state = 'working';

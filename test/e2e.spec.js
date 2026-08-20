@@ -1350,8 +1350,16 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   });
   await expect(queuedRows.first()).toContainText('second queued message');
 
+  await messages.evaluate((node) => { node.scrollTop = 0; });
+  await expect(conversation.locator('#mobile-conversation-jump')).toBeVisible();
   await firstQueuedRow.getByRole('button', { name: /Steer/ }).click();
   await expect.poll(() => queueActions.some((entry) => entry.action === 'steer')).toBe(true);
+  const pendingSteer = conversation.locator('.mobile-message[data-pending="true"]');
+  await expect(pendingSteer).toContainText('queued follow up');
+  await expect(pendingSteer.locator('.mobile-message-author')).toHaveText('Waiting for Grok…');
+  await expect.poll(() => messages.evaluate((node) =>
+    node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(1);
+  await expect(conversation.locator('#mobile-conversation-jump')).toBeHidden();
   await expect(activity).not.toContainText('Stopping…');
   await expect(sendButton).toHaveAttribute('data-action', 'stop');
   await sendButton.click();
