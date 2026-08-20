@@ -229,13 +229,13 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
 .folder-item:hover { background: #202023; color: #d0d0d3; }
 .folder-item.parent { color: #77777e; }
 .primary-button, .quiet-button, .danger-button { padding: clamp(7px, .75vw, 8px) clamp(10px, 1vw, 12px); border-radius: 8px; cursor: pointer; font-size: clamp(11px, .95vw, 12px); transition: background .15s, border-color .15s, transform .15s, opacity .15s; }
-.primary-button { border: 1px solid #777f7c; background: #68716d; color: #f3f3f3; font-weight: 620; }
-.primary-button:hover { border-color: #8e9894; background: #79827e; }
+.primary-button { border: 1px solid var(--color-button-primary-border); background: var(--color-button-surface); color: var(--color-button-primary-text); font-weight: 620; }
+.primary-button:hover { border-color: var(--color-button-primary-border-hover); background: var(--color-button-surface); }
 .primary-button:disabled { cursor: wait; opacity: .55; }
-.quiet-button { border: 1px solid #36363b; background: #202023; color: #aaaab0; }
-.quiet-button:hover { border-color: #4a4a50; background: #29292d; color: #d0d0d3; }
-.danger-button { border: 1px solid #593a3f; background: #2c2123; color: #bd8d94; }
-.danger-button:hover { background: #3b282c; color: #d2a0a7; }
+.quiet-button { border: 1px solid var(--color-button-neutral-border); background: var(--color-button-surface); color: var(--color-button-neutral-text); }
+.quiet-button:hover { border-color: var(--color-button-neutral-border-hover); background: var(--color-button-surface); color: var(--color-button-neutral-text-hover); }
+.danger-button { border: 1px solid var(--color-button-danger-border); background: var(--color-button-surface); color: var(--color-button-danger-text); }
+.danger-button:hover { border-color: var(--color-button-danger-border-hover); background: var(--color-button-surface); color: var(--color-button-danger-text-hover); }
 .primary-button:active, .quiet-button:active, .danger-button:active { transform: scale(.96); }
 .dialog-actions { display: flex; align-items: center; gap: 8px; }
 .dialog-spacer { flex: 1; }
@@ -679,10 +679,11 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-conversation-composer textarea { box-sizing: border-box; flex: 1 1 auto; min-width: 0; width: 100%; min-height: 38px; max-height: 152px; margin: 0; padding: 8px 2px; resize: none; overflow-y: auto; border: 0; border-radius: 0; outline: none; background: transparent; color: var(--color-text-strong); font: var(--font-size-mobile-input)/1.35 var(--font-family-sans); }
   .mobile-conversation-composer textarea::placeholder { color: var(--color-text-muted); font-size: var(--font-size-interaction-body); opacity: 1; }
   .mobile-conversation-composer textarea:focus { border-color: transparent; box-shadow: none; }
-  #mobile-conversation-send { display: grid; flex: 0 0 36px; width: 36px; height: 36px; margin-left: auto; place-items: center; padding: 0; border: 1px solid var(--color-accent); border-radius: 50%; background: var(--color-accent); color: var(--color-canvas); font-size: 18px; font-weight: 700; transition: transform var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard); }
+  #mobile-conversation-send { display: grid; flex: 0 0 36px; width: 36px; height: 36px; margin-left: auto; place-items: center; padding: 0; border: 1px solid var(--color-button-primary-border); border-radius: 50%; background: var(--color-button-surface); color: var(--color-accent); font-size: 18px; font-weight: 700; transition: transform var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard); }
+  #mobile-conversation-send:not(:disabled):hover { border-color: var(--color-button-primary-border-hover); }
   #mobile-conversation-send:not(:disabled):active { transform: scale(.9); }
-  #mobile-conversation-send[data-action="stop"] { border-color: var(--color-danger); background: var(--color-surface); color: var(--color-danger); font-size: 10px; }
-  #mobile-conversation-send:disabled { border-color: var(--color-border); background: var(--color-surface-subtle); color: var(--color-text-faint); }
+  #mobile-conversation-send[data-action="stop"] { border-color: var(--color-button-danger-border); background: var(--color-button-surface); color: var(--color-button-danger-text); font-size: 10px; }
+  #mobile-conversation-send:disabled { border-color: var(--color-border); background: var(--color-button-surface); color: var(--color-text-faint); }
   #mobile-conversation-attach { display: grid; flex: 0 0 36px; width: 36px; height: 36px; place-items: center; padding: 0; border: 0; border-radius: 9px; background: transparent; color: var(--color-text-secondary); font: 21px/1 var(--font-family-sans); }
   #mobile-conversation-attach:active { background: var(--color-surface-pressed); }
   #mobile-conversation-model, #mobile-conversation-mode { display: flex; flex: 0 1 auto; min-width: 0; max-width: 100px; height: 36px; align-items: center; justify-content: space-between; gap: 4px; padding: 0 8px; overflow: hidden; border: 0; border-left: 1px solid var(--color-border-subtle); border-radius: 0; background: transparent; color: var(--color-text-secondary); font: 600 var(--font-size-interaction-eyebrow)/1.2 var(--font-family-mono); }
@@ -830,7 +831,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-interaction-card .mobile-permission-actions button { display: grid; width: 100%; min-height: 44px; gap: 1px; align-content: center; padding: var(--space-1) var(--space-3); text-align: left; transition: transform var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard); }
   .mobile-interaction-card .mobile-permission-actions button:not(:disabled):active { transform: scale(.985); }
   .mobile-permission-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 12px 12px; }
-  .mobile-permission-actions button { min-height: 34px; padding: 7px 11px; border: 1px solid var(--color-border-strong); border-radius: 9px; background: var(--color-surface-subtle); color: var(--color-text-strong); font: var(--font-size-interaction-body)/1.3 var(--font-family-sans); }
+  .mobile-permission-actions button { min-height: 34px; padding: 7px 11px; border: 1px solid var(--color-button-neutral-border); border-radius: 9px; background: var(--color-button-surface); color: var(--color-text-strong); font: var(--font-size-interaction-body)/1.3 var(--font-family-sans); }
   .mobile-permission-actions button strong { font: 650 var(--font-size-interaction-body)/1.25 var(--font-family-sans); }
   .mobile-permission-actions button small { color: var(--color-text-muted); font: var(--font-size-interaction-caption)/1.25 var(--font-family-sans); }
   .mobile-permission-actions button:disabled { opacity: .5; }
@@ -873,7 +874,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-question-actions button { min-height: 42px; padding: 7px 9px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); font: 650 var(--font-size-interaction-body)/1.3 var(--font-family-sans); transition: transform var(--duration-fast) var(--ease-out), opacity var(--duration-fast) var(--ease-standard), border-color var(--duration-fast) var(--ease-standard); }
   .mobile-question-actions button:not(:disabled):active { transform: scale(.97); }
   .mobile-question-actions button:focus-visible { border-color: var(--color-border-emphasis); outline: none; }
-  .mobile-question-actions .mobile-question-submit { border-color: var(--color-border-strong); background: var(--color-surface-subtle); color: var(--color-text-strong); }
+  .mobile-question-actions .mobile-question-submit { border-color: var(--color-button-primary-border); background: var(--color-button-surface); color: var(--color-button-primary-text); }
   .mobile-question-actions button:disabled { opacity: .5; }
   .mobile-question-summary { margin: -2px 0 0; color: var(--color-text-secondary); font: var(--font-size-interaction-body)/1.45 var(--font-family-sans); white-space: pre-wrap; }
   .workspace[data-mobile-conversation="true"] ~ .remote-fab { display: none; }

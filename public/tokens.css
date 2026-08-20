@@ -47,6 +47,20 @@
   --color-text-faint: #626268;
   --color-icon: #95959a;
 
+  /* Button controls */
+  --color-button-surface: transparent;
+  --color-button-primary-border: #568f84;
+  --color-button-primary-border-hover: var(--color-accent);
+  --color-button-primary-text: var(--color-text-strong);
+  --color-button-neutral-border: var(--color-border-strong);
+  --color-button-neutral-border-hover: var(--color-border-emphasis);
+  --color-button-neutral-text: var(--color-text-secondary);
+  --color-button-neutral-text-hover: var(--color-text);
+  --color-button-danger-border: var(--color-danger-border);
+  --color-button-danger-border-hover: var(--color-danger);
+  --color-button-danger-text: var(--color-danger);
+  --color-button-danger-text-hover: var(--color-danger-strong);
+
   /* Status and intent */
   --color-accent: #64beac;
   --color-accent-strong: #64beac;

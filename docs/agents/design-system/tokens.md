@@ -7,7 +7,7 @@
 | Prefix/group | Use |
 | --- | --- |
 | `--font-*` | UI and terminal font families, sizes, and line height |
-| `--color-*` | Semantic surfaces, borders, text, intent states, and ANSI terminal colors |
+| `--color-*` | Semantic surfaces, borders, text, button controls, intent states, and ANSI terminal colors |
 | `--space-*` | Reusable spacing steps |
 | `--radius-*` | Control, card, and shell corner radii |
 | `--duration-*`, `--ease-*` | Interaction and layout motion |
@@ -61,6 +61,12 @@ The two branded content accents are exact: Teal `#64BEAC` for interactive and
 syntax emphasis, and Warm Amber `#E8A465` for headings, file/symbol titles, and
 Markdown strong text. Derive supporting syntax shades around them rather than
 introducing a competing blue accent.
+
+Primary, neutral, and danger buttons share the semantic `--color-button-*`
+contract. Their surface stays transparent in every state; hierarchy comes from
+the border and text color, with teal reserved for the primary border. Do not
+reintroduce filled accent backgrounds for primary actions, including compact
+composer controls or the unauthenticated pairing entry surface.
 
 Expanded mobile Tool groups own their vertical scrolling and reserve scrollbar
 space on both edges with `scrollbar-gutter: stable both-edges`, so opening a

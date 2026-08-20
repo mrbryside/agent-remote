@@ -92,6 +92,8 @@ test('remote entry has a locked state, pairing form, one pairing action, and no 
   assert.doesNotMatch(html, /cloudflare|quick tunnel|remote modal|tauri/i);
   assert.match(js, /history\.replaceState/);
   assert.match(css, /prefers-reduced-motion/);
+  assert.match(css, /--entry-button-surface:\s*transparent/);
+  assert.match(css, /button\s*\{[^}]*border:\s*1px solid var\(--entry-button-border\)[^}]*background:\s*var\(--entry-button-surface\)/s);
 });
 
 test('creates a P-256 credential with a non-extractable stored private key and signs after an IndexedDB round trip', async () => {

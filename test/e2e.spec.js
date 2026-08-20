@@ -89,6 +89,27 @@ test('shows local-only Remote controls and manages the four-step wizard', async 
   await remoteButton.click();
   const remoteDialog = page.locator('#remote-dialog');
   await expect(remoteDialog).toBeVisible();
+  const primaryAction = remoteDialog.locator('#remote-next');
+  await expect.poll(() => primaryAction.evaluate((button) => {
+    const style = getComputedStyle(button);
+    const root = getComputedStyle(document.documentElement);
+    return {
+      background: style.backgroundColor,
+      border: style.borderTopColor,
+      text: style.color,
+      surfaceToken: root.getPropertyValue('--color-button-surface').trim(),
+      borderToken: root.getPropertyValue('--color-button-primary-border').trim(),
+    };
+  })).toEqual({
+    background: 'rgba(0, 0, 0, 0)',
+    border: 'rgb(86, 143, 132)',
+    text: 'rgb(222, 222, 224)',
+    surfaceToken: 'transparent',
+    borderToken: '#568f84',
+  });
+  await primaryAction.hover();
+  await expect(primaryAction).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(primaryAction).toHaveCSS('border-color', 'rgb(100, 190, 172)');
   await expect(remoteDialog.getByRole('heading', { name: 'Choose one connection type' })).toBeVisible();
   await expect(remoteDialog.getByRole('heading', { name: 'Custom Domain' })).toBeHidden();
   await expect(remoteDialog.getByRole('heading', { name: 'Scan locally' })).toBeHidden();
@@ -2075,7 +2096,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const questionActionBackgrounds = await questionCard.locator('.mobile-question-actions button').evaluateAll(
     (buttons) => buttons.map((button) => getComputedStyle(button).backgroundColor),
   );
-  expect(new Set(questionActionBackgrounds).size).toBe(2);
+  expect(new Set(questionActionBackgrounds)).toEqual(new Set(['rgba(0, 0, 0, 0)']));
   await expect(nextButton).toBeEnabled();
   await expect(input).not.toBeFocused();
   await nextButton.click();
