@@ -760,6 +760,27 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     groupBorder: getComputedStyle(node).borderTopStyle,
     groupBackground: getComputedStyle(node).backgroundColor,
   }))).toEqual({ groupBorder: 'none', groupBackground: 'rgba(0, 0, 0, 0)' });
+  const streamedToolGroup = rootItems.find((item) => item.id === 'tool-group-1');
+  streamedToolGroup.status = 'working';
+  streamedToolGroup.tools.find((tool) => tool.id === 'tool-shell').status = 'working';
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect.poll(() => conversation.locator('[data-event-id="tool-group-1"]').evaluate((group) => {
+    const groupStatus = group.querySelector(':scope > .mobile-tool-group-toggle small');
+    const toolStatus = group.querySelector('[data-event-id="tool-shell"] .mobile-event-status');
+    return {
+      groupText: groupStatus.textContent,
+      groupAnimation: getComputedStyle(groupStatus).animationName,
+      toolText: toolStatus.textContent,
+      toolAnimation: getComputedStyle(toolStatus, '::before').animationName,
+    };
+  })).toEqual({
+    groupText: 'Running', groupAnimation: 'mobile-activity-spin',
+    toolText: 'Running', toolAnimation: 'mobile-activity-spin',
+  });
   const stableToolGroup = await page.evaluate(async (nextConversation) => {
     const button = document.querySelector('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle');
     const detail = document.querySelector('[data-event-id="tool-group-1"] .mobile-event-card .mobile-event-panel > *');
@@ -768,6 +789,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       const snapshot = structuredClone(nextConversation);
       const group = snapshot.items.find((item) => item.id === 'tool-group-1');
       group.status = index === 23 ? 'completed' : 'working';
+      group.tools.find((tool) => tool.id === 'tool-shell').status = index === 23 ? 'completed' : 'working';
       window.__conversationStreams.at(-1).emit('conversation', {
         data: JSON.stringify({ conversation: snapshot }),
       });
@@ -783,6 +805,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     };
   }, rootConversation());
   expect(stableToolGroup).toEqual({ connected: true, sameNode: true, stableDetail: true, expanded: 'true' });
+  streamedToolGroup.status = 'completed';
+  streamedToolGroup.tools.find((tool) => tool.id === 'tool-shell').status = 'completed';
+  await expect(conversation.locator('[data-event-id="tool-shell"] .mobile-event-status')).toHaveText('Done');
+  await expect(conversation.locator('[data-event-id="tool-shell"] .mobile-event-status')).toBeVisible();
   await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
   await expect(conversation.getByText('Turn completed')).toHaveCount(0);
   await expect(conversation.getByText('Session recap')).toHaveCount(0);

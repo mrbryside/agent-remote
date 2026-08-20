@@ -510,6 +510,8 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-event-status[data-state="working"], .mobile-event-status[data-state="running"] { color: var(--color-status-connecting); }
   .mobile-event-status[data-state="completed"] { color: var(--color-success); }
   .mobile-event-status[data-state="failed"], .mobile-event-status[data-state="error"], .mobile-event-status[data-state="cancelled"] { color: var(--color-danger); }
+  .mobile-event-tool > .mobile-event-toggle .mobile-event-status { display: inline-flex; min-width: max-content; align-items: center; gap: 5px; }
+  .mobile-event-tool > .mobile-event-toggle .mobile-event-status:is([data-state="calling"], [data-state="pending"], [data-state="working"], [data-state="running"])::before { box-sizing: border-box; width: 10px; height: 10px; flex: 0 0 10px; border: 1.5px solid var(--color-border-strong); border-top-color: var(--color-status-connecting); border-radius: 50%; content: ""; animation: mobile-activity-spin .8s linear infinite; }
   .mobile-event-toggle > i { color: var(--color-text-muted); font: normal 17px/1 var(--font-family-sans); transition: transform var(--duration-fast) var(--ease-standard); }
   .mobile-event-toggle[aria-expanded="true"] > i { transform: rotate(90deg); }
   .mobile-event-panel { display: grid; gap: 11px; max-height: min(52dvh, 420px); min-width: 0; overflow: auto; padding: 2px 11px 12px; border-top: 1px solid var(--color-border-faint); overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
@@ -579,7 +581,6 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-event-tool > .mobile-event-toggle > span:first-child { display: block; }
   .mobile-event-tool > .mobile-event-toggle > span:first-child > small { display: none; }
   .mobile-event-tool > .mobile-event-toggle .mobile-event-heading > strong { font: 500 13px/1.4 var(--font-family-sans); }
-  .mobile-event-tool[data-state="completed"] > .mobile-event-toggle .mobile-event-status { width: 0; overflow: hidden; visibility: hidden; }
   .mobile-event-tool > .mobile-event-panel { box-sizing: border-box; max-height: min(38dvh, 300px); margin: 0 0 8px 28px; overflow: auto; padding: 0; border: 1px solid var(--color-border-faint); border-radius: 10px; background: var(--color-canvas); }
   .mobile-event-tool > .mobile-event-panel > .mobile-event-change, .mobile-event-tool > .mobile-event-panel > .mobile-event-file { border: 0; border-radius: 0; }
   .mobile-tool-group { margin-block: -4px 16px; overflow: visible; border: 0; border-radius: 0; background: transparent; }
@@ -594,7 +595,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-tool-group-toggle strong { overflow: hidden; font: 500 13px/1.4 var(--font-family-sans); text-overflow: ellipsis; white-space: nowrap; }
   .mobile-tool-group-toggle small { color: var(--color-text-muted); font: 9px/1 var(--font-family-mono); }
   .mobile-tool-group[data-state="completed"] .mobile-tool-group-toggle small { width: 0; overflow: hidden; visibility: hidden; }
-  .mobile-tool-group[data-state="working"] .mobile-tool-group-toggle small { color: var(--color-status-connecting); }
+  .mobile-tool-group:is([data-state="calling"], [data-state="pending"], [data-state="working"], [data-state="running"]) .mobile-tool-group-toggle small { box-sizing: border-box; width: 12px; height: 12px; overflow: hidden; border: 1.5px solid var(--color-border-strong); border-top-color: var(--color-status-connecting); border-radius: 50%; color: transparent; font-size: 0; animation: mobile-activity-spin .8s linear infinite; }
   .mobile-tool-group[data-state="failed"] .mobile-tool-group-toggle small { color: var(--color-danger); }
   .mobile-tool-group-panel { display: grid; grid-auto-rows: max-content; align-content: start; gap: 0; padding: 0; }
   .mobile-tool-group-panel[hidden] { display: none; }
@@ -607,7 +608,6 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-tool-group-panel .mobile-event-toggle > span:first-child { display: block; }
   .mobile-tool-group-panel .mobile-event-toggle > span:first-child > small { display: none; }
   .mobile-tool-group-panel .mobile-event-heading > strong { font: 500 12px/1.4 var(--font-family-sans); }
-  .mobile-tool-group-panel .mobile-event-status[data-state="completed"] { width: 0; overflow: hidden; visibility: hidden; }
   .mobile-tool-group-panel .mobile-event-panel { box-sizing: border-box; max-height: min(38dvh, 300px); margin: 0 0 8px 28px; overflow: auto; padding: 0; border: 1px solid var(--color-border-faint); border-radius: 10px; background: var(--color-canvas); }
   .mobile-tool-group-panel .mobile-event-panel > .mobile-event-change, .mobile-tool-group-panel .mobile-event-panel > .mobile-event-file { border: 0; border-radius: 0; }
   .mobile-tool-command { width: 100%; max-width: 100%; overflow: auto; color: var(--color-text-secondary); font: 10px/1.55 var(--font-family-mono); }
