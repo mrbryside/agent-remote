@@ -48,9 +48,9 @@
   --color-icon: #95959a;
 
   /* Status and intent */
-  --color-accent: #6f9f96;
-  --color-accent-strong: #82b0a6;
-  --color-heading: #d69a68;
+  --color-accent: #64beac;
+  --color-accent-strong: #64beac;
+  --color-heading: #e8a465;
   --color-success: #879a92;
   --color-danger: #c59da3;
   --color-danger-strong: #d2a0a7;
@@ -89,13 +89,13 @@
 
   /* Syntax highlighting */
   --color-syntax-comment: #657873;
-  --color-syntax-keyword: #72a99f;
+  --color-syntax-keyword: #64beac;
   --color-syntax-string: #8aad9d;
   --color-syntax-number: #82a89f;
   --color-syntax-title: var(--color-heading);
   --color-syntax-variable: #a0b5ad;
   --color-syntax-attribute: #7fa59c;
-  --color-syntax-built-in: #68ad9f;
+  --color-syntax-built-in: #64beac;
   --color-syntax-literal: #89aaa2;
   --color-syntax-meta: #78978f;
 

@@ -526,14 +526,15 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     .filter((call) => call?.behavior === 'smooth'))).toEqual([]);
   const markdownMessage = conversation.locator('[data-message-id="assistant-0"] .mobile-markdown');
   await expect(markdownMessage.locator('h1')).toHaveText('Markdown response');
-  await expect(markdownMessage.locator('h1')).toHaveCSS('color', 'rgb(214, 154, 104)');
+  await expect(markdownMessage.locator('h1')).toHaveCSS('color', 'rgb(232, 164, 101)');
   await expect(markdownMessage.locator('strong')).toHaveText('bold');
+  await expect(markdownMessage.locator('strong')).toHaveCSS('color', 'rgb(232, 164, 101)');
   await expect(markdownMessage.locator('li')).toHaveCount(2);
   await expect(markdownMessage.locator('table')).toContainText('Renderer');
   const codeBlocks = markdownMessage.locator('.mobile-markdown-code');
   await expect(codeBlocks).toHaveCount(2);
   await expect(codeBlocks.nth(0).locator('.mobile-markdown-code-toolbar')).toContainText('js');
-  await expect(codeBlocks.nth(0).locator('.mobile-markdown-code-toolbar > span')).toHaveCSS('color', 'rgb(214, 154, 104)');
+  await expect(codeBlocks.nth(0).locator('.mobile-markdown-code-toolbar > span')).toHaveCSS('color', 'rgb(232, 164, 101)');
   await expect(codeBlocks.nth(0).getByRole('button', { name: 'Copy code' })).toBeVisible();
   await expect(codeBlocks.nth(0).locator('code')).toHaveAttribute('data-language', 'javascript');
   await expect(codeBlocks.nth(0).locator('.hljs-keyword')).toHaveText('const');
@@ -556,7 +557,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   expect(await page.evaluate(() => window.__markdownXss)).toBeUndefined();
   const fileReference = markdownMessage.getByRole('button', { name: 'Open public/app.js at line 1' });
   await expect(fileReference).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  await expect(fileReference).toHaveCSS('color', 'rgb(104, 173, 159)');
+  await expect(fileReference).toHaveCSS('color', 'rgb(100, 190, 172)');
   await expect(fileReference).toHaveCSS('border-top-width', '0px');
   await expect(fileReference).toHaveCSS('padding-left', '0px');
   await expect(fileReference).toBeVisible();
@@ -1252,7 +1253,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const editStatusRight = await editCard.locator('.mobile-event-status').evaluate((status) => status.getBoundingClientRect().right);
   await conversation.getByRole('button', { name: /Edited app\.js/ }).click();
   await expect(editCard.locator('.mobile-event-panel')).toBeVisible();
-  await expect(editCard.locator('.mobile-event-change > header strong')).toHaveCSS('color', 'rgb(214, 154, 104)');
+  await expect(editCard.locator('.mobile-event-change > header strong')).toHaveCSS('color', 'rgb(232, 164, 101)');
   await expect.poll(() => editCard.evaluate((card, before) => {
     const toggle = card.querySelector(':scope > .mobile-event-toggle');
     const panel = card.querySelector(':scope > .mobile-event-panel');

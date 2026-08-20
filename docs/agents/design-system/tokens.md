@@ -40,6 +40,11 @@ families for meaningful state. Extend language aliases in `public/syntax.js`,
 keep syntax markup separate from diff add/remove backgrounds, and do not add
 per-language raw colors in component CSS.
 
+The two branded content accents are exact: Teal `#64BEAC` for interactive and
+syntax emphasis, and Warm Amber `#E8A465` for headings, file/symbol titles, and
+Markdown strong text. Derive supporting syntax shades around them rather than
+introducing a competing blue accent.
+
 Expanded mobile Tool groups own their vertical scrolling and reserve scrollbar
 space on both edges with `scrollbar-gutter: stable both-edges`, so opening a
 group cannot shift its status column. A child Tool detail may scroll
