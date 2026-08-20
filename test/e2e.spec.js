@@ -1126,7 +1126,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       dismissWidth: Math.round(dismiss.getBoundingClientRect().width),
     };
   })).toEqual({ height: 38, fontSize: '12px', horizontalPadding: '9px', dismissWidth: 34 });
-  await page.locator('#graphics-sheet-backdrop').click();
+  await page.locator('#graphics-sheet-backdrop').click({ position: { x: 8, y: 8 } });
   await expect(page.locator('#graphics-split')).toBeHidden();
   await conversation.getByRole('button', { name: 'Hide activity' }).click();
   await expect(conversation.locator('.mobile-subagent-pill-host')).toBeHidden();
@@ -1602,7 +1602,31 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await searchMatch.click();
   await expect(fileSheet).toBeVisible();
   await expect(fileSheet.locator('.mobile-file-line[data-highlighted="true"]')).toHaveCount(1);
-  await fileSheet.getByRole('button', { name: 'Close file preview', exact: true }).click();
+  const closeFilePreview = fileSheet.getByRole('button', { name: 'Close file preview', exact: true });
+  const closeRestingStyle = await closeFilePreview.evaluate((button) => ({
+    background: getComputedStyle(button).backgroundColor,
+    border: getComputedStyle(button).borderTopWidth,
+  }));
+  await closeFilePreview.hover();
+  const closeHoverStyle = await closeFilePreview.evaluate((button) => ({
+    background: getComputedStyle(button).backgroundColor,
+    border: getComputedStyle(button).borderTopWidth,
+  }));
+  expect(closeRestingStyle.background).toBe('rgba(0, 0, 0, 0)');
+  expect(closeHoverStyle.background).toBe(closeRestingStyle.background);
+  expect(closeRestingStyle.border).toBe('0px');
+  expect(closeHoverStyle.border).toBe('0px');
+  const closeAnimation = await closeFilePreview.evaluate((button) => {
+    button.click();
+    const sheet = button.closest('.mobile-file-sheet');
+    return {
+      hidden: sheet.hidden,
+      closing: sheet.dataset.closing,
+      animations: sheet.querySelector('.mobile-file-sheet-panel').getAnimations().length,
+    };
+  });
+  expect(closeAnimation).toEqual({ hidden: false, closing: 'true', animations: 1 });
+  await expect(fileSheet).toBeHidden();
   await conversation.getByRole('button', { name: /Ran node --test/ }).click();
   const shellDetail = conversation.locator('[data-event-id="tool-shell"] .mobile-tool-command');
   await expect(shellDetail.locator('.mobile-tool-command-line > i')).toHaveText('$');

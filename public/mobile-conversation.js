@@ -109,6 +109,7 @@ export function createMobileConversationView({
   let selectedPlanId;
   let sheetReturnFocus;
   let sheetPointer;
+  let sheetCloseGeneration = 0;
   let subagentPillHost;
   const expandedItems = new Set();
   const autoExpandedItems = new Set();
@@ -138,6 +139,7 @@ export function createMobileConversationView({
   let fileSheetBody;
   let fileSheetClose;
   let fileSheetPointer;
+  let fileSheetCloseGeneration = 0;
   let filePreviewGeneration = 0;
   let browserAvailable = false;
   let pillDismissed = false;
@@ -991,6 +993,9 @@ export function createMobileConversationView({
 
   function openSheet() {
     ensureSheet();
+    sheetCloseGeneration += 1;
+    delete sheet.dataset.closing;
+    sheet.inert = false;
     sheetReturnFocus = document.activeElement;
     sheet.hidden = false;
     sheetMode = 'list';
@@ -1030,6 +1035,9 @@ export function createMobileConversationView({
 
   function openPlanSheet(planId) {
     ensureSheet();
+    sheetCloseGeneration += 1;
+    delete sheet.dataset.closing;
+    sheet.inert = false;
     sheetReturnFocus = document.activeElement;
     sheet.hidden = false;
     sheetMode = 'plan';
@@ -1082,7 +1090,7 @@ export function createMobileConversationView({
   }
 
   function closeSheet({ dismiss = false } = {}) {
-    if (!sheet || sheet.hidden) return;
+    if (!sheet || sheet.hidden || sheet.dataset.closing === 'true') return;
     const childWasOpen = sheetMode === 'child';
     if (dismiss && sheetMode === 'plan') {
       const plan = plans(rootConversation || {}).find((item) => item.id === selectedPlanId)
@@ -1090,7 +1098,9 @@ export function createMobileConversationView({
       persistDismissedPlanRevision(planRevision(plan));
     }
     if (childWasOpen) closeStream();
-    sheet.hidden = true;
+    const closeGeneration = ++sheetCloseGeneration;
+    sheet.dataset.closing = 'true';
+    sheet.inert = true;
     sheetMode = 'list';
     selectedChildId = undefined;
     selectedPlanId = undefined;
@@ -1100,7 +1110,21 @@ export function createMobileConversationView({
       void refresh();
     }
     if (dismiss) renderSubagentPill(rootConversation || { items: [] });
-    sheetReturnFocus?.focus?.({ preventScroll: true });
+    let closeTimer;
+    const finish = () => {
+      sheetPanel.removeEventListener('animationend', finishAfterAnimation);
+      clearTimeout(closeTimer);
+      if (closeGeneration !== sheetCloseGeneration) return;
+      sheet.hidden = true;
+      sheet.inert = false;
+      delete sheet.dataset.closing;
+      sheetReturnFocus?.focus?.({ preventScroll: true });
+    };
+    const finishAfterAnimation = (event) => {
+      if (event.target === sheetPanel && event.animationName === 'mobile-sheet-out') finish();
+    };
+    sheetPanel.addEventListener('animationend', finishAfterAnimation);
+    closeTimer = setTimeout(finish, 600);
   }
 
   function startStream() {
@@ -1233,9 +1257,25 @@ export function createMobileConversationView({
   }
 
   function closeFileSheet() {
-    if (!fileSheet || fileSheet.hidden) return;
+    if (!fileSheet || fileSheet.hidden || fileSheet.dataset.closing === 'true') return;
     filePreviewGeneration += 1;
-    fileSheet.hidden = true;
+    const closeGeneration = ++fileSheetCloseGeneration;
+    fileSheet.dataset.closing = 'true';
+    fileSheet.inert = true;
+    let closeTimer;
+    const finish = () => {
+      fileSheetPanel.removeEventListener('animationend', finishAfterAnimation);
+      clearTimeout(closeTimer);
+      if (closeGeneration !== fileSheetCloseGeneration) return;
+      fileSheet.hidden = true;
+      fileSheet.inert = false;
+      delete fileSheet.dataset.closing;
+    };
+    const finishAfterAnimation = (event) => {
+      if (event.target === fileSheetPanel && event.animationName === 'mobile-sheet-out') finish();
+    };
+    fileSheetPanel.addEventListener('animationend', finishAfterAnimation);
+    closeTimer = setTimeout(finish, 600);
   }
 
   function ensureFileSheet() {
@@ -1255,7 +1295,7 @@ export function createMobileConversationView({
     fileSheetTitle = element('strong', '', 'File');
     fileSheetMeta = element('small');
     copy.append(fileSheetTitle, fileSheetMeta);
-    fileSheetClose = element('button', '', '×');
+    fileSheetClose = element('button', 'mobile-file-sheet-close', '×');
     fileSheetClose.type = 'button';
     fileSheetClose.setAttribute('aria-label', 'Close file preview');
     fileSheetClose.addEventListener('click', closeFileSheet);
@@ -1294,6 +1334,9 @@ export function createMobileConversationView({
 
   async function openFileReference(reference, fallback) {
     ensureFileSheet();
+    fileSheetCloseGeneration += 1;
+    delete fileSheet.dataset.closing;
+    fileSheet.inert = false;
     const previewGeneration = ++filePreviewGeneration;
     const candidates = conversationFiles(lastConversation).filter((file) => sameFilePath(file.path, reference.path));
     let file = candidates.at(-1) || fallback;
