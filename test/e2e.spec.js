@@ -1130,6 +1130,37 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('[data-event-id="tool-shell"] .mobile-event-detail')).toHaveCount(0);
   await expect.poll(() => shellDetail.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
   await expect.poll(() => toolPanel.evaluate((panel) => panel.scrollHeight > panel.clientHeight)).toBe(true);
+  const shellPanel = conversation.locator('[data-event-id="tool-shell"] > .mobile-event-panel');
+  await expect.poll(() => shellPanel.evaluate((panel) => panel.scrollHeight > panel.clientHeight)).toBe(true);
+  await expect.poll(() => shellPanel.evaluate((panel) => getComputedStyle(panel).overscrollBehaviorY)).toBe('auto');
+  await expect.poll(() => toolPanel.evaluate((panel) => getComputedStyle(panel).overscrollBehaviorY)).toBe('auto');
+  await expect.poll(() => messages.evaluate((panel) => getComputedStyle(panel).overscrollBehaviorY)).toBe('contain');
+
+  await shellPanel.scrollIntoViewIfNeeded();
+  const nestedScrollStart = await page.evaluate(() => {
+    const detail = document.querySelector('[data-event-id="tool-shell"] > .mobile-event-panel');
+    const group = document.querySelector('[data-event-id="tool-group-1"] > .mobile-tool-group-panel');
+    detail.scrollTop = detail.scrollHeight;
+    group.scrollTop = Math.max(0, group.scrollHeight - group.clientHeight - 90);
+    return group.scrollTop;
+  });
+  await shellPanel.hover();
+  await page.mouse.wheel(0, 240);
+  await expect.poll(() => toolPanel.evaluate((panel) => panel.scrollTop)).toBeGreaterThan(nestedScrollStart);
+
+  await shellPanel.scrollIntoViewIfNeeded();
+  const mainScrollStart = await page.evaluate(() => {
+    const detail = document.querySelector('[data-event-id="tool-shell"] > .mobile-event-panel');
+    const group = document.querySelector('[data-event-id="tool-group-1"] > .mobile-tool-group-panel');
+    const main = document.querySelector('.mobile-conversation-messages');
+    detail.scrollTop = detail.scrollHeight;
+    group.scrollTop = group.scrollHeight;
+    main.scrollTop = Math.max(0, main.scrollTop - 120);
+    return main.scrollTop;
+  });
+  await shellPanel.hover();
+  await page.mouse.wheel(0, 320);
+  await expect.poll(() => messages.evaluate((panel) => panel.scrollTop)).toBeGreaterThan(mainScrollStart);
   const toolReadingPosition = await toolPanel.evaluate((panel) => {
     panel.scrollTop = Math.min(60, panel.scrollHeight - panel.clientHeight - 1);
     return panel.scrollTop;
