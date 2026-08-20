@@ -589,6 +589,25 @@ export function createMobileConversationView({
     return (String(text || '').match(/^(?:```|~~~)/gm) || []).length;
   }
 
+  function streamNeedsMarkdownParse(previousText, suffix) {
+    if (/[\n*_`\[\]()#>|~]/.test(suffix)) return true;
+    const previousLastLine = previousText.slice(previousText.lastIndexOf('\n') + 1);
+    const combinedLastLine = `${previousLastLine}${suffix}`;
+    return /^(?: {0,3}(?:[-+*]|\d+[.)])\s| {0,3}#{1,6}\s| {0,3}>\s)/.test(combinedLastLine);
+  }
+
+  function reparseStreamingMarkdown(content, nextText) {
+    const scroll = captureStreamScroll(content);
+    const fresh = markdownNode(nextText, {
+      onFileReference: (reference) => void openFileReference(reference),
+    });
+    content.replaceChildren(...fresh.childNodes);
+    content.dataset.streaming = 'true';
+    content.__mobileRawText = nextText;
+    restoreStreamScroll(content, scroll);
+    return content;
+  }
+
   function appendStreamingMarkdown(content, nextText) {
     const previousText = content?.__mobileRawText;
     if (!content || typeof previousText !== 'string' || !nextText.startsWith(previousText)) return undefined;
@@ -599,14 +618,9 @@ export function createMobileConversationView({
     const previousLastLine = previousText.slice(previousText.lastIndexOf('\n') + 1);
     const openingFenceCompleted = previousFences % 2 === 1 &&
       /^(?:```|~~~)/.test(previousLastLine) && suffix.includes('\n');
-    if (previousFences !== nextFences || openingFenceCompleted) {
-      const fresh = markdownNode(nextText, {
-        onFileReference: (reference) => void openFileReference(reference),
-      });
-      fresh.dataset.streaming = 'true';
-      fresh.__mobileRawText = nextText;
-      content.replaceWith(fresh);
-      return fresh;
+    if (previousFences !== nextFences || openingFenceCompleted ||
+        (nextFences % 2 === 0 && streamNeedsMarkdownParse(previousText, suffix))) {
+      return reparseStreamingMarkdown(content, nextText);
     }
     const openCode = nextFences % 2 === 1 ? content.querySelector('pre code') : undefined;
     if (openCode) {

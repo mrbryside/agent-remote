@@ -84,6 +84,12 @@ transferred, parsed, and traversed again for every token, which otherwise lets
 mobile Safari fall progressively behind the desktop UI. A reconnect starts
 with another complete snapshot so the compact frames never depend on state
 from an earlier connection.
+Plain token chunks append directly into the active message node. A chunk that
+completes Markdown structure (a line break, list/heading marker, emphasis,
+inline code, link, table, or fence) reparses only that active message and
+preserves its outer DOM node plus nested scroll positions. Lists and emphasis
+therefore become formatted while the turn is still streaming without bringing
+back full-history rerenders or per-token batching.
 ACP `session/load` can replay a completed turn without replaying Grok's final
 lifecycle notification. When the replay batch reaches its persisted boundary,
 the client settles the live `turn.active` flag together with the synthesized

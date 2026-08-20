@@ -1142,6 +1142,46 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('#mobile-conversation-send')).toHaveAttribute('data-action', 'send');
 
   currentActivity = { active: true, phase: 'responding', label: 'Responding…' };
+  const liveMarkdownItem = {
+    id: 'assistant-live-markdown', type: 'message', role: 'assistant',
+    text: 'หลายเรื่องให้เลือกเลย เช่น',
+  };
+  rootItems.push(liveMarkdownItem);
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation, stream: {
+        kind: 'agent_message_chunk', delta: nextConversation.items.at(-1).text,
+        threadId: 'root-thread', messageId: 'assistant-live-markdown',
+      } }),
+    });
+  }, rootConversation());
+  const markdownDelta = [
+    '',
+    '- **เรื่องเทค** — AI และ LLM',
+    '- **เรื่องงาน** — สิ่งที่กำลังติดขัด',
+    '- **เรื่องทั่วไป** — หนัง เพลง และเกม',
+  ].join('\n');
+  liveMarkdownItem.text += markdownDelta;
+  await page.evaluate((delta) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ stream: {
+        kind: 'agent_message_chunk', delta, threadId: 'root-thread',
+        messageId: 'assistant-live-markdown',
+      } }),
+    });
+  }, markdownDelta);
+  const liveMarkdownMessage = conversation.locator('[data-message-id="assistant-live-markdown"]');
+  await expect(liveMarkdownMessage.locator('li')).toHaveCount(3);
+  await expect(liveMarkdownMessage.locator('strong')).toHaveCount(3);
+  await expect(conversation.locator('#mobile-conversation-activity')).toContainText('Responding…');
+  currentActivity = { active: false };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation, stream: { kind: 'turn_completed' } }),
+    });
+  }, rootConversation());
+
+  currentActivity = { active: true, phase: 'responding', label: 'Responding…' };
   const liveCodeItem = {
     id: 'assistant-live-code', type: 'message', role: 'assistant',
     text: `\`\`\`js\nconst value = "${'wide '.repeat(40)}";`,
