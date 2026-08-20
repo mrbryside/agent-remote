@@ -93,18 +93,25 @@ provider has reported an active-to-idle transition, the client clears that
 pending state even if replay normalizes the user message differently.
 
 The root snapshot also exposes provider-owned controls. Grok uses
-`session/set_model` and one mutually exclusive mode control: `Normal`, `Plan`,
-`Auto`, or `Always approve`. `Plan` maps to ACP `session/set_mode` `plan`; the
-other choices use `default` plus `_x.ai/yolo_mode_changed` with ask, auto, or
-bypass semantics. Incoming `current_mode_update.currentModeId` notifications
-update the same control, so the mobile selection and Grok session do not expose
-independent plan and permission dropdowns. The initial choice follows Grok's
-`[ui].permission_mode` config, while a mobile change affects only the loaded
-Grok session through ACP. Model and mode selectors remain available while a
-turn streams. A choice made during an active turn is projected into the mobile
-controls immediately but retained as pending ACP state; immediately before the
-next queued `session/prompt`, the client applies `session/set_model` and the
-unified mode change in order. It never mutates the turn already in progress.
+`session/set_model` and one mutually exclusive mobile mode control: `Normal`,
+`Plan`, `Auto`, or `Always approve`. Do not use ACP `session/set_mode` for this
+control: Grok 1.0.5 accepts that request as display state without reliably
+activating its Plan workflow. Mobile owns the selection instead. A Plan prompt
+is delivered with a hidden control preface that requires Grok's real
+`enter_plan_mode` / `exit_plan_mode` tool flow, while the visible user echo is
+restored before timeline mapping. Normal, Auto, and Always approve send
+`x.ai/yolo_mode_changed` with ask, auto, or bypass semantics. No runtime probe,
+poll, or terminal-focus state participates in mode selection, and the mobile
+choice is not required to mirror the terminal TUI selector.
+
+The initial permission choice follows Grok's `[ui].permission_mode` config,
+while a mobile change affects only the loaded Grok session through ACP. A real
+`current_mode_update` from enter/exit Plan still updates the mobile control.
+Model and mode selectors remain available while a turn streams. A choice made
+during an active turn is projected into the mobile controls immediately but
+retained as pending ACP state; immediately before the next queued
+`session/prompt`, the client applies `session/set_model` and the mobile mode
+contract in order. It never mutates the turn already in progress.
 
 Composer completion also stays behind provider and project boundaries. Slash
 commands come from Grok's live ACP `available_commands_update` notification;
