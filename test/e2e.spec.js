@@ -570,8 +570,20 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'collapsed');
   await expect(page.locator('#terminal')).toBeHidden();
   await expect.poll(() => Boolean(releaseInitialConversation)).toBe(true);
-  await expect(conversation.locator('#mobile-conversation-boot')).toBeVisible();
-  await expect(conversation.locator('#mobile-conversation-state')).toBeHidden();
+  const boot = conversation.locator('#mobile-conversation-boot');
+  await expect(boot).toBeVisible();
+  await expect(conversation.locator('.mobile-conversation-header')).toBeVisible();
+  await expect(conversation.locator('#mobile-conversation-composer')).toBeVisible();
+  await expect(conversation.locator('#mobile-conversation-title')).toBeVisible();
+  await expect(boot).toContainText('Loading chat');
+  await expect.poll(() => conversation.evaluate((root) => {
+    const loading = root.querySelector('#mobile-conversation-boot').getBoundingClientRect();
+    const history = root.querySelector('.mobile-conversation-scroll-shell').getBoundingClientRect();
+    const header = root.querySelector('.mobile-conversation-header').getBoundingClientRect();
+    const composer = root.querySelector('#mobile-conversation-composer').getBoundingClientRect();
+    return loading.top >= history.top && loading.bottom <= history.bottom &&
+      loading.top >= header.bottom && loading.bottom <= composer.top;
+  })).toBe(true);
   releaseInitialConversation?.();
   await expect(page.locator('#terminal')).toBeHidden();
   await expect.poll(() => page.evaluate(async (name) => {

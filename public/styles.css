@@ -355,8 +355,8 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-conversation { position: fixed; z-index: 25; top: 0; left: 0; display: flex; width: var(--visual-viewport-width, 100vw); height: var(--visual-viewport-height, 100dvh); flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; transform: translate3d(var(--visual-viewport-offset-left, 0px), var(--visual-viewport-offset-top, 0px), 0); background: var(--color-canvas); }
   .mobile-conversation:has(.mobile-subagent-sheet:not([hidden])) { z-index: 36; }
   .mobile-conversation[hidden] { display: none; }
-  .mobile-conversation[data-booting="true"] > :not(.mobile-conversation-boot) { visibility: hidden; }
-  .mobile-conversation-boot { position: absolute; z-index: 30; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; background: var(--color-canvas); color: var(--color-text-muted); font: 11px/1.4 var(--font-family-mono); }
+  .mobile-conversation[data-booting="true"] .mobile-conversation-composer { opacity: .64; }
+  .mobile-conversation-boot { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; justify-items: center; gap: 14px; background: var(--color-canvas); color: var(--color-text-muted); font: 11px/1.4 var(--font-family-mono); }
   .mobile-conversation-boot[hidden] { display: none; }
   .mobile-conversation-boot > i { width: 28px; height: 28px; box-sizing: border-box; border: 2px solid var(--color-border-strong); border-top-color: var(--color-text-secondary); border-radius: 50%; animation: session-spin .8s linear infinite; }
   .mobile-conversation-header { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; min-height: 52px; padding: 8px 13px; border-bottom: 1px solid var(--color-border-subtle); background: color-mix(in srgb, var(--color-surface-raised) 94%, transparent); }

@@ -175,7 +175,9 @@ export function createMobileConversationView({
   function setBooting(next) {
     const booting = Boolean(next);
     root.dataset.booting = String(booting);
-    root.toggleAttribute('aria-busy', booting);
+    scrollShell.toggleAttribute('aria-busy', booting);
+    composer.inert = booting;
+    composer.setAttribute('aria-disabled', String(booting));
     boot.hidden = !booting;
   }
 
@@ -3032,7 +3034,7 @@ export function createMobileConversationView({
       state.textContent = 'Connecting';
       state.dataset.state = 'working';
       setBooting(true);
-      composer.hidden = true;
+      composer.hidden = false;
       context.hidden = true;
       activity.hidden = true;
       modelButton.hidden = true;
@@ -3087,7 +3089,7 @@ export function createMobileConversationView({
       interactionDock.hidden = true;
       root.dataset.interaction = 'false';
       interactionDock.replaceChildren();
-      composer.hidden = true;
+      composer.hidden = false;
       context.hidden = true;
       activity.hidden = true;
       modelButton.hidden = true;
