@@ -31,7 +31,14 @@ renderer and unregisters the owning terminal-browser process, while dragging
 down or tapping the backdrop remains the reversible hide action.
 Shutdown allows a bounded two-second grace period for the renderer to process
 `SIGINT` and unregister cleanly. Closing one session's browser must leave every
-other session-owned browser alive.
+other session-owned browser alive. The automation CLI also creates one
+`agent-browser` worker for each browser key after its first action. Agent Remote
+closes that exact worker with the renderer; it never uses a global shutdown.
+At server startup it compares live worker sockets with the global browser
+registry and closes only workers whose browser owner no longer exists. This
+second boundary recovers workers orphaned by a prior crash and prevents them
+from accumulating until Grok's command executor is killed under resource
+pressure.
 
 The page viewport displays Chromium's compositor screencast directly. Layout,
 input, and raster dimensions share CSS-pixel coordinates, so there is no
