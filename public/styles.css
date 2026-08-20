@@ -574,19 +574,19 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-thinking-indicator { box-sizing: border-box; width: 12px; height: 12px; border: 1.5px solid var(--color-border-strong); border-top-color: var(--color-status-connecting); border-radius: 50%; animation: mobile-activity-spin .8s linear infinite; }
   .mobile-event-recap { border-color: var(--color-border-strong); background: var(--color-surface-raised); }
   .mobile-event-card.mobile-event-tool { margin-block: -4px 16px; overflow: visible; border: 0; border-radius: 0; background: transparent; }
-  .mobile-event-tool > .mobile-event-toggle { grid-template-columns: 20px minmax(0, 1fr) auto 14px; min-height: 44px; gap: 8px; padding: 8px 2px; }
-  .mobile-event-tool > .mobile-event-toggle::before { display: grid; width: 20px; height: 20px; place-items: center; color: var(--color-text-muted); font: normal 14px/1 var(--font-family-mono); content: "◇"; }
+  .mobile-event-tool > .mobile-event-toggle { grid-template-columns: 16px minmax(0, 1fr) auto 14px; min-height: 44px; gap: 5px; padding: 8px 2px; }
+  .mobile-event-tool > .mobile-event-toggle::before { display: grid; width: 16px; height: 20px; place-items: center; color: var(--color-text-muted); font: normal 14px/1 var(--font-family-mono); content: "◇"; }
   .mobile-event-tool[data-kind="edit"] > .mobile-event-toggle::before { content: "✎"; }
   .mobile-event-tool[data-kind="execute"] > .mobile-event-toggle::before { content: "$"; }
   .mobile-event-tool > .mobile-event-toggle > span:first-child { display: block; }
   .mobile-event-tool > .mobile-event-toggle > span:first-child > small { display: none; }
   .mobile-event-tool > .mobile-event-toggle .mobile-event-heading > strong { color: var(--color-text-muted); font: 500 13px/1.4 var(--font-family-sans); }
-  .mobile-event-tool > .mobile-event-panel { box-sizing: border-box; max-height: min(38dvh, 300px); margin: 0 0 8px 28px; overflow: auto; padding: 0; border: 1px solid var(--color-border-faint); border-radius: 10px; background: var(--color-canvas); }
+  .mobile-event-tool > .mobile-event-panel { box-sizing: border-box; max-height: min(38dvh, 300px); margin: 0 0 8px 21px; overflow: auto; padding: 0; border: 1px solid var(--color-border-faint); border-radius: 10px; background: var(--color-canvas); }
   .mobile-event-tool > .mobile-event-panel > .mobile-event-change, .mobile-event-tool > .mobile-event-panel > .mobile-event-file { border: 0; border-radius: 0; }
   .mobile-tool-group { margin-block: -4px 16px; overflow: visible; border: 0; border-radius: 0; background: transparent; }
-  .mobile-tool-group-toggle { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto 14px; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 8px 2px; border: 0; background: transparent; color: var(--color-text-secondary); text-align: left; cursor: pointer; }
+  .mobile-tool-group-toggle { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto 14px; align-items: center; gap: 5px; width: 100%; min-height: 44px; padding: 8px 2px; border: 0; background: transparent; color: var(--color-text-secondary); text-align: left; cursor: pointer; }
   .mobile-tool-group-toggle:active { background: var(--color-surface-pressed); }
-  .mobile-tool-group-toggle > i { display: grid; width: 20px; height: 20px; place-items: center; color: var(--color-text-muted); font: normal 16px/1 var(--font-family-mono); }
+  .mobile-tool-group-toggle > i { display: grid; width: 16px; height: 20px; place-items: center; color: var(--color-text-muted); font: normal 16px/1 var(--font-family-mono); }
   .mobile-tool-group-toggle > i::before { content: "◇"; }
   .mobile-tool-group:has([data-kind="edit"]) .mobile-tool-group-toggle > i::before { content: "✎"; }
   .mobile-tool-group:not(:has([data-kind="edit"])):has([data-kind="execute"]) .mobile-tool-group-toggle > i::before { content: "$"; }
@@ -601,14 +601,14 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-tool-group-panel[hidden] { display: none; }
   .mobile-tool-group-panel:not([hidden]) { max-height: min(44dvh, 340px); overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   .mobile-tool-group-panel .mobile-event-card { width: 100%; min-width: 0; margin: 0; overflow: visible; border: 0; border-radius: 0; background: transparent; }
-  .mobile-tool-group-panel .mobile-event-toggle { grid-template-columns: 20px minmax(0, 1fr) auto 14px; min-height: 42px; padding: 6px 2px; gap: 8px; }
-  .mobile-tool-group-panel .mobile-event-toggle::before { display: grid; width: 20px; height: 20px; place-items: center; color: var(--color-text-muted); font: normal 14px/1 var(--font-family-mono); content: "◇"; }
+  .mobile-tool-group-panel .mobile-event-toggle { grid-template-columns: 16px minmax(0, 1fr) auto 14px; min-height: 42px; padding: 6px 2px; gap: 5px; }
+  .mobile-tool-group-panel .mobile-event-toggle::before { display: grid; width: 16px; height: 20px; place-items: center; color: var(--color-text-muted); font: normal 14px/1 var(--font-family-mono); content: "◇"; }
   .mobile-tool-group-panel [data-kind="edit"] .mobile-event-toggle::before { content: "✎"; }
   .mobile-tool-group-panel [data-kind="execute"] .mobile-event-toggle::before { content: "$"; }
   .mobile-tool-group-panel .mobile-event-toggle > span:first-child { display: block; }
   .mobile-tool-group-panel .mobile-event-toggle > span:first-child > small { display: none; }
   .mobile-tool-group-panel .mobile-event-heading > strong { color: var(--color-text-muted); font: 500 12px/1.4 var(--font-family-sans); }
-  .mobile-tool-group-panel .mobile-event-panel { box-sizing: border-box; max-height: min(38dvh, 300px); margin: 0 0 8px 28px; overflow: auto; padding: 0; border: 1px solid var(--color-border-faint); border-radius: 10px; background: var(--color-canvas); }
+  .mobile-tool-group-panel .mobile-event-panel { box-sizing: border-box; max-height: min(38dvh, 300px); margin: 0 0 8px 21px; overflow: auto; padding: 0; border: 1px solid var(--color-border-faint); border-radius: 10px; background: var(--color-canvas); }
   .mobile-tool-group-panel .mobile-event-panel > .mobile-event-change, .mobile-tool-group-panel .mobile-event-panel > .mobile-event-file { border: 0; border-radius: 0; }
   .mobile-tool-command { width: 100%; max-width: 100%; overflow: auto; color: var(--color-text-secondary); font: 10px/1.55 var(--font-family-mono); }
   .mobile-tool-command-line { display: grid; grid-template-columns: 18px minmax(max-content, 1fr); gap: 4px; min-width: 100%; width: max-content; padding: 10px 12px; box-sizing: border-box; }

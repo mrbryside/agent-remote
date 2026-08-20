@@ -771,6 +771,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => conversation.locator('[data-event-id="tool-group-1"]').evaluate((node) => ({
     groupBorder: getComputedStyle(node).borderTopStyle,
     groupBackground: getComputedStyle(node).backgroundColor,
+    iconTextGap: Math.round(
+      node.querySelector(':scope > .mobile-tool-group-toggle strong').getBoundingClientRect().left -
+      node.querySelector(':scope > .mobile-tool-group-toggle > i').getBoundingClientRect().right,
+    ),
     mutedHeading: getComputedStyle(node.querySelector(':scope > .mobile-tool-group-toggle strong')).color === (() => {
       const probe = document.createElement('span');
       probe.style.color = 'var(--color-text-muted)';
@@ -781,7 +785,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     })(),
   }))).toEqual({
     groupBorder: 'none', groupBackground: 'rgba(0, 0, 0, 0)',
-    mutedHeading: true,
+    iconTextGap: 5, mutedHeading: true,
   });
   const streamedToolGroup = rootItems.find((item) => item.id === 'tool-group-1');
   streamedToolGroup.status = 'working';
