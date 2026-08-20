@@ -396,7 +396,8 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-markdown > :first-child { margin-top: 0; }
   .mobile-markdown > :last-child { margin-bottom: 0; }
   .mobile-markdown p { margin: 0 0 12px; }
-.mobile-markdown strong { color: var(--color-accent); }
+  .mobile-markdown strong { color: var(--color-accent); }
+  .mobile-markdown p > strong:only-child { color: var(--color-heading); }
   .mobile-markdown h1, .mobile-markdown h2, .mobile-markdown h3, .mobile-markdown h4 { margin: 22px 0 9px; color: var(--color-heading); line-height: 1.28; letter-spacing: -.015em; }
   .mobile-markdown h1 { font-size: 21px; }
   .mobile-markdown h2 { font-size: 18px; }
@@ -404,6 +405,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-markdown h4 { font-size: 14px; }
   .mobile-markdown ul, .mobile-markdown ol { display: grid; gap: 5px; margin: 0 0 13px; padding-left: 24px; }
   .mobile-markdown li { padding-left: 2px; }
+  .mobile-markdown li::marker { color: var(--color-accent); font-weight: 600; }
   .mobile-markdown li > p { margin-bottom: 4px; }
   .mobile-markdown blockquote { margin: 14px 0; padding: 2px 0 2px 13px; border-left: 3px solid var(--color-border-strong); color: var(--color-text-secondary); }
   .mobile-markdown blockquote > :last-child { margin-bottom: 0; }

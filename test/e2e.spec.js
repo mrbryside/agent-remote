@@ -312,6 +312,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       'The type is `class None implements Option<number>`.',
       'Review `public/app.js:1-2` before applying the plan.',
       '',
+      '**Standalone section:**',
+      '',
       '- First item',
       '- Second item',
       '',
@@ -643,9 +645,14 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const markdownMessage = conversation.locator('[data-message-id="assistant-0"] .mobile-markdown');
   await expect(markdownMessage.locator('h1')).toHaveText('Markdown response');
   await expect(markdownMessage.locator('h1')).toHaveCSS('color', 'rgb(232, 164, 101)');
-  await expect(markdownMessage.locator('strong')).toHaveText('bold');
-  await expect(markdownMessage.locator('strong')).toHaveCSS('color', 'rgb(100, 190, 172)');
+  const inlineBold = markdownMessage.locator('strong').filter({ hasText: /^bold$/ });
+  await expect(inlineBold).toHaveCSS('color', 'rgb(100, 190, 172)');
+  const standaloneHeading = markdownMessage.locator('p > strong').filter({ hasText: /^Standalone section:$/ });
+  await expect(standaloneHeading).toHaveCSS('color', 'rgb(232, 164, 101)');
   await expect(markdownMessage.locator('li')).toHaveCount(2);
+  await expect.poll(() => markdownMessage.locator('li').first().evaluate(
+    (node) => getComputedStyle(node, '::marker').color,
+  )).toBe('rgb(100, 190, 172)');
   await expect(markdownMessage.locator('table')).toContainText('Renderer');
   const codeBlocks = markdownMessage.locator('.mobile-markdown-code');
   await expect(codeBlocks).toHaveCount(2);
