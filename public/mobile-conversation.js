@@ -108,6 +108,7 @@ export function createMobileConversationView({
   let sheetPointer;
   let subagentPillHost;
   const expandedItems = new Set();
+  const autoExpandedItems = new Set();
   const disclosureMotions = new WeakMap();
   const pendingQuestions = new Map();
   const pendingPlanReviews = new Map();
@@ -1390,6 +1391,10 @@ export function createMobileConversationView({
   }
 
   function eventNode(item) {
+    if (item.type === 'tool' && ['edit', 'write'].includes(item.kind) && !autoExpandedItems.has(item.id)) {
+      autoExpandedItems.add(item.id);
+      expandedItems.add(item.id);
+    }
     const card = element('article', `mobile-event-card mobile-event-${item.type}`);
     card.dataset.eventId = item.id;
     card.dataset.kind = item.kind || item.type;
@@ -1853,6 +1858,17 @@ export function createMobileConversationView({
   }
 
   function toolGroupNode(item) {
+    let hasNewEditableTool = false;
+    for (const tool of item.tools || []) {
+      if (!['edit', 'write'].includes(tool.kind) || autoExpandedItems.has(tool.id)) continue;
+      hasNewEditableTool = true;
+      autoExpandedItems.add(tool.id);
+      expandedItems.add(tool.id);
+    }
+    if (hasNewEditableTool) {
+      autoExpandedItems.add(item.id);
+      expandedItems.add(item.id);
+    }
     const group = element('article', 'mobile-tool-group');
     group.dataset.eventId = item.id;
     group.dataset.state = item.status || 'completed';
@@ -2778,6 +2794,8 @@ export function createMobileConversationView({
       closeStream();
       closeFileSheet();
       sessionName = nextSessionName;
+      expandedItems.clear();
+      autoExpandedItems.clear();
       expectedConversation = true;
       threadId = undefined;
       rootThreadId = undefined;
@@ -2828,6 +2846,8 @@ export function createMobileConversationView({
       closeStream();
       closeFileSheet();
       sessionName = nextSessionName || undefined;
+      expandedItems.clear();
+      autoExpandedItems.clear();
       threadId = undefined;
       rootThreadId = undefined;
       rootConversation = undefined;

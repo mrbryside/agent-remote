@@ -799,6 +799,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await thoughtCard.getByRole('button').click();
   await expect(thoughtCard.getByText('Interaction remains available.')).toBeVisible();
   await expect(conversation.locator('.mobile-tool-group')).toContainText('Listed 1 dir, Read 2 files, Searched 1 time, Edited 1 file, Ran 1 command');
+  await expect(conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await expect(conversation.locator('[data-event-id="tool-edit-app"] > .mobile-event-toggle')).toHaveAttribute('aria-expanded', 'true');
+  await expect(conversation.locator('[data-event-id="tool-edit-app"] > .mobile-event-panel')).toBeVisible();
   await expect(conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle > i')).toHaveText('');
   await expect.poll(() => conversation.locator('[data-event-id="tool-group-1"]').evaluate((node) => ({
     groupBorder: getComputedStyle(node).borderTopStyle,
@@ -822,6 +825,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     arrow: '"›"', arrowFontSize: '17px', iconTextGap: 5, mutedHeading: true,
   });
   const streamedToolGroup = rootItems.find((item) => item.id === 'tool-group-1');
+  await conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle').click();
+  await expect(conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle')).toHaveAttribute('aria-expanded', 'false');
   streamedToolGroup.status = 'working';
   streamedToolGroup.tools.find((tool) => tool.id === 'tool-shell').status = 'working';
   await page.evaluate((nextConversation) => {
@@ -842,6 +847,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     groupText: 'Running', groupAnimation: 'mobile-activity-spin',
     toolText: 'Running', toolAnimation: 'mobile-activity-spin',
   });
+  await expect(conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle')).toHaveAttribute('aria-expanded', 'false');
   const stableToolGroup = await page.evaluate(async (nextConversation) => {
     const button = document.querySelector('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle');
     const detail = document.querySelector('[data-event-id="tool-group-1"] .mobile-event-card .mobile-event-panel > *');
@@ -1221,6 +1227,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     background: getComputedStyle(node).backgroundColor,
   }))).toEqual({ border: 'none', background: 'rgba(0, 0, 0, 0)' });
   const editCard = conversation.locator('[data-event-id="tool-edit-app"]');
+  await editCard.locator(':scope > .mobile-event-toggle').click();
+  await expect(editCard.locator(':scope > .mobile-event-panel')).toBeHidden();
   const childDisclosureMotion = await editCard.evaluate(async (card) => {
     const toggle = card.querySelector(':scope > .mobile-event-toggle');
     const panel = card.querySelector(':scope > .mobile-event-panel');

@@ -228,6 +228,9 @@ additions, red removals, colored add/remove counts, bounded context, and
 independent two-axis scrolling. Write and Edit share that renderer: each source
 line is one non-wrapping row with one relevant line-number column and a separate
 `+`/`−` marker, so narrow screens scroll horizontally instead of wrapping code.
+The first appearance of a Write or Edit automatically expands its diff. If it
+belongs to a Tool group, the group opens with that child; a manual collapse is
+then authoritative and streamed snapshots must not reopen it.
 
 Tool groups, their child tools, standalone tools, and thoughts share one
 content-height disclosure animation. It measures the rendered panel and
