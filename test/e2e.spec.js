@@ -644,7 +644,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(markdownMessage.locator('h1')).toHaveText('Markdown response');
   await expect(markdownMessage.locator('h1')).toHaveCSS('color', 'rgb(232, 164, 101)');
   await expect(markdownMessage.locator('strong')).toHaveText('bold');
-  await expect(markdownMessage.locator('strong')).toHaveCSS('color', 'rgb(232, 164, 101)');
+  await expect(markdownMessage.locator('strong')).toHaveCSS('color', 'rgb(100, 190, 172)');
   await expect(markdownMessage.locator('li')).toHaveCount(2);
   await expect(markdownMessage.locator('table')).toContainText('Renderer');
   const codeBlocks = markdownMessage.locator('.mobile-markdown-code');
