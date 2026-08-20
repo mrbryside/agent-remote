@@ -21,6 +21,12 @@ use `--font-size-mobile-input` so iOS does not zoom the viewport on focus. Keep
 the two interaction types on this common scale instead of adding per-card font
 sizes.
 
+Mobile disclosure motion consumes `--duration-normal` and `--ease-out` for
+Tool groups, nested/standalone Tool details, and Thought details. Keep those
+surfaces on the shared content-height animation contract and retain the global
+reduced-motion override; do not add component-specific durations or replay an
+entry animation on every streamed snapshot.
+
 Scrollbar colors use the semantic `--color-scrollbar-thumb`, `--color-scrollbar-thumb-hover`, and `--color-scrollbar-thumb-active` tokens. `public/styles.css` applies one cross-browser 6px scrollbar contract to every scroll surface: transparent, borderless tracks and corners; rounded low-contrast thumbs; and no arrow buttons. Do not hide a component scrollbar or add a component-specific track frame.
 
 ## Consumption rules

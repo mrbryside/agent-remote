@@ -216,6 +216,16 @@ Edit results similarly render only the compact unified diff—with line numbers,
 green additions, red removals, colored add/remove counts, bounded context, and
 independent two-axis scrolling.
 
+Tool groups, their child tools, standalone tools, and thoughts share one
+content-height disclosure animation. It measures the rendered panel and
+animates height, opacity, and a small vertical offset with the design-system
+normal duration/ease-out tokens; reduced-motion users get an immediate state
+change. The open/closed identity remains in `expandedItems`, while transient
+motion attributes survive timeline reconciliation so a streamed snapshot
+cannot cancel a tap or make the panel jump between frames. Panels become inert
+as soon as they close and receive the native `hidden` state only after the
+closing motion finishes.
+
 Spawn calls, permission-first embedded tool calls, `subagent_spawned`,
 completion, and output polling collapse into one stable lifecycle item:
 `Calling`, then `Running` and navigable, then `Done` or its failure state. Child
