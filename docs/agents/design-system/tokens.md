@@ -21,6 +21,13 @@ use `--font-size-mobile-input` so iOS does not zoom the viewport on focus. Keep
 the two interaction types on this common scale instead of adding per-card font
 sizes.
 
+The compact interaction dock is the single visual boundary for Question and
+Permission flows. Do not nest another card frame inside it: choices and
+permission actions are flat rows separated by subtle dividers, permission
+details use block dividers, and the custom answer field is underline-only.
+Selection and focus should change the semantic divider or control accent rather
+than adding a filled surface, rounded box, or focus halo around the row.
+
 Mobile disclosure motion consumes `--duration-normal` and `--ease-out` for
 Tool groups, nested/standalone Tool details, and Thought details. Keep those
 surfaces on the shared content-height animation contract and retain the global

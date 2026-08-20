@@ -1968,6 +1968,35 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   expect(permissionDensity.padding).toBeLessThanOrEqual(12);
   expect(permissionDensity.gap).toBeLessThanOrEqual(9);
   expect(permissionDensity.buttonHeight).toBeLessThanOrEqual(48);
+  const permissionHierarchy = await interactionDock.locator('.mobile-interaction-card').evaluate((card) => {
+    const cardStyle = getComputedStyle(card);
+    const detailsStyle = getComputedStyle(card.querySelector('.mobile-permission-details'));
+    const firstActionStyle = getComputedStyle(card.querySelector('.mobile-permission-actions button'));
+    return {
+      cardBorder: cardStyle.borderTopWidth,
+      cardBackground: cardStyle.backgroundColor,
+      detailsBorderLeft: detailsStyle.borderLeftWidth,
+      detailsBorderTop: detailsStyle.borderTopWidth,
+      detailsBorderRadius: detailsStyle.borderRadius,
+      actionBorderLeft: firstActionStyle.borderLeftWidth,
+      actionBorderTop: firstActionStyle.borderTopWidth,
+      actionBorderBottom: firstActionStyle.borderBottomWidth,
+      actionBorderRadius: firstActionStyle.borderRadius,
+      actionBackground: firstActionStyle.backgroundColor,
+    };
+  });
+  expect(permissionHierarchy).toEqual({
+    cardBorder: '0px',
+    cardBackground: 'rgba(0, 0, 0, 0)',
+    detailsBorderLeft: '0px',
+    detailsBorderTop: '1px',
+    detailsBorderRadius: '0px',
+    actionBorderLeft: '0px',
+    actionBorderTop: '0px',
+    actionBorderBottom: '1px',
+    actionBorderRadius: '0px',
+    actionBackground: 'rgba(0, 0, 0, 0)',
+  });
   const permissionTypography = await interactionDock.locator('.mobile-interaction-card').evaluate((card) => ({
     eyebrow: getComputedStyle(card.querySelector('.mobile-question-header small')).fontSize,
     title: getComputedStyle(card.querySelector('.mobile-question-header strong')).fontSize,
@@ -2074,6 +2103,30 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   expect(questionDensity.optionMinHeight).toBeLessThanOrEqual(44);
   expect(questionDensity.actionHeight).toBeLessThanOrEqual(42);
   expect(questionDensity.emptyLiveDisplay).toBe('none');
+  const questionHierarchy = await questionCard.evaluate((card) => {
+    const cardStyle = getComputedStyle(card);
+    const optionStyle = getComputedStyle(card.querySelector('.mobile-question-option'));
+    return {
+      cardBorder: cardStyle.borderTopWidth,
+      cardRadius: cardStyle.borderRadius,
+      cardBackground: cardStyle.backgroundColor,
+      optionBorderLeft: optionStyle.borderLeftWidth,
+      optionBorderTop: optionStyle.borderTopWidth,
+      optionBorderBottom: optionStyle.borderBottomWidth,
+      optionRadius: optionStyle.borderRadius,
+      optionBackground: optionStyle.backgroundColor,
+    };
+  });
+  expect(questionHierarchy).toEqual({
+    cardBorder: '0px',
+    cardRadius: '0px',
+    cardBackground: 'rgba(0, 0, 0, 0)',
+    optionBorderLeft: '0px',
+    optionBorderTop: '0px',
+    optionBorderBottom: '1px',
+    optionRadius: '0px',
+    optionBackground: 'rgba(0, 0, 0, 0)',
+  });
   const questionTypography = await questionCard.evaluate((card) => ({
     eyebrow: getComputedStyle(card.querySelector('.mobile-question-header small')).fontSize,
     title: getComputedStyle(card.querySelector('.mobile-question-header strong')).fontSize,
@@ -2108,6 +2161,24 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(continueButton).toBeDisabled();
   await questionCard.getByRole('checkbox', { name: /Unit tests/ }).check();
   const otherAnswer = questionCard.getByRole('textbox', { name: /Other answer/ });
+  expect(await otherAnswer.evaluate((node) => {
+    const style = getComputedStyle(node);
+    return {
+      borderLeft: style.borderLeftWidth,
+      borderTop: style.borderTopWidth,
+      borderRight: style.borderRightWidth,
+      borderBottom: style.borderBottomWidth,
+      borderRadius: style.borderRadius,
+      background: style.backgroundColor,
+    };
+  })).toEqual({
+    borderLeft: '0px',
+    borderTop: '0px',
+    borderRight: '0px',
+    borderBottom: '1px',
+    borderRadius: '0px',
+    background: 'rgba(0, 0, 0, 0)',
+  });
   await otherAnswer.click();
   await otherAnswer.pressSequentially('Custom');
   await otherAnswer.evaluate((node) => { node.dataset.focusProbe = 'stable'; });
