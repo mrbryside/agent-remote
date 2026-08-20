@@ -12,6 +12,12 @@ const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,79}$/;
 const conversationModes = new Set(['default', 'plan']);
 const permissionModes = new Set(['default', 'auto', 'bypassPermissions']);
 const unifiedModes = new Set(['normal', 'plan', 'auto', 'alwaysApprove']);
+const planPromptPrefix = `<system_reminder>
+The user selected Plan mode in the client. If Plan mode is not already active, call \`enter_plan_mode\` before handling the request. Stay in Plan mode: inspect and reason, do not modify the project, write the plan file, and present the completed plan for review through \`exit_plan_mode\`.
+</system_reminder>
+<user_query>
+`;
+const planPromptSuffix = '\n</user_query>';
 
 function unifiedMode(current) {
   if (unifiedModes.has(current.pendingModeId)) return current.pendingModeId;
@@ -19,6 +25,15 @@ function unifiedMode(current) {
   if (current.permissionMode === 'auto') return 'auto';
   if (current.permissionMode === 'bypassPermissions') return 'alwaysApprove';
   return 'normal';
+}
+
+function wirePromptText(text, modeId) {
+  return modeId === 'plan' ? `${planPromptPrefix}${text}${planPromptSuffix}` : text;
+}
+
+function visiblePromptText(text) {
+  if (!text.startsWith(planPromptPrefix) || !text.endsWith(planPromptSuffix)) return text;
+  return text.slice(planPromptPrefix.length, -planPromptSuffix.length);
 }
 
 function rpcError(message, code = 'GROK_ACP_ERROR') {
@@ -286,6 +301,14 @@ export function createGrokAcpClient({
     if (record.id && current.eventIds.has(record.id)) return;
     if (record.id) current.eventIds.add(record.id);
     let update = record.params.update;
+    if (update.sessionUpdate === 'user_message_chunk') {
+      const text = updateText(update);
+      const visibleText = visiblePromptText(text);
+      if (visibleText !== text) {
+        update = { ...update, content: { ...update.content, text: visibleText } };
+        record = { ...record, params: { update } };
+      }
+    }
     const pendingSteer = current.pendingSteers[0];
     const streamStart = agentStreamStart(message.params);
     if (pendingSteer && matchesInterjectionEcho(update, pendingSteer)) {
@@ -357,7 +380,6 @@ export function createGrokAcpClient({
       const nextMode = update.currentModeId ?? update.currentMode;
       if (conversationModes.has(nextMode)) {
         current.currentMode = nextMode;
-        current.permissionMode = 'default';
       }
     }
     const signature = subagentSignature(update);
@@ -695,10 +717,12 @@ export function createGrokAcpClient({
     const conversationMode = modeId === 'plan' ? 'plan' : 'default';
     const permissionMode = modeId === 'auto' ? 'auto'
       : modeId === 'alwaysApprove' ? 'bypassPermissions' : 'default';
-    if (current.currentMode !== conversationMode) {
-      await request('session/set_mode', { sessionId, modeId: conversationMode });
-    }
-    notify('_x.ai/yolo_mode_changed', {
+    // Grok accepts ACP session/set_mode but currently treats it as display
+    // state: it does not activate the agent's plan workflow. Mobile owns its
+    // mode choice instead. Plan is carried in the next prompt so Grok enters
+    // its real enter_plan_mode/exit_plan_mode flow; permission modes use the
+    // vendor notification consumed by the Grok leader.
+    notify('x.ai/yolo_mode_changed', {
       sessionId,
       auto_mode: permissionMode === 'auto',
       ask: permissionMode === 'default',
@@ -751,7 +775,7 @@ export function createGrokAcpClient({
       publish(sessionId);
       try {
         const result = await request('session/prompt', {
-          sessionId, prompt: [{ type: 'text', text: entry.text }],
+          sessionId, prompt: [{ type: 'text', text: wirePromptText(entry.text, unifiedMode(current)) }],
         });
         current.events.push({
           timestamp: Date.now(),
