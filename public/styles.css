@@ -510,7 +510,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-event-status[data-state="working"], .mobile-event-status[data-state="running"] { color: var(--color-status-connecting); }
   .mobile-event-status[data-state="completed"] { color: var(--color-success); }
   .mobile-event-status[data-state="failed"], .mobile-event-status[data-state="error"], .mobile-event-status[data-state="cancelled"] { color: var(--color-danger); }
-  .mobile-event-tool > .mobile-event-toggle .mobile-event-status { display: inline-flex; min-width: max-content; align-items: center; gap: 5px; }
+  .mobile-event-tool > .mobile-event-toggle .mobile-event-status { display: inline-flex; min-width: max-content; height: 20px; align-items: center; gap: 5px; line-height: 20px; }
   .mobile-event-tool > .mobile-event-toggle .mobile-event-status:is([data-state="calling"], [data-state="pending"], [data-state="working"], [data-state="running"])::before { box-sizing: border-box; width: 10px; height: 10px; flex: 0 0 10px; border: 1.5px solid var(--color-border-strong); border-top-color: var(--color-status-connecting); border-radius: 50%; content: ""; animation: mobile-activity-spin .8s linear infinite; }
   .mobile-event-toggle > i { color: var(--color-text-muted); font: normal 17px/1 var(--font-family-sans); transition: transform var(--duration-fast) var(--ease-standard); }
   .mobile-event-toggle[aria-expanded="true"] > i { transform: rotate(90deg); }
@@ -575,9 +575,11 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-event-recap { border-color: var(--color-border-strong); background: var(--color-surface-raised); }
   .mobile-event-card.mobile-event-tool { margin-block: -4px 16px; overflow: visible; border: 0; border-radius: 0; background: transparent; }
   .mobile-event-tool > .mobile-event-toggle { grid-template-columns: 16px minmax(0, 1fr) auto 14px; min-height: 44px; gap: 5px; padding: 8px 2px; }
-  .mobile-event-tool > .mobile-event-toggle::before { display: grid; width: 16px; height: 20px; place-items: center; color: var(--color-text-muted); font: normal 14px/1 var(--font-family-mono); content: "◇"; }
+  .mobile-event-tool > .mobile-event-toggle::before { box-sizing: border-box; width: 7px; height: 7px; place-self: center; border: 1.25px solid var(--color-text-muted); color: var(--color-text-muted); content: ""; transform: rotate(45deg); }
+  .mobile-event-tool[data-kind="edit"] > .mobile-event-toggle::before, .mobile-event-tool[data-kind="execute"] > .mobile-event-toggle::before { display: grid; width: 16px; height: 20px; place-items: center; border: 0; font: normal 14px/20px var(--font-family-mono); transform: none; }
   .mobile-event-tool[data-kind="edit"] > .mobile-event-toggle::before { content: "✎"; }
   .mobile-event-tool[data-kind="execute"] > .mobile-event-toggle::before { content: "$"; }
+  .mobile-event-tool > .mobile-event-toggle > i { display: grid; width: 14px; height: 20px; place-items: center; line-height: 20px; }
   .mobile-event-tool > .mobile-event-toggle > span:first-child { display: block; }
   .mobile-event-tool > .mobile-event-toggle > span:first-child > small { display: none; }
   .mobile-event-tool > .mobile-event-toggle .mobile-event-heading > strong { color: var(--color-text-muted); font: 500 13px/1.4 var(--font-family-sans); }
@@ -586,8 +588,9 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-tool-group { margin-block: -4px 16px; overflow: visible; border: 0; border-radius: 0; background: transparent; }
   .mobile-tool-group-toggle { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto 14px; align-items: center; gap: 5px; width: 100%; min-height: 44px; padding: 8px 2px; border: 0; background: transparent; color: var(--color-text-secondary); text-align: left; cursor: pointer; }
   .mobile-tool-group-toggle:active { background: var(--color-surface-pressed); }
-  .mobile-tool-group-toggle > i { display: grid; width: 16px; height: 20px; place-items: center; color: var(--color-text-muted); font: normal 16px/1 var(--font-family-mono); }
-  .mobile-tool-group-toggle > i::before { content: "◇"; }
+  .mobile-tool-group-toggle > i { display: grid; width: 16px; height: 20px; place-items: center; color: var(--color-text-muted); font: normal 16px/20px var(--font-family-mono); }
+  .mobile-tool-group-toggle > i::before { box-sizing: border-box; width: 7px; height: 7px; border: 1.25px solid currentcolor; content: ""; transform: rotate(45deg); }
+  .mobile-tool-group:has([data-kind="edit"]) .mobile-tool-group-toggle > i::before, .mobile-tool-group:not(:has([data-kind="edit"])):has([data-kind="execute"]) .mobile-tool-group-toggle > i::before { display: grid; width: 16px; height: 20px; place-items: center; border: 0; transform: none; }
   .mobile-tool-group:has([data-kind="edit"]) .mobile-tool-group-toggle > i::before { content: "✎"; }
   .mobile-tool-group:not(:has([data-kind="edit"])):has([data-kind="execute"]) .mobile-tool-group-toggle > i::before { content: "$"; }
   .mobile-tool-group-toggle::after { width: 6px; height: 6px; border-right: 1.5px solid currentcolor; border-bottom: 1.5px solid currentcolor; content: ""; transform: rotate(45deg); transition: transform var(--duration-fast) var(--ease-standard); }
@@ -602,7 +605,8 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-tool-group-panel:not([hidden]) { max-height: min(44dvh, 340px); overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   .mobile-tool-group-panel .mobile-event-card { width: 100%; min-width: 0; margin: 0; overflow: visible; border: 0; border-radius: 0; background: transparent; }
   .mobile-tool-group-panel .mobile-event-toggle { grid-template-columns: 16px minmax(0, 1fr) auto 14px; min-height: 42px; padding: 6px 2px; gap: 5px; }
-  .mobile-tool-group-panel .mobile-event-toggle::before { display: grid; width: 16px; height: 20px; place-items: center; color: var(--color-text-muted); font: normal 14px/1 var(--font-family-mono); content: "◇"; }
+  .mobile-tool-group-panel .mobile-event-toggle::before { box-sizing: border-box; width: 7px; height: 7px; place-self: center; border: 1.25px solid var(--color-text-muted); color: var(--color-text-muted); content: ""; transform: rotate(45deg); }
+  .mobile-tool-group-panel [data-kind="edit"] .mobile-event-toggle::before, .mobile-tool-group-panel [data-kind="execute"] .mobile-event-toggle::before { display: grid; width: 16px; height: 20px; place-items: center; border: 0; font: normal 14px/20px var(--font-family-mono); transform: none; }
   .mobile-tool-group-panel [data-kind="edit"] .mobile-event-toggle::before { content: "✎"; }
   .mobile-tool-group-panel [data-kind="execute"] .mobile-event-toggle::before { content: "$"; }
   .mobile-tool-group-panel .mobile-event-toggle > span:first-child { display: block; }

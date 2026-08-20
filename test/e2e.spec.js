@@ -838,6 +838,26 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   streamedToolGroup.tools.find((tool) => tool.id === 'tool-shell').status = 'completed';
   await expect(conversation.locator('[data-event-id="tool-shell"] .mobile-event-status')).toHaveText('Done');
   await expect(conversation.locator('[data-event-id="tool-shell"] .mobile-event-status')).toBeVisible();
+  await expect.poll(() => conversation.locator('[data-event-id="tool-read-agents"] > .mobile-event-toggle').evaluate((toggle) => {
+    const icon = getComputedStyle(toggle, '::before');
+    const status = toggle.querySelector('.mobile-event-status').getBoundingClientRect();
+    const arrow = toggle.querySelector(':scope > i').getBoundingClientRect();
+    return {
+      iconWidth: icon.width,
+      iconHeight: icon.height,
+      iconPlaceSelf: icon.placeSelf,
+      statusHeight: Math.round(status.height),
+      arrowHeight: Math.round(arrow.height),
+      trailingCenterDelta: Math.abs((status.top + status.height / 2) - (arrow.top + arrow.height / 2)),
+    };
+  })).toEqual({
+    iconWidth: '7px',
+    iconHeight: '7px',
+    iconPlaceSelf: 'center',
+    statusHeight: 20,
+    arrowHeight: 20,
+    trailingCenterDelta: 0,
+  });
   await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
   await expect(conversation.getByText('Turn completed')).toHaveCount(0);
   await expect(conversation.getByText('Session recap')).toHaveCount(0);
