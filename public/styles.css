@@ -400,9 +400,9 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-markdown a { color: var(--color-accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--color-accent) 48%, transparent); text-underline-offset: 3px; }
   .mobile-markdown a:hover { text-decoration-color: currentColor; }
   .mobile-markdown code { font-family: var(--font-family-mono); }
-  .mobile-markdown :not(pre) > code { padding: 2px 5px; border: 1px solid var(--color-border-faint); border-radius: 5px; background: var(--color-surface-subtle); color: var(--color-syntax-built-in); font-size: .88em; overflow-wrap: anywhere; }
-  .mobile-file-reference { display: inline; padding: 2px 5px; border: 1px solid var(--color-border-faint); border-radius: 5px; background: var(--color-surface-subtle); color: var(--color-syntax-built-in); font: .88em/1.58 var(--font-family-mono); overflow-wrap: anywhere; cursor: pointer; }
-  .mobile-file-reference:hover, .mobile-file-reference:focus-visible { border-color: var(--color-border-strong); }
+  .mobile-markdown :not(pre) > code { padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--color-syntax-built-in); font-size: .88em; overflow-wrap: anywhere; }
+  .mobile-file-reference { display: inline; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--color-syntax-built-in); font: .88em/1.58 var(--font-family-mono); overflow-wrap: anywhere; cursor: pointer; }
+  .mobile-file-reference:hover, .mobile-file-reference:focus-visible { outline: 0; text-decoration: underline; text-underline-offset: 3px; }
   .mobile-markdown-code { min-width: 0; margin: 14px 0; overflow: hidden; border: 1px solid var(--color-border-strong); border-radius: 12px; background: var(--color-terminal-background); }
   .mobile-markdown-code-toolbar { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--color-border); color: var(--color-text-muted); font: 9px/1 var(--font-family-mono); text-transform: uppercase; }
   .mobile-markdown-copy { min-width: 54px; min-height: 30px; padding: 0 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--color-text-secondary); font: 9px/1 var(--font-family-mono); text-transform: none; }

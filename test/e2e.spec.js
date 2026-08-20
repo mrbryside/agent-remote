@@ -542,6 +542,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(codeBlocks.nth(1).locator('.hljs-title.function_')).toHaveText('greet');
   const inlineType = markdownMessage.locator('code.hljs', { hasText: 'class None implements Option' });
   await expect(inlineType).toBeVisible();
+  await expect(inlineType).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(inlineType).toHaveCSS('border-top-width', '0px');
+  await expect(inlineType).toHaveCSS('padding-left', '0px');
   await expect(inlineType.locator('.hljs-keyword')).toHaveText(['class', 'implements']);
   await expect(inlineType.locator('.hljs-title.class_')).toHaveText(['None', 'Option']);
   await expect(markdownMessage.getByRole('link', { name: 'safe link' })).toHaveAttribute('rel', 'noopener noreferrer');
@@ -550,6 +553,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(markdownMessage).toContainText('Unsafe image');
   expect(await page.evaluate(() => window.__markdownXss)).toBeUndefined();
   const fileReference = markdownMessage.getByRole('button', { name: 'Open public/app.js at line 1' });
+  await expect(fileReference).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(fileReference).toHaveCSS('border-top-width', '0px');
+  await expect(fileReference).toHaveCSS('padding-left', '0px');
   await expect(fileReference).toBeVisible();
   await fileReference.click();
   const fileSheet = conversation.locator('.mobile-file-sheet');
