@@ -218,11 +218,13 @@ trailing disclosure chevron; do not add a second text glyph for the same
 collapse action. Expanding a group reveals a borderless transcript of tool
 rows, while expanding a standalone tool opens the same single containing frame.
 Only a tool whose details are open gets that frame, avoiding nested cards. The
-group owns a bounded, max-height vertical scroll viewport. A Shell tool places
-`$ command` above its output inside that single frame, preserving whitespace
-and two-axis scrolling without separate Shell, location, and output sections.
-Edit results similarly render only the compact unified diff—with line numbers,
-green additions, red removals, colored add/remove counts, bounded context, and
+group owns a bounded, max-height vertical scroll viewport. Every generic Tool,
+including list and unknown future tools, uses the same `$ action target` line
+above its output inside that single frame; raw input, location, and output
+sections are never split into separate cards. Shell commands use that same
+surface while preserving whitespace and two-axis scrolling. Edit results
+similarly render only the compact unified diff—with line numbers, green
+additions, red removals, colored add/remove counts, bounded context, and
 independent two-axis scrolling.
 
 Tool groups, their child tools, standalone tools, and thoughts share one

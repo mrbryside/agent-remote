@@ -1319,6 +1319,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => toolPanel.evaluate((panel) => getComputedStyle(panel).overscrollBehaviorY)).toBe('auto');
   await expect.poll(() => messages.evaluate((panel) => getComputedStyle(panel).overscrollBehaviorY)).toBe('contain');
 
+  await conversation.getByRole('button', { name: /List Files/ }).click();
+  const listDetail = conversation.locator('[data-event-id="tool-list"] .mobile-tool-command');
+  await expect(listDetail.locator('.mobile-tool-command-line > i')).toHaveText('$');
+  await expect(listDetail.locator('.mobile-tool-command-line > code')).toHaveText('List Files src');
+  await expect(listDetail.locator('.mobile-tool-command-output')).toHaveText('Found files');
+  await expect(conversation.locator('[data-event-id="tool-list"] .mobile-event-detail')).toHaveCount(0);
+  await conversation.getByRole('button', { name: /Read package\.json/ }).click();
+  const genericReadDetail = conversation.locator('[data-event-id="tool-read-package"] .mobile-tool-command');
+  await expect(genericReadDetail.locator('.mobile-tool-command-line > code')).toHaveText('Read package.json');
+  await expect(genericReadDetail.locator('.mobile-tool-command-output')).toHaveText('Package loaded');
+  await expect(conversation.locator('[data-event-id="tool-read-package"] .mobile-event-detail')).toHaveCount(0);
+
   await shellPanel.scrollIntoViewIfNeeded();
   const nestedScrollStart = await page.evaluate(() => {
     const detail = document.querySelector('[data-event-id="tool-shell"] > .mobile-event-panel');

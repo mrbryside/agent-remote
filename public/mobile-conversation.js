@@ -1234,6 +1234,28 @@ export function createMobileConversationView({
     return section;
   }
 
+  function genericToolCommand(item) {
+    let input = item.input;
+    if (typeof input === 'string') {
+      try { input = JSON.parse(input); } catch { input = undefined; }
+    }
+    const inputTarget = input && typeof input === 'object' && !Array.isArray(input)
+      ? input.target_directory || input.target_file || input.file_path || input.path ||
+        input.query || input.pattern || input.url
+      : '';
+    const title = String(item.title || item.kind || item.name || 'Tool').trim();
+    const target = String(item.subject || inputTarget || item.locations?.[0] || '').trim();
+    if (!target || title.toLocaleLowerCase().includes(target.toLocaleLowerCase())) return title;
+    return `${title} ${target}`;
+  }
+
+  function genericToolNode(item) {
+    return commandNode({
+      command: genericToolCommand(item),
+      output: item.output || item.locations?.join('\n') || '',
+    });
+  }
+
   function planListNode(item) {
     const list = element('ol', 'mobile-plan-list');
     for (const entry of item.entries || []) {
@@ -1260,11 +1282,9 @@ export function createMobileConversationView({
         for (const [index, change] of diffs.entries()) panel.append(changeNode(change, index));
       } else {
         if (item.command) panel.append(commandNode(item));
-        else if (!item.file && !item.matches?.length) detail(panel, 'Input', item.input);
+        else if (!item.file && !item.matches?.length) panel.append(genericToolNode(item));
         if (item.file) panel.append(filePreviewNode(item.file, { streamId: `read:${item.id}` }));
         if (item.matches?.length) panel.append(searchMatchesNode(item.matches));
-        if (!item.command && !item.file && !item.matches?.length) detail(panel, 'Locations', item.locations?.join('\n'));
-        if (!item.command && !item.file && !item.matches?.length) detail(panel, 'Output', item.output);
       }
       for (const output of item.images || []) {
         const image = element('img', 'mobile-event-image');
