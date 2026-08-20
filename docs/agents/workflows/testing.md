@@ -18,7 +18,7 @@ Playwright runs serially because the tmux fixture, browser renderer, SQLite file
 - Configuration parsing: `test/config.test.js`
 - SQLite schema and migrations: `test/projects.test.js`
 - Session naming, command quoting, and CLI: `test/sessions.test.js`
-- HTTP/WebSocket/PTY/tmux behavior: `test/server.test.js`
+- HTTP/WebSocket/PTY/tmux behavior, including compact conversation token frames and watcher cleanup: `test/server.test.js`
 - Project/sidebar/terminal UX and responsive behavior: `test/e2e.spec.js`
 - Grok ACP transport ownership, timestamped persisted-turn reconciliation, real active-turn queue/steer/cancel ordering, all four mobile mode mappings, hidden Plan prompt control, and request/response extensions (leader socket, permissions, questions, and Plan Review): `test/grok-acp.test.js`
 - Provider-neutral timeline mapping, child-thread ownership, and interaction projection: `test/conversation-providers.test.js`
@@ -37,7 +37,9 @@ Tests that create tmux sessions, projects, remote stores, or child tunnels must 
 Before handing off cross-surface lifecycle or renderer changes, also exercise
 the running app through Codex's in-app browser at a phone viewport. Complete a
 real Grok turn, wait beyond one sidebar polling interval, and confirm the
-composer, native activity, and sidebar all settle together. For browser
+composer, native activity, and sidebar all settle together. Background and
+foreground the page once and confirm the conversation WebSocket reconnects from
+an authoritative snapshot without leaving Responding/Stop active. For browser
 ownership changes, open distinct URLs from two managed sessions, verify each
 session sees only its own tab list, then close one renderer and confirm the
 other remains usable. This manual check complements Playwright by using the

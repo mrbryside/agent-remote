@@ -2,7 +2,7 @@
 
 ## Process boundaries
 
-- `src/server.js` owns both loopback HTTP listeners, the HTTP API, terminal and renderer WebSockets, direct PTYs, static assets, and browser-renderer coordination. Local control defaults to `127.0.0.1:3000`; Remote gateway defaults to `127.0.0.1:3001`.
+- `src/server.js` owns both loopback HTTP listeners, the HTTP API, terminal, conversation, and renderer WebSockets, direct PTYs, static assets, and browser-renderer coordination. Local control defaults to `127.0.0.1:3000`; Remote gateway defaults to `127.0.0.1:3001`.
 - The local listener owns Remote administration (`/api/remote/*`). The remote listener is a pre-route authentication gate and returns `404` for those routes even for an authenticated device; it delegates the normal workspace, terminal, renderer, and DevTools surfaces only after device authentication.
 - `src/remote/` owns Remote persistence, macOS Keychain credentials, Cloudflare API/DNS ownership checks, tunnel child lifecycle, device authentication, and remote gateway policy. Read [Remote access](remote-access.md) before changing these boundaries.
 - `src-tauri/src/main.rs` is a thin macOS wrapper. It attaches to a compatible local backend or owns a spawned sidecar; it does not duplicate backend behavior or grant the webview privileged IPC.
@@ -51,6 +51,7 @@ terminal commands retain the bounded quiet-window reveal path.
 | Active selection, expanded projects, pane widths | browser storage |
 | Mounted terminal caches during one page lifetime | `public/app.js` runtime maps |
 | Agent message/tool/subagent history | provider-owned files, read through `src/conversations/` |
+| Live mobile token/lifecycle delivery | session-scoped `/conversation-ws`, reconciled by provider snapshots |
 | Managed Grok TUI/ACP coordination | leader socket derived from the configured SQLite path |
 | Browser renderer/tab state | keyed renderer in `src/server.js` |
 | Named-tunnel metadata and paired-device audit rows | SQLite via `src/remote/store.js` |

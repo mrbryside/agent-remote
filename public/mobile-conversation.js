@@ -82,7 +82,7 @@ export function createMobileConversationView({
   let refreshTimer;
   let foregroundResumeTimer;
   let streamWatchdogTimer;
-  let eventSource;
+  let streamSocket;
   let streamKey = '';
   let backgrounded = document.visibilityState === 'hidden';
   let renderedSignature = '';
@@ -578,17 +578,18 @@ export function createMobileConversationView({
   function closeStream() {
     clearTimeout(streamWatchdogTimer);
     streamWatchdogTimer = undefined;
-    eventSource?.close();
-    eventSource = undefined;
+    const socket = streamSocket;
+    streamSocket = undefined;
     streamKey = '';
+    if (socket?.readyState < WebSocket.CLOSING) socket.close(1000, 'Conversation view changed');
   }
 
-  function armStreamWatchdog(source) {
+  function armStreamWatchdog(socket) {
     clearTimeout(streamWatchdogTimer);
     streamWatchdogTimer = undefined;
-    if (!source || source !== eventSource || document.visibilityState === 'hidden') return;
+    if (!socket || socket !== streamSocket || document.visibilityState === 'hidden') return;
     streamWatchdogTimer = setTimeout(() => {
-      if (source !== eventSource || document.visibilityState === 'hidden') return;
+      if (socket !== streamSocket || document.visibilityState === 'hidden') return;
       state.textContent = 'Reconnecting';
       state.dataset.state = 'working';
       closeStream();
@@ -617,9 +618,9 @@ export function createMobileConversationView({
       backgrounded = false;
       closeStream();
       renderedSignature = '';
-      // iOS can suspend an EventSource without delivering error/close. Read
-      // the authoritative snapshot first to recover every missed token and
-      // lifecycle boundary; refresh() then creates a brand-new stream.
+      // iOS can suspend a page without delivering a websocket close. Read the
+      // authoritative snapshot first to recover every missed token and turn
+      // boundary; refresh() then creates a brand-new socket.
       void refresh();
     }, 0);
   }
@@ -1102,59 +1103,68 @@ export function createMobileConversationView({
   function startStream() {
     if (document.visibilityState === 'hidden' || !media.matches || !sessionName || !threadId || !available) return;
     const nextKey = `${sessionName}:${threadId}`;
-    if (eventSource && streamKey === nextKey) return;
+    if (streamSocket && streamKey === nextKey && streamSocket.readyState < WebSocket.CLOSING) return;
     closeStream();
     streamKey = nextKey;
-    const url = apiUrl(`/api/conversations/${encodeURIComponent(sessionName)}/stream`);
+    const url = apiUrl('/conversation-ws');
+    url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.searchParams.set('session', sessionName);
     url.searchParams.set('thread', threadId);
-    const source = new EventSource(url);
-    eventSource = source;
-    armStreamWatchdog(source);
-    source.addEventListener('conversation', (event) => {
-      if (source !== eventSource) return;
-      armStreamWatchdog(source);
+    const socket = new WebSocket(url);
+    streamSocket = socket;
+    armStreamWatchdog(socket);
+    socket.addEventListener('message', (event) => {
+      if (socket !== streamSocket) return;
+      armStreamWatchdog(socket);
       try {
         const payload = JSON.parse(event.data);
-        const payloadThreadId = payload.conversation?.thread?.id || payload.stream?.threadId;
-        if (payloadThreadId !== threadId) return;
-        if (payload.conversation) providerId = payload.conversation.provider.id;
-        if (!applyStreamTextDelta(payload.conversation, payload.stream)) {
-          if (payload.conversation) render(payload.conversation, { animate: true, fromStream: true });
-          else schedule(0);
+        if (payload.type === 'heartbeat') return;
+        if (payload.type === 'conversation') {
+          const payloadThreadId = payload.conversation?.thread?.id || payload.stream?.threadId;
+          if (payloadThreadId !== threadId) return;
+          if (payload.conversation) providerId = payload.conversation.provider.id;
+          if (!applyStreamTextDelta(payload.conversation, payload.stream)) {
+            if (payload.conversation) render(payload.conversation, { animate: true, fromStream: true });
+            else schedule(0);
+          }
+          return;
+        }
+        if (payload?.type === 'control' && payload.action === 'open-graphics' &&
+            Array.isArray(payload.argv) && payload.argv.length > 0 && payload.argv.length <= 100 &&
+            payload.argv.every((argument) => typeof argument === 'string' && argument.length <= 4096)) {
+          browserAvailable = true;
+          renderSubagentPill(rootConversation || { items: [] });
+          onBrowserOpen(sessionName, payload.argv);
+          return;
+        }
+        if (payload?.type === 'error') {
+          state.textContent = payload.error || 'Stream failed';
+          state.dataset.state = 'error';
         }
       } catch {
         schedule();
       }
     });
-    source.addEventListener('control', (event) => {
-      if (source !== eventSource) return;
-      armStreamWatchdog(source);
-      try {
-        const payload = JSON.parse(event.data);
-        if (payload?.type !== 'control' || payload.action !== 'open-graphics' ||
-            !Array.isArray(payload.argv) || payload.argv.length === 0 || payload.argv.length > 100 ||
-            payload.argv.some((argument) => typeof argument !== 'string' || argument.length > 4096)) return;
-        browserAvailable = true;
-        renderSubagentPill(rootConversation || { items: [] });
-        onBrowserOpen(sessionName, payload.argv);
-      } catch {
-        // Ignore malformed control events without interrupting conversation streaming.
-      }
-    });
-    source.addEventListener('heartbeat', () => {
-      if (source === eventSource) armStreamWatchdog(source);
-    });
-    source.addEventListener('open', () => {
-      if (source !== eventSource) return;
+    socket.addEventListener('open', () => {
+      if (socket !== streamSocket) return;
       clearTimeout(refreshTimer);
-      armStreamWatchdog(source);
+      armStreamWatchdog(socket);
     });
-    source.addEventListener('error', () => {
-      if (source !== eventSource) return;
+    socket.addEventListener('close', () => {
+      if (socket !== streamSocket) return;
       state.textContent = 'Reconnecting';
       state.dataset.state = 'working';
-      closeStream();
-      schedule(150);
+      streamSocket = undefined;
+      streamKey = '';
+      clearTimeout(streamWatchdogTimer);
+      streamWatchdogTimer = undefined;
+      renderedSignature = '';
+      void refresh();
+    });
+    socket.addEventListener('error', () => {
+      if (socket !== streamSocket) return;
+      state.textContent = 'Reconnecting';
+      state.dataset.state = 'working';
     });
   }
 
@@ -2802,11 +2812,13 @@ export function createMobileConversationView({
       } else {
         if (pendingMessage?.text === pendingText) pendingMessage.status = 'accepted';
         schedulePendingAcceptanceFailure(pendingText);
-        // An idle EventSource can be silently suspended by iOS without an
-        // error event. Replacing it after prompt acceptance gives the new turn
-        // a fresh transport. The snapshot fetched below also recovers chunks
-        // that Grok emitted between the POST and this reconnect.
+        // Replace the previous turn socket after prompt acceptance. The
+        // snapshot fetched below recovers chunks Grok emitted between the POST
+        // and the new websocket becoming ready.
         closeStream();
+        // Open the new turn transport immediately; do not make first-token
+        // delivery wait for the recovery snapshot HTTP round trip.
+        startStream();
       }
       state.textContent = 'Queued';
       state.dataset.state = 'working';

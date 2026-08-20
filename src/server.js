@@ -2216,6 +2216,11 @@ export function createTerminalServer(options = {}) {
     remoteGateway.handleRequest(request, response, handleWorkspaceRequest));
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  const conversationWss = new WebSocketServer({
+    noServer: true,
+    maxPayload: 64 * 1024,
+    perMessageDeflate: false,
+  });
   const devtoolsWss = new WebSocketServer({
     noServer: true,
     maxPayload: 64 * 1024 * 1024,
@@ -2300,6 +2305,26 @@ export function createTerminalServer(options = {}) {
       devtoolsWss.handleUpgrade(request, socket, head, (ws) => bridgeDevtoolsSocket(ws, renderer, targetId, request));
       return;
     }
+    if (url.pathname === '/conversation-ws') {
+      if (surface === 'local' && !originAllowed(request, config)) {
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      if (surface === 'local' && !authorized(request, config)) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      if (conversationStreams.size >= config.maxConnections) {
+        socket.write('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+      conversationWss.handleUpgrade(request, socket, head, (ws) =>
+        conversationWss.emit('connection', ws, request));
+      return;
+    }
     if (url.pathname !== '/ws') {
       socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
       socket.destroy();
@@ -2326,6 +2351,94 @@ export function createTerminalServer(options = {}) {
   server.on('upgrade', (request, socket, head) => handleWorkspaceUpgrade(request, socket, head, 'local'));
   remoteServer.on('upgrade', (request, socket, head) =>
     remoteGateway.handleUpgrade(request, socket, head, handleWorkspaceUpgrade));
+
+  conversationWss.on('connection', async (socket, request) => {
+    const requestUrl = new URL(request.url, 'http://localhost');
+    const name = requestUrl.searchParams.get('session');
+    const threadId = requestUrl.searchParams.get('thread') || undefined;
+    if (!name || name.length > 64 || !threadId || threadId.length > 128) {
+      socket.close(1008, 'Invalid conversation stream');
+      return;
+    }
+    if (request.remoteDeviceId) {
+      let sockets = remoteDeviceSockets.get(request.remoteDeviceId);
+      if (!sockets) {
+        sockets = new Set();
+        remoteDeviceSockets.set(request.remoteDeviceId, sockets);
+      }
+      sockets.add(socket);
+      const removeRemoteSocket = () => {
+        sockets.delete(socket);
+        if (sockets.size === 0) remoteDeviceSockets.delete(request.remoteDeviceId);
+      };
+      socket.once('close', removeRemoteSocket);
+      socket.once('error', removeRemoteSocket);
+      remoteGateway.trackSocket(socket, request);
+    }
+
+    let stopWatching = async () => {};
+    let closed = false;
+    let streamedMessageId;
+    const send = (message) => {
+      if (!closed && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+    };
+    const close = async (force = false) => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      conversationStreams.delete(close);
+      await stopWatching();
+      if (force && socket.readyState < WebSocket.CLOSING) socket.terminate();
+    };
+    close.sessionName = name;
+    close.sendControl = send;
+    const heartbeat = setInterval(() => send({ type: 'heartbeat', at: Date.now() }), 3_000);
+    heartbeat.unref?.();
+    conversationStreams.add(close);
+    socket.once('close', () => void close());
+    socket.once('error', () => void close());
+
+    try {
+      const session = await conversationSession(name);
+      if (!session) {
+        socket.close(1008, 'Managed session not found');
+        await close();
+        return;
+      }
+      const initial = await conversationRegistry.read(session, { threadId });
+      if (!initial) {
+        socket.close(1008, 'Conversation unavailable');
+        await close();
+        return;
+      }
+      send({ type: 'conversation', conversation: initial });
+      stopWatching = await conversationRegistry.watch(session, { threadId }, (event) => {
+        let outgoing = event;
+        if (event.stream?.kind === 'agent_message_chunk') {
+          const message = [...(event.conversation?.items || [])].reverse().find(
+            (item) => item.type === 'message' && item.role === 'assistant',
+          );
+          const stream = {
+            ...event.stream,
+            threadId: event.conversation?.thread?.id,
+            messageId: message?.id,
+          };
+          outgoing = message?.id && streamedMessageId === message.id
+            ? { stream }
+            : { ...event, stream };
+          streamedMessageId = message?.id;
+        } else {
+          streamedMessageId = undefined;
+        }
+        send({ type: 'conversation', ...outgoing });
+      });
+      if (closed) await stopWatching();
+    } catch (error) {
+      send({ type: 'error', error: error.message || 'Conversation stream failed' });
+      if (socket.readyState < WebSocket.CLOSING) socket.close(1011, 'Conversation stream failed');
+      await close();
+    }
+  });
 
   wss.on('connection', async (socket, request) => {
     clients.add(socket);
@@ -2619,11 +2732,12 @@ export function createTerminalServer(options = {}) {
       for (const client of clients) client.terminate();
       for (const client of devtoolsClients) client.terminate();
       remoteGateway.close();
-      await Promise.all([...conversationStreams].map((close) => close()));
+      await Promise.all([...conversationStreams].map((close) => close(true)));
       await conversationRegistry.close?.();
       await conversationAttachments.close?.();
       await Promise.all([
         new Promise((resolve) => wss.close(resolve)),
+        new Promise((resolve) => conversationWss.close(resolve)),
         new Promise((resolve) => devtoolsWss.close(resolve)),
       ]);
       if (server.listening) await new Promise((resolve) => server.close(resolve));

@@ -517,6 +517,71 @@ test('streams provider-neutral conversation updates and releases its watcher on 
   });
 });
 
+test('streams conversation updates as websocket messages and releases its watcher on disconnect', async () => {
+  let stopped = false;
+  const conversation = {
+    provider: { id: 'fixture', label: 'Fixture' },
+    thread: { id: 'thread-1', title: 'Streaming', status: 'working' },
+    items: [{ id: 'a-1', type: 'message', role: 'assistant', text: 'live chunk' }],
+    children: [], parent: null, rootThreadId: 'thread-1',
+    capabilities: { send: true, children: false },
+  };
+  const conversationRegistry = {
+    read: async () => conversation,
+    watch: async (_session, _options, listener) => {
+      listener({ conversation, stream: { kind: 'agent_message_chunk', delta: 'live chunk' } });
+      conversation.items[0].text += ' two';
+      listener({ conversation, stream: { kind: 'agent_message_chunk', delta: ' two' } });
+      return async () => { stopped = true; };
+    },
+    encodeSessionInput: async (_session, text) => `${text}\r`,
+    close: async () => {},
+  };
+  await withServer({
+    conversationRegistry,
+    listWorkspaceSessions: async () => [{
+      name: 'ar-mobile', label: 'Mobile', cwd: '/tmp/project', command: 'fixture', managed: true,
+    }],
+    managedSessionProcessId: async () => 4321,
+  }, async (url) => {
+    const messages = [];
+    const socket = new WebSocket(
+      url.replace('http:', 'ws:') + '/conversation-ws?session=ar-mobile&thread=thread-1',
+    );
+    socket.on('message', (raw) => messages.push(JSON.parse(raw.toString())));
+    await new Promise((resolve, reject) => {
+      socket.once('open', resolve);
+      socket.once('error', reject);
+    });
+    await waitForCondition(
+      () => messages.some((message) => message.type === 'conversation' && message.stream?.delta === ' two'),
+      'expected token deltas over the conversation websocket',
+    );
+    const conversationMessages = messages.filter((message) => message.type === 'conversation');
+    assert.equal(conversationMessages[0].conversation.thread.id, 'thread-1');
+    assert.match(conversationMessages.find((message) => message.stream?.delta === 'live chunk').conversation.items[0].text, /live chunk/);
+    assert.equal(conversationMessages.find((message) => message.stream?.delta === ' two').conversation, undefined);
+    assert.equal(conversationMessages.find((message) => message.stream?.delta === ' two').stream.messageId, 'a-1');
+
+    const split = await fetch(`${url}/api/control/split`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        cwd: '/tmp/project',
+        argv: ['terminal-browser', 'open', 'https://example.com'],
+      }),
+    });
+    assert.equal(split.status, 202);
+    await waitForCondition(
+      () => messages.some((message) => message.type === 'control' && message.action === 'open-graphics'),
+      'expected control delivery over the conversation websocket',
+    );
+
+    socket.close();
+    await waitForCondition(() => stopped, 'expected websocket watcher cleanup');
+  });
+});
+
 test('remote gateway listens separately while preserving the local url compatibility field', async () => {
   await withServer({ remotePort: 0, remotePublicUrl: 'https://remote.example.test' }, async (url, app, addresses) => {
     assert.equal(addresses.url, url);

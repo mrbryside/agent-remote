@@ -214,25 +214,65 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       }
       return nativeScrollTo.apply(this, args);
     };
-    window.EventSource = class MockEventSource {
+    const NativeWebSocket = window.WebSocket;
+    window.WebSocket = class MockConversationWebSocket {
+      static CONNECTING = NativeWebSocket.CONNECTING;
+      static OPEN = NativeWebSocket.OPEN;
+      static CLOSING = NativeWebSocket.CLOSING;
+      static CLOSED = NativeWebSocket.CLOSED;
+
       constructor(url) {
-        this.url = url;
+        if (!String(url).includes('/conversation-ws')) return new NativeWebSocket(url);
+        this.url = String(url);
         this.listeners = new Map();
+        this.readyState = NativeWebSocket.CONNECTING;
         window.__conversationStreams.push(this);
         this.heartbeat = setInterval(() => this.emit('heartbeat', {}), 1_000);
-        queueMicrotask(() => this.emit('open', {}));
+        queueMicrotask(() => {
+          if (this.closed) return;
+          this.readyState = NativeWebSocket.OPEN;
+          this.dispatch('open', {});
+        });
       }
       addEventListener(type, listener) {
         const listeners = this.listeners.get(type) || [];
         listeners.push(listener);
         this.listeners.set(type, listeners);
       }
-      emit(type, event) {
+      dispatch(type, event) {
         for (const listener of this.listeners.get(type) || []) listener(event);
       }
-      close() {
+      emit(type, event) {
+        if (type === 'conversation') {
+          this.dispatch('message', {
+            data: JSON.stringify({ type: 'conversation', ...JSON.parse(event.data) }),
+          });
+          return;
+        }
+        if (type === 'control') {
+          this.dispatch('message', { data: event.data });
+          return;
+        }
+        if (type === 'heartbeat') {
+          this.dispatch('message', { data: JSON.stringify({ type: 'heartbeat', at: Date.now() }) });
+          return;
+        }
+        if (type === 'error') {
+          this.dispatch('error', event);
+          this.readyState = NativeWebSocket.CLOSED;
+          this.closed = true;
+          clearInterval(this.heartbeat);
+          this.dispatch('close', { code: 1006, reason: '' });
+          return;
+        }
+        this.dispatch(type, event);
+      }
+      close(code = 1000, reason = '') {
+        if (this.closed) return;
         this.closed = true;
+        this.readyState = NativeWebSocket.CLOSED;
         clearInterval(this.heartbeat);
+        this.dispatch('close', { code, reason });
       }
     };
   });
@@ -1008,6 +1048,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   })).toEqual({ clearsComposer: true, staysInHistory: true });
   await expect(conversation.locator('.mobile-subagent-card')).toHaveCount(0);
   await page.evaluate(() => {
+    const ConversationWebSocket = window.WebSocket;
     class MockGraphicsSocket extends EventTarget {
       static CONNECTING = 0;
       static OPEN = 1;
@@ -1024,7 +1065,17 @@ test('uses native mobile conversation history, input, and subagent navigation', 
         this.dispatchEvent(new CloseEvent('close'));
       }
     }
-    window.WebSocket = MockGraphicsSocket;
+    window.WebSocket = class MockRoutedSocket {
+      static CONNECTING = MockGraphicsSocket.CONNECTING;
+      static OPEN = MockGraphicsSocket.OPEN;
+      static CLOSING = MockGraphicsSocket.CLOSING;
+      static CLOSED = MockGraphicsSocket.CLOSED;
+      constructor(url) {
+        return String(url).includes('/conversation-ws')
+          ? new ConversationWebSocket(url)
+          : new MockGraphicsSocket(url);
+      }
+    };
     window.__conversationStreams.at(-1).emit('control', {
       data: JSON.stringify({
         type: 'control', action: 'open-graphics',
