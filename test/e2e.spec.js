@@ -465,6 +465,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const messages = conversation.locator('#mobile-conversation-messages');
   await expect(conversation).toBeVisible();
   await expect(page.locator('.topbar')).toBeHidden();
+  await expect(page.locator('#sidebar-edge-trigger')).toBeHidden();
+  await page.locator('#sidebar-edge-trigger').dispatchEvent('pointerenter');
+  await expect(page.locator('.workspace')).not.toHaveAttribute('data-sidebar-peek', 'true');
   await expect.poll(() => conversation.locator('#mobile-conversation-menu').evaluate((button) => ({
     border: getComputedStyle(button).borderTopStyle,
     radius: getComputedStyle(button).borderRadius,

@@ -1016,7 +1016,10 @@ function setSidebarCollapsed(collapsed, { persist = true } = {}) {
   delete workspace.dataset.sidebarPeek;
   workspace.dataset.sidebar = collapsed ? 'collapsed' : 'expanded';
   toggleSidebarButton.setAttribute('aria-expanded', String(!collapsed));
-  sidebarEdgeTrigger.hidden = !collapsed;
+  // Compact/mobile navigation is explicit: the menu button opens the drawer.
+  // Keeping an invisible hover strip here steals edge taps and makes the
+  // sidebar appear accidentally on hybrid/fine-pointer mobile viewports.
+  sidebarEdgeTrigger.hidden = !collapsed || compactSidebarMedia.matches;
   openSidebarButton.hidden = !collapsed;
   openSidebarButton.setAttribute('aria-expanded', String(!collapsed));
   if (persist) localStorage.setItem(SIDEBAR_STORAGE_KEY, String(collapsed));
@@ -1035,7 +1038,8 @@ function syncSidebarForViewport() {
 
 function showSidebarPeek() {
   clearTimeout(sidebarPeekCloseTimer);
-  if (workspace.dataset.sidebar !== 'collapsed' || !matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+  if (compactSidebarMedia.matches || workspace.dataset.sidebar !== 'collapsed' ||
+      !matchMedia('(hover: hover) and (pointer: fine)').matches) return;
   workspace.dataset.sidebarPeek = 'true';
 }
 
