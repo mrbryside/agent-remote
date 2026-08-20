@@ -465,6 +465,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const messages = conversation.locator('#mobile-conversation-messages');
   await expect(conversation).toBeVisible();
   await expect(page.locator('.topbar')).toBeHidden();
+  await expect.poll(() => conversation.locator('#mobile-conversation-menu').evaluate((button) => ({
+    border: getComputedStyle(button).borderTopStyle,
+    radius: getComputedStyle(button).borderRadius,
+    background: getComputedStyle(button).backgroundColor,
+  }))).toEqual({ border: 'none', radius: '0px', background: 'rgba(0, 0, 0, 0)' });
   const mobileStageBox = await page.locator('#terminal-stage').boundingBox();
   const mobileShellBox = await page.locator('.terminal-shell').boundingBox();
   expect(mobileStageBox.y).toBe(mobileShellBox.y);
