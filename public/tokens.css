@@ -51,19 +51,19 @@
   --color-accent: #64beac;
   --color-accent-strong: #64beac;
   --color-heading: #e8a465;
-  --color-success: #879a92;
-  --color-danger: #c59da3;
-  --color-danger-strong: #d2a0a7;
-  --color-danger-surface: #342528;
-  --color-danger-border: #593a3f;
+  --color-success: #72b5a7;
+  --color-danger: #c9878e;
+  --color-danger-strong: #db8d94;
+  --color-danger-surface: #302326;
+  --color-danger-border: #50383d;
   --color-status-stopped: var(--color-text-muted);
-  --color-status-connecting: #f2c75c;
-  --color-status-online: #65dc8c;
-  --color-status-error: #ff7480;
-  --color-diff-add: #58e187;
-  --color-diff-add-surface: #173822;
-  --color-diff-remove: #ff6f7c;
-  --color-diff-remove-surface: #3d1d24;
+  --color-status-connecting: #e8a465;
+  --color-status-online: #6fc7b4;
+  --color-status-error: #db858b;
+  --color-diff-add: #70c8a2;
+  --color-diff-add-surface: #193029;
+  --color-diff-remove: #dc7f86;
+  --color-diff-remove-surface: #342327;
 
   /* Terminal palette */
   --color-terminal-background: #141416;

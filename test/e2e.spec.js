@@ -1594,10 +1594,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       removeToken: tokenColor('--color-diff-remove'),
     };
   })).toEqual(expect.objectContaining({
-    addColor: 'rgb(88, 225, 135)',
-    removeColor: 'rgb(255, 111, 124)',
-    addToken: 'rgb(88, 225, 135)',
-    removeToken: 'rgb(255, 111, 124)',
+    addColor: 'rgb(112, 200, 162)',
+    removeColor: 'rgb(220, 127, 134)',
+    addToken: 'rgb(112, 200, 162)',
+    removeToken: 'rgb(220, 127, 134)',
   }));
   await conversation.locator('[data-event-id="tool-search-app"] > .mobile-event-toggle').click();
   const searchMatch = conversation.locator('.mobile-event-matches button');
@@ -2409,7 +2409,7 @@ test('organizes chats by project, titles the first prompt, and clears projects i
   await expect(firstSessionRow).toHaveCSS('background-color', 'rgb(32, 32, 35)');
   await firstSessionClose.hover();
   await expect(firstSessionClose).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  await expect(firstSessionClose).toHaveCSS('color', 'rgb(197, 157, 163)');
+  await expect(firstSessionClose).toHaveCSS('color', 'rgb(201, 135, 142)');
   expect((await firstChatList.boundingBox()).height).toBeGreaterThan(25);
   await expect(firstActions).toHaveCSS('opacity', '0');
   await firstProject.locator('.project-header').hover();

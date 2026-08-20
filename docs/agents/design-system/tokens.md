@@ -49,9 +49,11 @@ same Highlight.js grammar and palette to assistant code fences, file previews,
 edit diffs, shell commands, and recognizable inline code. Inline file references
 use the syntax accent even when they become preview buttons. The palette is
 intentionally built from muted sea-green tones, while `--color-heading` gives
-Markdown headings and file-oriented headers one restrained warm accent. Reserve
-the vivid `--color-diff-add`, `--color-diff-remove`, and `--color-status-*`
-families for meaningful state. Extend language aliases in `public/syntax.js`,
+Markdown headings and file-oriented headers one restrained warm accent. Keep
+the more saturated `--color-diff-add`, `--color-diff-remove`, and
+`--color-status-*` families theme-cohesive and reserve them for meaningful
+state: teal-green for success/additions, warm amber for activity, and muted
+coral for errors/removals. Extend language aliases in `public/syntax.js`,
 keep syntax markup separate from diff add/remove backgrounds, and do not add
 per-language raw colors in component CSS.
 
