@@ -767,6 +767,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await page.locator('#graphics-mobile-agents').click();
   await expect(page.locator('#graphics-split')).toBeHidden();
   await expect(conversation.locator('.mobile-subagent-sheet')).toBeVisible();
+  await expect.poll(() => conversation.locator('.mobile-subagent-sheet-panel').evaluate((panel) => {
+    const box = panel.getBoundingClientRect();
+    const keyframes = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules])
+      .find((rule) => rule.type === CSSRule.KEYFRAMES_RULE && rule.name === 'mobile-sheet-in');
+    const firstFrame = keyframes && [...keyframes.cssRules].find((rule) =>
+      rule.keyText === 'from' || rule.keyText === '0%');
+    return {
+      height: Math.round(box.height),
+      bottom: Math.round(innerHeight - box.bottom),
+      slidesFromBelow: Boolean(firstFrame?.style.transform && firstFrame.style.transform !== 'none'),
+    };
+  })).toEqual({ height: 591, bottom: 0, slidesFromBelow: true });
   await conversation.locator('.mobile-subagent-sheet-browser').click();
   await expect(conversation.locator('.mobile-subagent-sheet')).toBeHidden();
   await expect(page.locator('#graphics-split')).toBeVisible();
@@ -1332,6 +1344,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(sheet).toBeHidden();
   await conversation.locator('.mobile-subagent-pill').click();
   const handle = sheet.getByRole('button', { name: 'Drag down to close subagents' });
+  await handle.evaluate((node) => Promise.all(node.closest('.mobile-subagent-sheet-panel')
+    .getAnimations().map((animation) => animation.finished)));
   const box = await handle.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();

@@ -540,15 +540,26 @@ function timeline(updates) {
         if (taskId) bindSubagent(subagent, taskId);
         const result = update.rawOutput?.Result ?? update.rawOutput?.result;
         if (result?.output) subagent.output = boundedText(result.output);
+        let hasLifecycleResult = false;
         if (result?.status) {
+          hasLifecycleResult = true;
           subagent.status = normalizedStatus(result.status, subagent.status);
           subagent.phase = subagent.status === 'completed' ? 'done'
             : subagent.status === 'failed' || subagent.status === 'cancelled' ? subagent.status : 'running';
         }
         if (typeof update.status === 'string') {
-          subagent.status = normalizedStatus(update.status, subagent.status);
-          subagent.phase = subagent.status === 'completed' ? 'done'
-            : subagent.status === 'failed' || subagent.status === 'cancelled' ? subagent.status : subagent.phase;
+          const toolStatus = normalizedStatus(update.status, subagent.status);
+          if (toolStatus === 'failed' || toolStatus === 'cancelled') {
+            subagent.status = toolStatus;
+            subagent.phase = toolStatus;
+          } else if (!hasLifecycleResult && isSpawn && toolStatus === 'completed' &&
+              !['completed', 'failed', 'cancelled'].includes(subagent.status)) {
+            // Completion here means the spawn command returned successfully;
+            // the background child is only finished after subagent_finished
+            // or a TaskOutput result reports a terminal lifecycle state.
+            subagent.status = 'working';
+            subagent.phase = subagent.threadId ? 'running' : 'calling';
+          }
         }
         if (subagent.phase === 'running' || ['completed', 'failed', 'cancelled'].includes(subagent.status)) {
           resolvePermissionFromGrok(permissions.get(String(subagent.permissionId)));
@@ -1008,12 +1019,15 @@ export function createGrokConversationProvider({
   }
 
   async function readConversation(handle, { threadId = handle.rootThreadId } = {}) {
-    const relationship = await graph(handle.cwd, handle.rootThreadId);
-    const selected = relationship.threads.get(threadId);
+    const isRoot = threadId === handle.rootThreadId;
+    const relationship = isRoot ? undefined : await graph(handle.cwd, handle.rootThreadId);
+    const selected = isRoot
+      ? await readThread(handle.cwd, handle.rootThreadId, { includeControls: true })
+      : relationship.threads.get(threadId);
     if (!selected) throw new Error('Thread is not part of this conversation');
-    const parentId = relationship.parents.get(threadId);
+    const parentId = relationship?.parents.get(threadId);
     const children = selected.children.map((child) => {
-      const details = relationship.threads.get(child.threadId)?.thread;
+      const details = relationship?.threads.get(child.threadId)?.thread;
       return {
         id: child.threadId,
         title: details?.title || child.title,
@@ -1037,7 +1051,7 @@ export function createGrokConversationProvider({
       ...(threadId === handle.rootThreadId ? { queue: selected.queue || [] } : {}),
       ...(threadId === handle.rootThreadId && selected.context ? { context: selected.context } : {}),
       activity: selected.activity,
-      parent: parentId ? relationship.threads.get(parentId)?.thread ?? null : null,
+      parent: parentId ? relationship?.threads.get(parentId)?.thread ?? null : null,
       rootThreadId: handle.rootThreadId,
       capabilities: { send: threadId === handle.rootThreadId, children: children.length > 0 },
     };
@@ -1075,9 +1089,8 @@ export function createGrokConversationProvider({
           rerun = false;
           const expectedRevision = revision;
           try {
-            const relationship = await graph(handle.cwd, handle.rootThreadId);
-            arm(relationship.threads.keys());
             const conversation = await readConversation(handle, options);
+            arm([handle.rootThreadId, conversation.thread.id]);
             if (stopped) return;
             // Graph reads include child sessions and filesystem signals. If
             // an ACP update arrives while that work is in flight, discard the
@@ -1104,8 +1117,7 @@ export function createGrokConversationProvider({
       }
     };
 
-    const relationship = await graph(handle.cwd, handle.rootThreadId);
-    arm(relationship.threads.keys());
+    arm([handle.rootThreadId, options?.threadId].filter(Boolean));
     await publish();
     return async () => {
       stopped = true;

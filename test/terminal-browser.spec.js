@@ -454,8 +454,20 @@ test('agent terminal-browser command opens a rendered web split on the right', a
     await expect(page.locator('#graphics-sheet-backdrop')).toBeVisible();
     await expect.poll(async () => {
       const box = await mobileSheet.boundingBox();
-      return box && Math.abs(box.y + box.height - 844) < 2 && box.height >= 320 && box.height < 560;
-    }).toBe(true);
+      if (!box) return undefined;
+      const animation = await mobileSheet.evaluate((sheet) => {
+        const keyframes = [...document.styleSheets].flatMap((styleSheet) => [...styleSheet.cssRules])
+          .find((rule) => rule.type === CSSRule.KEYFRAMES_RULE && rule.name === 'mobile-sheet-in');
+        const firstFrame = keyframes && [...keyframes.cssRules].find((rule) =>
+          rule.keyText === 'from' || rule.keyText === '0%');
+        return Boolean(firstFrame?.style.transform && firstFrame.style.transform !== 'none');
+      });
+      return {
+        height: Math.round(box.height),
+        bottom: Math.round(844 - box.y - box.height),
+        slidesFromBelow: animation,
+      };
+    }).toEqual({ height: 591, bottom: 0, slidesFromBelow: true });
     const handle = await page.locator('#graphics-sheet-handle').boundingBox();
     await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
     await page.mouse.down();

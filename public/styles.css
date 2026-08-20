@@ -334,7 +334,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .empty-state, .session-loading { padding: 18px; }
   .graphics-sheet-backdrop { position: absolute; z-index: 34; inset: 0; display: block; border: 0; background: color-mix(in srgb, #000 48%, transparent); animation: mobile-backdrop-in var(--duration-normal) var(--ease-out); }
   .graphics-sheet-backdrop[hidden] { display: none; }
-  .graphics-split { --graphics-sheet-drag: 0px; position: absolute; z-index: 35; inset: auto 0 0; width: 100%; min-width: 0; max-width: none; height: min(58dvh, 540px); min-height: 320px; flex-basis: auto; transform: translateY(var(--graphics-sheet-drag)); border: 1px solid var(--color-border-strong); border-bottom: 0; border-radius: 20px 20px 0 0; box-shadow: 0 -12px 38px color-mix(in srgb, #000 28%, transparent); animation: mobile-sheet-in var(--duration-slow) var(--ease-spring); transition: transform var(--duration-fast) var(--ease-standard); }
+  .graphics-split { --graphics-sheet-drag: 0px; position: absolute; z-index: 35; inset: auto 0 0; width: 100%; min-width: 0; max-width: none; height: min(70dvh, 700px); min-height: 320px; flex-basis: auto; transform: translateY(var(--graphics-sheet-drag)); border: 1px solid var(--color-border-strong); border-bottom: 0; border-radius: 20px 20px 0 0; box-shadow: 0 -12px 38px color-mix(in srgb, #000 28%, transparent); animation: mobile-sheet-in var(--duration-slow) var(--ease-spring); transition: transform var(--duration-fast) var(--ease-standard); }
   .graphics-split[data-dragging="true"] { animation: none; transition: none; }
   .graphics-sheet-handle { display: block; flex: 0 0 28px; width: 100%; min-height: 28px; padding: 10px; border: 0; background: transparent; cursor: grab; touch-action: none; }
   .graphics-sheet-handle::after { content: ''; display: block; width: 38px; height: 4px; margin: auto; border-radius: 999px; background: var(--color-border-strong); }
@@ -424,7 +424,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-subagent-pill small { min-width: 18px; padding-left: 8px; border-left: 1px solid var(--color-border); color: var(--color-text-muted); font: 10px/1 var(--font-family-mono); }
   .mobile-subagent-sheet { position: absolute; z-index: 12; inset: 0; display: flex; align-items: end; background: color-mix(in srgb, #000 48%, transparent); animation: mobile-backdrop-in var(--duration-normal) var(--ease-out); }
   .mobile-subagent-sheet[hidden] { display: none; }
-  .mobile-subagent-sheet-panel { --mobile-sheet-drag: 0px; display: grid; grid-template-rows: auto auto minmax(0, 1fr); width: 100%; height: min(55dvh, 500px); min-height: 320px; transform: translateY(var(--mobile-sheet-drag)); border: 1px solid var(--color-border-strong); border-bottom: 0; border-radius: 20px 20px 0 0; background: var(--color-surface-raised); box-shadow: 0 -12px 38px color-mix(in srgb, #000 28%, transparent); animation: mobile-sheet-in var(--duration-slow) var(--ease-spring); transition: transform var(--duration-fast) var(--ease-standard); overflow: hidden; }
+  .mobile-subagent-sheet-panel { --mobile-sheet-drag: 0px; display: grid; grid-template-rows: auto auto minmax(0, 1fr); width: 100%; height: min(70dvh, 700px); min-height: 320px; transform: translateY(var(--mobile-sheet-drag)); border: 1px solid var(--color-border-strong); border-bottom: 0; border-radius: 20px 20px 0 0; background: var(--color-surface-raised); box-shadow: 0 -12px 38px color-mix(in srgb, #000 28%, transparent); animation: mobile-sheet-in var(--duration-slow) var(--ease-spring); transition: transform var(--duration-fast) var(--ease-standard); overflow: hidden; }
   .mobile-subagent-sheet-panel[data-dragging="true"] { animation: none; transition: none; }
   .mobile-subagent-sheet-handle { justify-self: center; width: 100%; min-height: 28px; padding: 10px; border: 0; background: transparent; cursor: grab; touch-action: none; }
   .mobile-subagent-sheet-handle::after { content: ''; display: block; width: 38px; height: 4px; margin: auto; border-radius: 999px; background: var(--color-border-strong); }
@@ -752,7 +752,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
 @keyframes mobile-popover-in { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; } }
 @keyframes mobile-expand-in { from { opacity: 0; transform: scaleY(.96); } to { opacity: 1; transform: none; } }
 @keyframes mobile-backdrop-in { from { background-color: transparent; } }
-@keyframes mobile-sheet-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes mobile-sheet-in { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) {
   .mobile-conversation-activity > i, .mobile-thinking-indicator { animation: none; }
 }

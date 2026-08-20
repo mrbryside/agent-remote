@@ -163,10 +163,13 @@ Spawn calls, permission-first embedded tool calls, `subagent_spawned`,
 completion, and output polling collapse into one stable lifecycle item:
 `Calling`, then `Running` and navigable, then `Done` or its failure state. Child
 thread metadata never overwrites the parent lifecycle title, role, or status.
+The spawn tool returning `completed` means only that the background child was
+created; it stays `Running` until `subagent_finished` or a child TaskOutput
+reports a terminal status.
 On mobile, root history aggregates these items into one persistent bottom pill
 showing the running count. The pill opens a selector; choosing an agent opens
-its realtime conversation in a draggable half-height bottom sheet. Closing the
-sheet restores the root SSE stream and scroll position. When a child UUID
+its realtime conversation in a draggable 70%-viewport bottom sheet that slides
+up from below. Closing the sheet restores the root SSE stream and scroll position. When a child UUID
 appears, the provider loads that child through the same ACP connection. Its
 replay and live updates use the same translation recursively, so nested
 subagents remain realtime and navigation cannot escape the root's discovered
@@ -177,7 +180,10 @@ provider-neutral snapshots over SSE. Provider watchers are released when the
 browser disconnects or the server stops. Grok snapshot reads are serialized and
 revision-checked: an ACP update received during a graph read invalidates that
 read and rebuilds it before publishing. A slow active-turn snapshot therefore
-cannot overwrite a newer completed-turn snapshot. Assistant text is painted immediately
+cannot overwrite a newer completed-turn snapshot. Root snapshots also publish
+without hydrating child sessions; a slow or unavailable child can never delay
+the main agent's `turn_completed`, activity indicator, or Send/Stop state.
+Assistant text is painted immediately
 from those provider chunks; the browser does not add a synthetic typewriter
 delay after a chunk arrives. The mobile renderer keeps timeline nodes keyed by
 message/event id and reconciles the changing contents in place. Tool-group and
