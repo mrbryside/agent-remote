@@ -610,6 +610,24 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(sendButton).toHaveAttribute('data-action', 'stop');
   await expect(sendButton).toHaveAttribute('aria-label', 'Stop response');
   await expect(sidebarSession).toHaveClass(/working/);
+  await expect(modelButton).toBeEnabled();
+  await expect(conversation.locator('#mobile-conversation-mode')).toBeEnabled();
+  await modelButton.click();
+  await modelList.getByRole('option', { name: /Qwen 3\.8 27B/ }).click();
+  await expect.poll(() => modelChanges).toContainEqual({ modelId: 'qwen-local' });
+  await expect(modelButton).toContainText('Qwen 3.8 27B');
+  await conversation.locator('#mobile-conversation-mode').click();
+  await conversation.locator('#mobile-conversation-mode-list').getByRole('option', { name: /Auto/ }).click();
+  await expect.poll(() => modeChanges).toContainEqual({ modeId: 'auto' });
+  await expect(conversation.locator('#mobile-conversation-mode')).toContainText('Auto');
+  await conversation.locator('#mobile-conversation-file').setInputFiles({
+    name: 'streaming.png', mimeType: 'image/png', buffer: Buffer.from('streaming-image'),
+  });
+  await expect.poll(() => uploads).toContainEqual({
+    name: encodeURIComponent('streaming.png'), bytes: 'streaming-image',
+  });
+  await expect(conversation.getByRole('button', { name: 'Remove phone.png' })).toBeVisible();
+  await conversation.getByRole('button', { name: 'Remove phone.png' }).click();
 
   currentActivity = {
     active: true, phase: 'tool', label: 'Preparing read_file…',

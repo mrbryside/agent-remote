@@ -248,7 +248,9 @@ export function createMobileConversationView({
       return;
     }
     modelButton.hidden = false;
-    modelButton.disabled = modelBusy || conversation.thread.status === 'working';
+    // Grok applies a selection made during an active turn immediately before
+    // the next queued prompt. Keep the control usable while text streams.
+    modelButton.disabled = modelBusy;
     if (!modelBusy) modelLabel.textContent = current.label;
     modelButton.setAttribute('aria-label', `Choose model, ${current.label}`);
 
@@ -297,7 +299,7 @@ export function createMobileConversationView({
       return;
     }
     button.hidden = false;
-    button.disabled = controlBusy || (key === 'mode' && conversation.thread.status === 'working');
+    button.disabled = controlBusy;
     label.textContent = current.label;
     button.setAttribute('aria-label', `Choose ${key}, ${current.label}`);
     const fragment = document.createDocumentFragment();

@@ -1604,7 +1604,11 @@ export function createTerminalServer(options = {}) {
           if (!session) return json(response, 404, { error: 'Managed session not found' });
           try {
             const result = await conversationRegistry.setModel(session, body.modelId);
-            return json(response, 202, { accepted: true, modelId: result?.modelId || body.modelId });
+            return json(response, 202, {
+              accepted: true,
+              modelId: result?.modelId || body.modelId,
+              ...(result?.pending === true ? { pending: true } : {}),
+            });
           } catch (error) {
             if (error?.code === 'GROK_ACP_MODEL_INVALID') {
               return json(response, 400, { error: error.message, code: error.code });

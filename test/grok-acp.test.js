@@ -161,6 +161,62 @@ test('ACP client changes only to an advertised model and updates the session sna
   await client.close();
 });
 
+test('ACP client defers active-turn model and mode choices until before the next prompt', async () => {
+  const fake = harness();
+  const client = createGrokAcpClient({ spawn: fake.spawn });
+  const sessionId = '01a015a9-61df-7052-a5d0-17de77a201fa';
+  const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  const load = await waitForRequest(fake, 'session/load');
+  const child = fake.children[0].child;
+  reply(child, load.id, {
+    models: {
+      currentModelId: 'qwen-local',
+      availableModels: [
+        { modelId: 'qwen-local', name: 'Qwen Local' },
+        { modelId: 'grok-4.6', name: 'Grok 4.6' },
+      ],
+    },
+    _meta: { 'x.ai/sessionDetail': { currentModelId: 'qwen-local' } },
+  });
+  await loading;
+
+  notify(child, sessionId, {
+    sessionUpdate: 'turn_started',
+  });
+  assert.deepEqual(
+    await client.setModel({ sessionId, cwd: '/tmp/project', modelId: 'grok-4.6' }),
+    { accepted: true, modelId: 'grok-4.6', pending: true },
+  );
+  assert.deepEqual(
+    await client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'plan' }),
+    { accepted: true, modeId: 'plan', pending: true },
+  );
+  assert.equal(fake.requests.some((entry) => entry.method === 'session/set_model'), false);
+  assert.equal(fake.requests.some((entry) => entry.method === 'session/set_mode'), false);
+  assert.equal(client.read(sessionId).metadata.models.currentModelId, 'grok-4.6');
+  assert.equal(client.read(sessionId).controls.mode.currentId, 'plan');
+
+  const queued = await client.prompt({ sessionId, cwd: '/tmp/project', id: 'next-turn', text: 'next turn' });
+  assert.equal(queued.queued, true);
+  notify(child, sessionId, { sessionUpdate: 'turn_completed', stop_reason: 'end_turn' });
+
+  const modelRequest = await waitForRequest(fake, 'session/set_model');
+  assert.deepEqual(modelRequest.params, { sessionId, modelId: 'grok-4.6' });
+  assert.equal(fake.requests.some((entry) => entry.method === 'session/prompt'), false);
+  reply(child, modelRequest.id, {});
+  const modeRequest = await waitForRequest(fake, 'session/set_mode');
+  assert.deepEqual(modeRequest.params, { sessionId, modeId: 'plan' });
+  assert.equal(fake.requests.some((entry) => entry.method === 'session/prompt'), false);
+  reply(child, modeRequest.id, {});
+  const prompt = await waitForRequest(fake, 'session/prompt');
+  assert.equal(prompt.params.prompt[0].text, 'next turn');
+  assert.ok(fake.requests.indexOf(modelRequest) < fake.requests.indexOf(modeRequest));
+  assert.ok(fake.requests.indexOf(modeRequest) < fake.requests.indexOf(prompt));
+  reply(child, prompt.id, { stopReason: 'end_turn' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await client.close();
+});
+
 test('ACP client keeps follow-ups local until the active turn completes and can steer them', async () => {
   const fake = harness();
   const client = createGrokAcpClient({ spawn: fake.spawn });

@@ -14,6 +14,7 @@ const permissionModes = new Set(['default', 'auto', 'bypassPermissions']);
 const unifiedModes = new Set(['normal', 'plan', 'auto', 'alwaysApprove']);
 
 function unifiedMode(current) {
+  if (unifiedModes.has(current.pendingModeId)) return current.pendingModeId;
   if (current.currentMode === 'plan') return 'plan';
   if (current.permissionMode === 'auto') return 'auto';
   if (current.permissionMode === 'bypassPermissions') return 'alwaysApprove';
@@ -186,8 +187,11 @@ export function createGrokAcpClient({
         loadedGeneration: 0, loading: undefined, metadata: undefined, cwd: undefined,
         activePrompt: undefined,
         queuedPrompts: [],
+        drainingPrompts: undefined,
         turnActive: false,
         cancelRequested: false,
+        pendingModelId: undefined,
+        pendingModeId: undefined,
         currentMode: 'default',
         permissionMode: permissionModes.has(defaultPermissionMode) ? defaultPermissionMode : 'default',
         commands: [],
@@ -497,10 +501,24 @@ export function createGrokAcpClient({
 
   function read(sessionId) {
     const current = state(sessionId);
+    let metadata = current.metadata;
+    if (current.pendingModelId && metadata) {
+      const detail = metadata._meta?.['x.ai/sessionDetail'];
+      metadata = {
+        ...metadata,
+        models: { ...(metadata.models || {}), currentModelId: current.pendingModelId },
+        ...(detail && typeof detail === 'object' ? {
+          _meta: {
+            ...(metadata._meta || {}),
+            'x.ai/sessionDetail': { ...detail, currentModelId: current.pendingModelId },
+          },
+        } : {}),
+      };
+    }
     return {
       sessionId,
       cwd: current.cwd,
-      metadata: current.metadata,
+      metadata,
       events: current.events.slice(),
       queue: current.queuedPrompts.map(({ id, displayText, createdAt, attachments }) => ({
         id, text: displayText, createdAt, attachments,
@@ -541,39 +559,100 @@ export function createGrokAcpClient({
     };
   }
 
+  async function applyModel(current, sessionId, modelId) {
+    await request('session/set_model', { sessionId, modelId });
+    current.metadata = current.metadata || {};
+    current.metadata.models = { ...(current.metadata.models || {}), currentModelId: modelId };
+    const detail = current.metadata._meta?.['x.ai/sessionDetail'];
+    if (detail && typeof detail === 'object') detail.currentModelId = modelId;
+  }
+
+  async function applyMode(current, sessionId, modeId) {
+    const conversationMode = modeId === 'plan' ? 'plan' : 'default';
+    const permissionMode = modeId === 'auto' ? 'auto'
+      : modeId === 'alwaysApprove' ? 'bypassPermissions' : 'default';
+    if (current.currentMode !== conversationMode) {
+      await request('session/set_mode', { sessionId, modeId: conversationMode });
+    }
+    notify('_x.ai/yolo_mode_changed', {
+      sessionId,
+      auto_mode: permissionMode === 'auto',
+      ask: permissionMode === 'default',
+    });
+    current.currentMode = conversationMode;
+    current.permissionMode = permissionMode;
+  }
+
+  async function applyPendingControls(current, sessionId) {
+    let changed = false;
+    while (current.pendingModelId) {
+      const modelId = current.pendingModelId;
+      await applyModel(current, sessionId, modelId);
+      changed = true;
+      if (current.pendingModelId === modelId) current.pendingModelId = undefined;
+    }
+    while (current.pendingModeId) {
+      const modeId = current.pendingModeId;
+      await applyMode(current, sessionId, modeId);
+      changed = true;
+      if (current.pendingModeId === modeId) current.pendingModeId = undefined;
+    }
+    if (changed) publish(sessionId);
+  }
+
   async function drainPrompts(sessionId) {
     const current = state(sessionId);
+    if (current.drainingPrompts) return current.drainingPrompts;
     if (current.activePrompt || current.turnActive || current.queuedPrompts.length === 0) return;
-    const entry = current.queuedPrompts.shift();
-    current.activePrompt = entry;
-    current.turnActive = true;
-    current.cancelRequested = false;
-    publish(sessionId);
-    try {
-      const result = await request('session/prompt', {
-        sessionId, prompt: [{ type: 'text', text: entry.text }],
-      });
-      current.events.push({
-        timestamp: Date.now(),
-        params: { update: {
-          sessionUpdate: 'turn_completed', stop_reason: result?.stopReason || result?.stop_reason,
-        } },
-      });
-    } catch (error) {
-      logger(error.message);
-      current.events.push({
-        timestamp: Date.now(),
-        params: { update: {
-          sessionUpdate: 'prompt_failed', promptId: entry.id, text: entry.displayText,
-          error: error.message,
-        } },
-      });
-    } finally {
-      current.activePrompt = undefined;
-      current.turnActive = false;
+    let controlsFailed = false;
+    const draining = (async () => {
+      try {
+        await applyPendingControls(current, sessionId);
+      } catch (error) {
+        controlsFailed = true;
+        logger(error.message);
+        return;
+      }
+      if (current.activePrompt || current.turnActive || current.queuedPrompts.length === 0) return;
+      const entry = current.queuedPrompts.shift();
+      current.activePrompt = entry;
+      current.turnActive = true;
       current.cancelRequested = false;
       publish(sessionId);
-      void drainPrompts(sessionId);
+      try {
+        const result = await request('session/prompt', {
+          sessionId, prompt: [{ type: 'text', text: entry.text }],
+        });
+        current.events.push({
+          timestamp: Date.now(),
+          params: { update: {
+            sessionUpdate: 'turn_completed', stop_reason: result?.stopReason || result?.stop_reason,
+          } },
+        });
+      } catch (error) {
+        logger(error.message);
+        current.events.push({
+          timestamp: Date.now(),
+          params: { update: {
+            sessionUpdate: 'prompt_failed', promptId: entry.id, text: entry.displayText,
+            error: error.message,
+          } },
+        });
+      } finally {
+        current.activePrompt = undefined;
+        current.turnActive = false;
+        current.cancelRequested = false;
+        publish(sessionId);
+      }
+    })();
+    current.drainingPrompts = draining;
+    try {
+      await draining;
+    } finally {
+      if (current.drainingPrompts === draining) current.drainingPrompts = undefined;
+      if (!controlsFailed && !current.activePrompt && !current.turnActive && current.queuedPrompts.length > 0) {
+        queueMicrotask(() => void drainPrompts(sessionId));
+      }
     }
   }
 
@@ -599,14 +678,12 @@ export function createGrokAcpClient({
     if (!available.some((model) => model?.modelId === modelId)) {
       throw rpcError('Model is not available for this session', 'GROK_ACP_MODEL_INVALID');
     }
-    if (current.activePrompt || current.turnActive) {
-      throw rpcError('Wait for the current turn before changing model', 'GROK_ACP_SESSION_BUSY');
+    if (current.activePrompt || current.turnActive || current.drainingPrompts || current.queuedPrompts.length > 0) {
+      current.pendingModelId = modelId;
+      publish(sessionId);
+      return { accepted: true, modelId, pending: true };
     }
-    await request('session/set_model', { sessionId, modelId });
-    current.metadata = current.metadata || {};
-    current.metadata.models = { ...(current.metadata.models || {}), currentModelId: modelId };
-    const detail = current.metadata._meta?.['x.ai/sessionDetail'];
-    if (detail && typeof detail === 'object') detail.currentModelId = modelId;
+    await applyModel(current, sessionId, modelId);
     publish(sessionId);
     return { accepted: true, modelId };
   }
@@ -628,22 +705,12 @@ export function createGrokAcpClient({
     if (!unifiedModes.has(modeId)) throw rpcError('Conversation mode is invalid', 'GROK_ACP_MODE_INVALID');
     await loadSession({ sessionId, cwd });
     const current = state(sessionId);
-    if (current.activePrompt || current.turnActive) {
-      throw rpcError('Wait for the current turn before changing mode', 'GROK_ACP_SESSION_BUSY');
+    if (current.activePrompt || current.turnActive || current.drainingPrompts || current.queuedPrompts.length > 0) {
+      current.pendingModeId = modeId;
+      publish(sessionId);
+      return { accepted: true, modeId, pending: true };
     }
-    const conversationMode = modeId === 'plan' ? 'plan' : 'default';
-    const permissionMode = modeId === 'auto' ? 'auto'
-      : modeId === 'alwaysApprove' ? 'bypassPermissions' : 'default';
-    if (current.currentMode !== conversationMode) {
-      await request('session/set_mode', { sessionId, modeId: conversationMode });
-    }
-    notify('_x.ai/yolo_mode_changed', {
-      sessionId,
-      auto_mode: permissionMode === 'auto',
-      ask: permissionMode === 'default',
-    });
-    current.currentMode = conversationMode;
-    current.permissionMode = permissionMode;
+    await applyMode(current, sessionId, modeId);
     publish(sessionId);
     return { accepted: true, modeId };
   }

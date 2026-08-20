@@ -71,7 +71,11 @@ bypass semantics. Incoming `current_mode_update.currentModeId` notifications
 update the same control, so the mobile selection and Grok session do not expose
 independent plan and permission dropdowns. The initial choice follows Grok's
 `[ui].permission_mode` config, while a mobile change affects only the loaded
-Grok session through ACP.
+Grok session through ACP. Model and mode selectors remain available while a
+turn streams. A choice made during an active turn is projected into the mobile
+controls immediately but retained as pending ACP state; immediately before the
+next queued `session/prompt`, the client applies `session/set_model` and the
+unified mode change in order. It never mutates the turn already in progress.
 
 Composer completion also stays behind provider and project boundaries. Slash
 commands come from Grok's live ACP `available_commands_update` notification;
@@ -93,6 +97,10 @@ those ids and expand them to backend-local Markdown paths immediately before
 ACP delivery; clients cannot submit arbitrary filesystem paths through the
 attachment field. Preview responses are no-store, nosniff, sandboxed, and only
 raster images render inline.
+Attachment upload and removal also remain available during an active turn.
+Uploaded ids stay in the local composer draft and are expanded only when that
+later draft is submitted, so an upload cannot alter the prompt currently
+streaming.
 
 When Grok requests tool permission, the ACP client keeps the JSON-RPC request
 open and projects its exact options into a native permission card. The mobile
