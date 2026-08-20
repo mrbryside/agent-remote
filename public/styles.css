@@ -638,7 +638,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   #mobile-conversation-attach:active { background: var(--color-surface-pressed); }
   #mobile-conversation-model, #mobile-conversation-mode { display: flex; flex: 0 1 auto; min-width: 0; max-width: 100px; height: 36px; align-items: center; justify-content: space-between; gap: 4px; padding: 0 8px; overflow: hidden; border: 0; border-left: 1px solid var(--color-border-subtle); border-radius: 0; background: transparent; color: var(--color-text-secondary); font: 600 var(--font-size-interaction-eyebrow)/1.2 var(--font-family-mono); }
   #mobile-conversation-mode { flex: 0 0 auto; width: max-content; max-width: none; }
-  #mobile-conversation-model { flex: 1 1 128px; min-width: 112px; max-width: 148px; }
+  #mobile-conversation-model { flex: 0 1 auto; width: max-content; min-width: 0; max-width: 148px; }
   #mobile-conversation-model[hidden], #mobile-conversation-mode[hidden] { display: none; }
   #mobile-conversation-model > span, #mobile-conversation-mode > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #mobile-conversation-mode > span { overflow: visible; text-overflow: clip; }

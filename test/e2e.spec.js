@@ -544,7 +544,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const modeButton = conversation.locator('#mobile-conversation-mode');
   await expect(modelButton).toContainText('Qwen 3.8 27B');
   const normalModeWidth = (await modeButton.boundingBox()).width;
-  expect((await modelButton.boundingBox()).width).toBeGreaterThanOrEqual(112);
+  await expect.poll(() => modelButton.evaluate((button) => ({
+    flexGrow: getComputedStyle(button).flexGrow,
+    maxWidth: getComputedStyle(button).maxWidth,
+    labelFits: button.querySelector('span').scrollWidth <= button.querySelector('span').clientWidth,
+  }))).toEqual({ flexGrow: '0', maxWidth: '148px', labelFits: true });
   await modelButton.click();
   const modelList = conversation.locator('#mobile-conversation-model-list');
   await expect(modelList).toBeVisible();
@@ -557,6 +561,14 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await modelList.getByRole('option', { name: /Low Effort/ }).click();
   await expect.poll(() => modelChanges).toContainEqual({ modelId: 'grok-4.6', effortId: 'low' });
   await expect(modelButton).toContainText('Grok 4.6');
+  await expect.poll(() => modelButton.evaluate((button) => {
+    const style = getComputedStyle(button);
+    const label = button.querySelector('span').getBoundingClientRect();
+    const arrow = button.querySelector('i').getBoundingClientRect();
+    const contentWidth = label.width + arrow.width + Number.parseFloat(style.columnGap || style.gap) +
+      Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
+    return Math.abs(button.getBoundingClientRect().width - contentWidth);
+  })).toBeLessThanOrEqual(1);
   await expect(conversation.locator('#mobile-conversation-context')).toContainText('6K / 500K');
   await modeButton.click();
   await conversation.locator('#mobile-conversation-mode-list').getByRole('option', { name: /Plan/ }).click();
