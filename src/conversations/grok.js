@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { open, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -16,6 +16,56 @@ async function loadGrokSignals({ cwd, sessionId }) {
   } catch {
     return undefined;
   }
+}
+
+async function readFileTail(file, maximum = 128 * 1024) {
+  let handle;
+  try {
+    handle = await open(file, 'r');
+    const { size } = await handle.stat();
+    const length = Math.min(size, maximum);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, Math.max(0, size - length));
+    const source = buffer.toString('utf8');
+    return size > length ? source.slice(source.indexOf('\n') + 1) : source;
+  } catch {
+    return '';
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+async function loadGrokLifecycle({ cwd, sessionId }) {
+  if (!sessionIdPattern.test(sessionId || '') || typeof cwd !== 'string' || !cwd) return undefined;
+  const grokHome = process.env.GROK_HOME?.trim() || join(homedir(), '.grok');
+  const file = join(grokHome, 'sessions', encodeURIComponent(cwd), sessionId, 'updates.jsonl');
+  const lines = (await readFileTail(file)).trimEnd().split('\n');
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const record = JSON.parse(lines[index]);
+      const kind = record?.params?.update?.sessionUpdate;
+      if (!['turn_started', 'user_message_chunk', 'turn_completed'].includes(kind)) continue;
+      const agentTimestamp = Number(record?.params?._meta?.agentTimestampMs);
+      const persistedTimestamp = Number(record?.timestamp);
+      const changedAt = Number.isFinite(agentTimestamp) && agentTimestamp > 0
+        ? agentTimestamp
+        : Number.isFinite(persistedTimestamp) && persistedTimestamp > 0
+          ? persistedTimestamp * (persistedTimestamp < 10_000_000_000 ? 1_000 : 1)
+          : 0;
+      return { active: kind !== 'turn_completed', changedAt };
+    } catch {
+      // A process may be appending the final line while it is read. Ignore a
+      // partial record and continue to the preceding complete boundary.
+    }
+  }
+  return undefined;
+}
+
+function authoritativeTurn(snapshot, lifecycle) {
+  const observedAt = Number(snapshot.turn?.changedAt) || 0;
+  const persistedAt = Number(lifecycle?.changedAt) || 0;
+  if (lifecycle && persistedAt >= observedAt) return lifecycle.active;
+  return snapshot.turn?.active;
 }
 
 function finiteTokenCount(value) {
@@ -270,7 +320,10 @@ function groupToolBatches(items) {
       const failed = batch.some((tool) => tool.status === 'failed' || tool.status === 'error');
       const working = batch.some((tool) => tool.status === 'working' || tool.status === 'running');
       grouped.push({
-        id: `tool-group-${batch.map((tool) => tool.toolCallId).join('-')}`,
+        // The first tool is the batch identity. More adjacent tools arrive as
+        // the turn streams, so deriving the key from the whole batch remounts
+        // the open card on every append and steals an in-progress tap.
+        id: `tool-group-${batch[0].toolCallId}`,
         type: 'tool_group', title: summarizeTools(batch), tools: batch,
         status: failed ? 'failed' : working ? 'working' : 'completed',
         timestamp: item.timestamp,
@@ -943,6 +996,7 @@ function grokCommand(command) {
 export function createGrokConversationProvider({
   acpClient,
   loadSignals = loadGrokSignals,
+  loadLifecycle = loadGrokLifecycle,
 } = {}) {
   if (!acpClient) throw new Error('Grok ACP client is required');
 
@@ -954,7 +1008,8 @@ export function createGrokConversationProvider({
     // fallback for older/test snapshots that do not expose `turn.active`.
     // Otherwise a late tool update can incorrectly resurrect the sidebar
     // spinner after Grok has already finished the turn.
-    const active = snapshot.turn?.active ?? parsed.status === 'working';
+    const persistedLifecycle = await loadLifecycle({ cwd, sessionId: threadId });
+    const active = authoritativeTurn(snapshot, persistedLifecycle) ?? parsed.status === 'working';
     const cancelRequested = snapshot.turn?.cancelRequested === true;
     const activity = active ? {
       active: true,
@@ -980,7 +1035,7 @@ export function createGrokConversationProvider({
         title: shortText(detail.title, detail.kind || 'Grok'),
         agentName: shortText(detail.kind, 'grok', 80),
         model: shortText(detail.currentModelId || snapshot.metadata?.models?.currentModelId, '', 80),
-        status: active ? 'working' : snapshot.turn?.active === false ? 'idle' : parsed.status,
+        status: active ? 'working' : active === false ? 'idle' : parsed.status,
       },
       activity,
       ...(controls && Object.keys(controls).length ? { controls } : {}),
@@ -991,8 +1046,10 @@ export function createGrokConversationProvider({
 
   async function readStatus(handle) {
     const snapshot = await acpClient.loadSession({ sessionId: handle.rootThreadId, cwd: handle.cwd });
-    if (snapshot.turn?.active === true) return 'working';
-    if (snapshot.turn?.active === false) return 'idle';
+    const lifecycle = await loadLifecycle({ cwd: handle.cwd, sessionId: handle.rootThreadId });
+    const active = authoritativeTurn(snapshot, lifecycle);
+    if (active === true) return 'working';
+    if (active === false) return 'idle';
     return timeline(snapshot.events).status;
   }
 
@@ -1101,6 +1158,10 @@ export function createGrokConversationProvider({
               continue;
             }
             listener(conversation);
+            if (conversation.activity?.active) {
+              clearTimeout(timer);
+              timer = setTimeout(() => requestPublish(0), 250);
+            }
           } catch {
             if (stopped) return;
             if (expectedRevision !== revision) {

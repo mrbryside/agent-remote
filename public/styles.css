@@ -499,7 +499,10 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-event-toggle[aria-expanded="true"] > i { transform: rotate(90deg); }
   .mobile-event-panel { display: grid; gap: 11px; max-height: min(52dvh, 420px); min-width: 0; overflow: auto; padding: 2px 11px 12px; border-top: 1px solid var(--color-border-faint); overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   .mobile-event-panel[hidden] { display: none; }
-  .mobile-event-panel:not([hidden]), .mobile-tool-group-panel:not([hidden]) { animation: mobile-expand-in var(--duration-normal) var(--ease-out); transform-origin: top; }
+  /* Expanded stream panels stay on one compositor layer. Replaying an entry
+     animation on every incremental snapshot makes stable controls flash and
+     can move them out from under a touch before click dispatch. */
+  .mobile-event-panel:not([hidden]), .mobile-tool-group-panel:not([hidden]) { transform-origin: top; }
   .mobile-event-detail { display: grid; gap: 5px; min-width: 0; padding-top: 9px; }
   .mobile-event-detail small { color: var(--color-text-muted); font: 600 8px/1.2 var(--font-family-mono); letter-spacing: .06em; text-transform: uppercase; }
   .mobile-event-detail pre { box-sizing: border-box; width: 100%; max-width: 100%; max-height: min(38dvh, 300px); margin: 0; overflow: auto; color: var(--color-text-secondary); font: 10px/1.55 var(--font-family-mono); overflow-wrap: normal; white-space: pre; word-break: normal; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }

@@ -50,7 +50,7 @@ client applies it atomically only when it still matches the current pending
 queue, otherwise the browser rolls back with the same layout animation. This
 prevents a concurrent drain or steer from silently reordering the wrong prompt.
 
-The ACP snapshot is also the source of truth for mobile turn activity. User,
+The ACP snapshot supplies live mobile turn activity. User,
 thought, tool, assistant, retry, permission, question, and subagent updates map
 to concise phases such as `Waiting for response…`, `Preparing read_file…`, and
 `Responding…`; these phases are status metadata and are not extra timeline
@@ -66,8 +66,19 @@ ACP `session/load` can replay a completed turn without replaying Grok's final
 lifecycle notification. When the replay batch reaches its persisted boundary,
 the client settles the live `turn.active` flag together with the synthesized
 timeline boundary. An ACP disconnect also clears the transient active flag
-before reconnecting. This keeps the mobile Responding action and the sidebar
-spinner from surviving a turn that is already complete on disk.
+before reconnecting.
+
+A turn entered through the desktop Grok TUI is shared with the observer, but
+some Grok leader versions broadcast its message chunks without broadcasting
+the terminal `turn_completed` notification to the ACP stdio client. Therefore
+`src/conversations/grok.js` also reads the bounded tail of that exact session's
+persisted `updates.jsonl`. A newer persisted `user_message_chunk` marks the turn
+active and a newer persisted `turn_completed` marks it idle; an older disk
+boundary can never override newer ACP activity. While a provider stream is
+active its watcher checks this boundary every 250 ms, so an already-open phone,
+a later desktop-to-mobile resize, and the sidebar all settle from the same Grok
+turn without waiting for another ACP event. This keeps Responding, Stop, and the
+sidebar spinner from surviving a turn that is already complete on disk.
 
 An HTTP `202` prompt response is only a delivery receipt, not evidence that a
 turn remains active. The optimistic pending message may show `Sending`, but it
@@ -173,7 +184,7 @@ closes it; completed thoughts no longer remain falsely marked `Running`.
 is retained as metadata instead of becoming a chat message. Unknown future
 events remain visible as generic expandable cards.
 
-On mobile, expanded tool groups own one fixed-height vertical scroll viewport.
+On mobile, expanded tool groups own a bounded, max-height vertical scroll viewport.
 Nested Shell, output, input, and generic detail blocks preserve whitespace and
 can scroll both axes instead of wrapping long commands. Edit results render as
 a compact unified diff with line numbers, add/remove counts, bounded context,
@@ -209,9 +220,12 @@ the main agent's `turn_completed`, activity indicator, or Send/Stop state.
 Assistant text is painted immediately
 from those provider chunks; the browser does not add a synthetic typewriter
 delay after a chunk arrives. The mobile renderer keeps timeline nodes keyed by
-message/event id and reconciles the changing contents in place. Tool-group and
-event toggle elements therefore retain identity while output streams, so a
-touch cannot lose its click target between pointer down and click. Incoming SSE
+message/event id and reconciles the changing contents in place. A tool batch is
+identified by its first tool call, so appending later adjacent tools never
+changes the group key. Unchanged item fingerprints skip DOM work entirely;
+existing nested details, scroll positions, compositor layers, tool-group and
+event toggles retain identity while output streams, so a touch cannot lose its
+click target between pointer down and click. Incoming SSE
 snapshots are latest-wins within one animation frame instead of forcing a full
 history detach for every chunk. Opening or switching a root conversation places
 the message viewport at its latest item synchronously, with no smooth initial
@@ -241,10 +255,12 @@ messages remain plain text. Both browser libraries are packaged into the macOS
 runtime, so Markdown rendering cannot depend on a CDN or network availability.
 
 During initial ACP connection, the native mobile surface continues to own the
-viewport behind one opaque `Opening chat…` cover; it does not reveal xterm,
+viewport behind one opaque `Preparing chat…` cover; it does not reveal xterm,
 `Connecting`/`Reconnecting` header state, or partially hydrated history. The
 cover is removed only after the first complete conversation snapshot has been
-committed, so the transition into the chat is atomic. A new Grok chat reserves
+committed, so the transition into the chat is atomic. A temporarily unavailable
+provider keeps the same cover and retries instead of falling through to the
+terminal for one frame. A new Grok chat reserves
 that native surface optimistically on the original `+` click, before session
 creation returns. Once active, the native surface also owns the only mobile
 header and places project navigation there; the terminal topbar is removed from

@@ -201,6 +201,8 @@ export function createGrokAcpClient({
         pendingSubagentToolCalls: new Map(),
         questions: new Map(),
         planReviews: new Map(),
+        turnSource: 'idle',
+        turnChangedAt: 0,
       };
       sessions.set(sessionId, value);
     }
@@ -236,9 +238,13 @@ export function createGrokAcpClient({
     if (update.sessionUpdate === 'turn_started' ||
         (update.sessionUpdate === 'user_message_chunk' && current.loadedGeneration === generation && !record.replay)) {
       current.turnActive = true;
+      current.turnSource = record.replay ? 'replay' : 'live';
+      current.turnChangedAt = record.timestamp;
       current.cancelRequested = false;
     } else if (update.sessionUpdate === 'turn_completed') {
       current.turnActive = false;
+      current.turnSource = 'idle';
+      current.turnChangedAt = record.timestamp;
       current.cancelRequested = false;
     } else if (update.sessionUpdate === 'current_mode_update') {
       const nextMode = update.currentModeId ?? update.currentMode;
@@ -439,6 +445,8 @@ export function createGrokAcpClient({
       // turn is still running. The next session/load will replay the durable
       // boundary (or a new live turn) and restore the authoritative state.
       current.turnActive = false;
+      current.turnSource = 'idle';
+      current.turnChangedAt = Date.now();
       current.cancelRequested = false;
     }
     if (!closing) {
@@ -493,7 +501,7 @@ export function createGrokAcpClient({
       const sessionMeta = result?._meta || {};
       if (sessionMeta.yoloMode === true) current.permissionMode = 'bypassPermissions';
       else if (sessionMeta.autoMode === true) current.permissionMode = 'auto';
-      if (current.events.at(-1)?.replay === true) {
+      if (current.turnActive && current.turnSource === 'replay') {
         current.events.push({
           timestamp: Date.now(), replay: true,
           params: { update: { sessionUpdate: 'turn_completed', stop_reason: 'loaded' } },
@@ -503,6 +511,8 @@ export function createGrokAcpClient({
         // boundary we synthesize for the timeline; otherwise mobile stays on
         // Responding and the sidebar spinner runs forever after reload.
         current.turnActive = false;
+        current.turnSource = 'idle';
+        current.turnChangedAt = Date.now();
         current.cancelRequested = false;
       }
       return read(sessionId);
@@ -543,6 +553,7 @@ export function createGrokAcpClient({
         // before that request promise settles.
         active: current.turnActive,
         cancelRequested: current.cancelRequested,
+        changedAt: current.turnChangedAt,
       },
       controls: {
         mode: {
@@ -630,6 +641,8 @@ export function createGrokAcpClient({
       const entry = current.queuedPrompts.shift();
       current.activePrompt = entry;
       current.turnActive = true;
+      current.turnSource = 'local';
+      current.turnChangedAt = Date.now();
       current.cancelRequested = false;
       publish(sessionId);
       try {
@@ -654,6 +667,8 @@ export function createGrokAcpClient({
       } finally {
         current.activePrompt = undefined;
         current.turnActive = false;
+        current.turnSource = 'idle';
+        current.turnChangedAt = Date.now();
         current.cancelRequested = false;
         publish(sessionId);
       }

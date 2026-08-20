@@ -136,6 +136,7 @@ export function createMobileConversationView({
   let filePreviewGeneration = 0;
   let browserAvailable = false;
   let pillDismissed = false;
+  let expectedConversation = false;
 
   function setBooting(next) {
     const booting = Boolean(next);
@@ -1622,6 +1623,7 @@ export function createMobileConversationView({
         ...tool,
         title: displayTitle,
       });
+      nested.__mobileItemSignature = JSON.stringify(tool);
       panel.append(nested);
     }
     toggle.addEventListener('click', () => {
@@ -1940,7 +1942,11 @@ export function createMobileConversationView({
     for (const attribute of [...current.attributes]) {
       if (!fresh.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
     }
-    for (const attribute of [...fresh.attributes]) current.setAttribute(attribute.name, attribute.value);
+    for (const attribute of [...fresh.attributes]) {
+      if (current.getAttribute(attribute.name) !== attribute.value) {
+        current.setAttribute(attribute.name, attribute.value);
+      }
+    }
   }
 
   function syncEventCard(current, fresh) {
@@ -1977,7 +1983,13 @@ export function createMobileConversationView({
       const key = timelineNodeKey(fresh);
       const current = key ? currentByKey.get(key) : undefined;
       let node = fresh;
-      if (current && current.matches('.mobile-tool-group') && fresh.matches('.mobile-tool-group')) {
+      if (current && fresh.__mobileItemSignature !== undefined &&
+          current.__mobileItemSignature === fresh.__mobileItemSignature) {
+        // Most streamed snapshots only append text or update the newest tool.
+        // Keep all older nodes completely untouched so active taps, nested
+        // scroll positions, and compositor layers cannot be interrupted.
+        node = current;
+      } else if (current && current.matches('.mobile-tool-group') && fresh.matches('.mobile-tool-group')) {
         syncAttributes(current, fresh);
         const currentToggle = current.querySelector(':scope > .mobile-tool-group-toggle');
         const freshToggle = fresh.querySelector(':scope > .mobile-tool-group-toggle');
@@ -1985,7 +1997,9 @@ export function createMobileConversationView({
         const freshPanel = fresh.querySelector(':scope > .mobile-tool-group-panel');
         if (currentToggle && freshToggle && currentPanel && freshPanel) {
           syncAttributes(currentToggle, freshToggle);
-          currentToggle.replaceChildren(...freshToggle.childNodes);
+          if (currentToggle.textContent !== freshToggle.textContent) {
+            currentToggle.replaceChildren(...freshToggle.childNodes);
+          }
           syncAttributes(currentPanel, freshPanel);
           reconcileTimeline(currentPanel, [...freshPanel.children]);
           node = current;
@@ -1997,6 +2011,7 @@ export function createMobileConversationView({
         current.replaceChildren(...fresh.childNodes);
         node = current;
       }
+      if (node === current) node.__mobileItemSignature = fresh.__mobileItemSignature;
       kept.add(node);
       if (node === cursor) cursor = cursor.nextSibling;
       else container.insertBefore(node, cursor);
@@ -2066,8 +2081,9 @@ export function createMobileConversationView({
     const fragment = document.createDocumentFragment();
     for (const item of conversation.items) {
       const node = messageNode(item, conversation, { suppressPendingInteractions: isRoot });
-      if (animate && node.nodeType === Node.ELEMENT_NODE && !previousItemIds.has(item.id)) {
-        node.classList.add('mobile-conversation-enter');
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        node.__mobileItemSignature = JSON.stringify(item);
+        if (animate && !previousItemIds.has(item.id)) node.classList.add('mobile-conversation-enter');
       }
       fragment.append(node);
     }
@@ -2159,8 +2175,17 @@ export function createMobileConversationView({
       if (currentGeneration !== generation) return;
       if (error.code === 'CONVERSATION_UNAVAILABLE') {
         threadId = undefined;
-        setBooting(false);
-        setAvailable(false);
+        if (expectedConversation) {
+          // A managed Grok chat can briefly exist before its ACP provider is
+          // discoverable. Retain the same opaque surface and retry instead of
+          // falling through to a one-frame terminal/Connecting flash.
+          setBooting(true);
+          setAvailable(true);
+          schedule(600);
+        } else {
+          setBooting(false);
+          setAvailable(false);
+        }
       } else if (available) {
         state.textContent = 'Reconnecting';
         state.dataset.state = 'working';
@@ -2399,7 +2424,7 @@ export function createMobileConversationView({
     renderedSignature = '';
     if (media.matches && sessionName) {
       setBooting(true);
-      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Loading conversation…'));
+      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Preparing chat…'));
       setAvailable(true);
       void refresh();
     } else {
@@ -2418,6 +2443,7 @@ export function createMobileConversationView({
       closeStream();
       closeFileSheet();
       sessionName = nextSessionName;
+      expectedConversation = true;
       threadId = undefined;
       rootThreadId = undefined;
       rootConversation = undefined;
@@ -2455,10 +2481,11 @@ export function createMobileConversationView({
       interactionDock.replaceChildren();
       back.hidden = true;
       jumpToLatest.hidden = true;
-      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Connecting to Grok…'));
+      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Preparing chat…'));
       setAvailable(true);
     },
-    select(nextSessionName) {
+    select(nextSessionName, { expected = false } = {}) {
+      expectedConversation = Boolean(expected);
       if (sessionName === (nextSessionName || undefined)) return;
       generation += 1;
       clearTimeout(refreshTimer);
@@ -2503,7 +2530,7 @@ export function createMobileConversationView({
       }
       setBooting(true);
       jumpToLatest.hidden = true;
-      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Loading conversation…'));
+      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Preparing chat…'));
       // Claim the mobile surface while provider detection is in flight. This
       // prevents the terminal transport from briefly attaching (and resizing)
       // the shared tmux pane before native history is ready.

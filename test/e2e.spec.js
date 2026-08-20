@@ -725,6 +725,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('.mobile-tool-group')).toContainText('Listed 1 dir, Read 2 files, Searched 1 time, Edited 1 file, Ran 1 command');
   const stableToolGroup = await page.evaluate(async (nextConversation) => {
     const button = document.querySelector('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle');
+    const detail = document.querySelector('[data-event-id="tool-group-1"] .mobile-event-card .mobile-event-panel > *');
     button.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerType: 'touch' }));
     for (let index = 0; index < 24; index += 1) {
       const snapshot = structuredClone(nextConversation);
@@ -740,10 +741,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     return {
       connected: button.isConnected,
       sameNode: button === document.querySelector('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle'),
+      stableDetail: detail === document.querySelector('[data-event-id="tool-group-1"] .mobile-event-card .mobile-event-panel > *'),
       expanded: button.getAttribute('aria-expanded'),
     };
   }, rootConversation());
-  expect(stableToolGroup).toEqual({ connected: true, sameNode: true, expanded: 'true' });
+  expect(stableToolGroup).toEqual({ connected: true, sameNode: true, stableDetail: true, expanded: 'true' });
   await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
   await expect(conversation.getByText('Turn completed')).toHaveCount(0);
   await expect(conversation.getByText('Session recap')).toHaveCount(0);
@@ -1419,14 +1421,19 @@ test('owns the mobile surface from the first frame of a new Grok chat', async ({
     createdSession = true;
     return route.fulfill({ status: 201, json: { session } });
   });
-  await page.route('**/api/conversations/ar-mobile-acp-startup**', (route) => route.fulfill({ json: {
-    conversation: {
+  let conversationRequests = 0;
+  await page.route('**/api/conversations/ar-mobile-acp-startup**', (route) => {
+    conversationRequests += 1;
+    if (conversationRequests === 1) return route.fulfill({ status: 404, json: {
+      error: 'Provider is still attaching', code: 'CONVERSATION_UNAVAILABLE',
+    } });
+    return route.fulfill({ json: { conversation: {
       provider: { id: 'grok', label: 'Grok' },
       thread: { id: session.conversationThreadId, title: 'New Grok chat', agentName: 'build', status: 'idle' },
       items: [], children: [], parent: null, rootThreadId: session.conversationThreadId,
       capabilities: { send: true, children: false },
-    },
-  } }));
+    } } });
+  });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
   await page.evaluate(() => {
@@ -1441,7 +1448,7 @@ test('owns the mobile surface from the first frame of a new Grok chat', async ({
   await group.locator('.project-select').click();
   await group.getByRole('button', { name: 'New chat in Mobile ACP startup' }).click();
   await expect(page.locator('#mobile-conversation')).toBeVisible();
-  await expect(page.locator('#mobile-conversation')).toContainText('Connecting to Grok');
+  await expect(page.locator('#mobile-conversation')).toContainText('Preparing chat');
   await expect(page.locator('#terminal')).toBeHidden();
   await expect(page.locator('#mobile-conversation-title')).toHaveText('New Grok chat');
   await expect(page.locator('#terminal')).toBeHidden();
@@ -2144,7 +2151,7 @@ test('keeps one loading cover until Grok conversation readiness succeeds', async
   const terminal = page.locator('#terminal .terminal-instance');
   await expect.poll(() => readinessRequests).toBeGreaterThan(0);
   await expect(loading).toBeVisible();
-  await expect(loading).toHaveText('');
+  await expect(loading).toContainText('Preparing chat');
   await expect(loading.locator('.session-loading-spinner')).toBeVisible();
   await expect(loading).not.toContainText('Connecting');
   await expect(terminal).toHaveAttribute('data-launching', 'true');

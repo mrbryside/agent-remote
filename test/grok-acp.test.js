@@ -122,6 +122,30 @@ test('ACP client settles a replayed turn when session load reaches the persisted
   await client.close();
 });
 
+test('ACP client settles replayed desktop turns even when live metadata follows the replay', async () => {
+  const fake = harness();
+  const client = createGrokAcpClient({ spawn: fake.spawn });
+  const sessionId = '878167fe-a74b-4c46-986b-d0f1cd0ccf71';
+  const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  const load = await waitForRequest(fake, 'session/load');
+  const child = fake.children[0].child;
+  notify(child, sessionId, { sessionUpdate: 'turn_started' }, 'desktop-turn', { isReplay: true });
+  notify(child, sessionId, {
+    sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Desktop answer finished' },
+  }, 'desktop-answer', { isReplay: true });
+  // Grok can publish fresh capability/session metadata after replaying the
+  // durable conversation. That metadata must not make the replay look live.
+  notify(child, sessionId, {
+    sessionUpdate: 'available_commands_update', availableCommands: [],
+  }, 'live-metadata');
+
+  reply(child, load.id, { _meta: { 'x.ai/sessionDetail': { title: 'Desktop chat' } } });
+  const snapshot = await loading;
+  assert.equal(snapshot.turn.active, false);
+  assert.equal(snapshot.events.at(-1).params.update.sessionUpdate, 'turn_completed');
+  await client.close();
+});
+
 test('ACP client exposes Grok slash commands from live session updates', async () => {
   const fake = harness();
   const client = createGrokAcpClient({ spawn: fake.spawn });
@@ -308,7 +332,7 @@ test('ACP client exposes and cancels an active turn through the standard session
     sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'long task' },
   });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual(client.read(sessionId).turn, { active: true, cancelRequested: false });
+  assert.deepEqual(client.read(sessionId).turn, { active: true, cancelRequested: false, changedAt: 123 });
 
   assert.deepEqual(await client.cancel({ sessionId, cwd: '/tmp/project' }), {
     accepted: true, active: true,
@@ -317,11 +341,11 @@ test('ACP client exposes and cancels an active turn through the standard session
   assert.deepEqual(cancellation, {
     jsonrpc: '2.0', method: 'session/cancel', params: { sessionId },
   });
-  assert.deepEqual(client.read(sessionId).turn, { active: true, cancelRequested: true });
+  assert.deepEqual(client.read(sessionId).turn, { active: true, cancelRequested: true, changedAt: 123 });
 
   notify(child, sessionId, { sessionUpdate: 'turn_completed', stop_reason: 'cancelled' });
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual(client.read(sessionId).turn, { active: false, cancelRequested: false });
+  assert.deepEqual(client.read(sessionId).turn, { active: false, cancelRequested: false, changedAt: 123 });
   await client.close();
 });
 

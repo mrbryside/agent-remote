@@ -212,6 +212,19 @@ test('Grok provider groups adjacent mixed tools across resolved permissions and 
   assert.deepEqual(result.items.map((item) => item.type), ['tool_group', 'thought', 'tool']);
   assert.equal(result.items[0].title, 'Ran 1 command, Edited 1 file');
   assert.deepEqual(result.items[0].tools.map((tool) => tool.toolCallId), ['shell-1', 'edit-1']);
+  const initialGroupId = result.items[0].id;
+  snapshot.events.splice(6, 0, { timestamp: 2.2, params: { update: {
+    sessionUpdate: 'tool_call', toolCallId: 'read-after-edit', title: 'Read app.js', status: 'running',
+    rawInput: { target_file: '/tmp/project/app.js' },
+    _meta: { 'x.ai/tool': { name: 'read_file', kind: 'read', label: 'Read' } },
+  } } });
+  const appended = await registry.read({
+    cwd: data.cwd, command: `grok --leader --session-id ${data.parentId}`,
+    conversationThreadId: data.parentId,
+  });
+  assert.equal(appended.items[0].id, initialGroupId,
+    'appending an adjacent tool must not remount the existing streamed group');
+  assert.equal(appended.items[0].tools.length, 3);
   assert.equal(result.items[0].tools[0].command, 'npm test -- --runInBand');
   assert.equal(result.items[1].text, 'I should verify this. The boundary matters.');
   assert.equal(result.items[1].status, 'completed');
@@ -938,6 +951,59 @@ test('Grok provider exposes turn lifecycle status without rendering lifecycle ev
   assert.equal(await registry.status(session), 'idle');
   assert.equal((await registry.read(session)).thread.status, 'idle');
   assert.deepEqual((await registry.read(session)).activity, { active: false });
+});
+
+test('Grok provider settles a desktop-originated turn from Grok persisted lifecycle', async () => {
+  const data = await fixture();
+  const snapshot = data.snapshots.get(data.parentId);
+  snapshot.turn = { active: true, cancelRequested: false, changedAt: 8_000 };
+  let lifecycle = { active: true, changedAt: 8_000 };
+  const provider = createGrokConversationProvider({
+    acpClient: data.acpClient,
+    loadLifecycle: async () => lifecycle,
+  });
+  const registry = createConversationRegistry({ providers: [provider] });
+  const session = {
+    cwd: data.cwd, command: `grok --leader --session-id ${data.parentId}`,
+    conversationThreadId: data.parentId,
+  };
+
+  assert.equal(await registry.status(session), 'working');
+  lifecycle = { active: false, changedAt: 9_000 };
+  const settled = await registry.read(session);
+  assert.equal(settled.thread.status, 'idle');
+  assert.deepEqual(settled.activity, { active: false });
+  assert.equal(await registry.status(session), 'idle');
+
+  lifecycle = { active: false, changedAt: 7_000 };
+  assert.equal(await registry.status(session), 'working',
+    'an older persisted boundary must not override a newer live turn');
+});
+
+test('Grok provider stream polls an active persisted turn until the desktop boundary settles', async () => {
+  const data = await fixture();
+  data.snapshots.get(data.parentId).turn = { active: true, cancelRequested: false, changedAt: 8_000 };
+  let lifecycle = { active: true, changedAt: 8_000 };
+  const provider = createGrokConversationProvider({
+    acpClient: data.acpClient,
+    loadLifecycle: async () => lifecycle,
+  });
+  const session = {
+    cwd: data.cwd, command: `grok --leader --session-id ${data.parentId}`,
+    conversationThreadId: data.parentId,
+  };
+  const handle = await provider.detect(session);
+  const updates = [];
+  const stop = await provider.watch(handle, {}, (conversation) => updates.push(conversation));
+  assert.equal(updates.at(-1).activity.active, true);
+
+  lifecycle = { active: false, changedAt: 9_000 };
+  const deadline = Date.now() + 1_000;
+  while (updates.at(-1)?.activity?.active !== false && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(updates.at(-1).activity.active, false);
+  await stop();
 });
 
 test('Grok provider exposes advertised models, context usage, and changes the root model', async () => {

@@ -1930,16 +1930,22 @@ function selectedSession() {
   return sessions.find((session) => session.name === activeSession);
 }
 
+function sessionUsesNativeConversation(session) {
+  if (!session) return false;
+  const project = projects.find((item) => item.id === session.projectId);
+  return Boolean(session.nativeConversation || session.conversationThreadId ||
+    agents.find((agent) => agent.id === project?.agentId)?.providerId === 'grok');
+}
+
 function showSessionLoading(session, copy = 'Opening the project folder and starting its command.') {
   const project = projects.find((item) => item.id === session?.projectId);
-  const nativeGrok = Boolean(session?.nativeConversation || session?.conversationThreadId ||
-    agents.find((agent) => agent.id === project?.agentId)?.providerId === 'grok');
+  const nativeGrok = sessionUsesNativeConversation(session);
   sessionLoading.dataset.native = String(nativeGrok);
   sessionLoadingKicker.textContent = nativeGrok ? '' : project?.name || 'Starting chat';
-  // Grok launches behind one uninterrupted neutral cover. Copy changes were
-  // readable as a Connecting/Opening flash even though the raw terminal never
-  // leaked, so native conversations intentionally show only the spinner.
-  sessionLoadingTitle.textContent = nativeGrok ? '' : 'Opening terminal…';
+  // Grok launches behind one uninterrupted, stable cover. Keep the same copy
+  // from optimistic creation through ACP readiness so no intermediate
+  // Connecting/Opening state is visible.
+  sessionLoadingTitle.textContent = nativeGrok ? 'Preparing chat…' : 'Opening terminal…';
   sessionLoadingCopy.textContent = nativeGrok ? '' : copy;
   sessionLoading.hidden = false;
 }
@@ -1988,7 +1994,9 @@ function setView() {
   const isPending = Boolean(session?.pending);
   const hasSession = Boolean(session && !isPending);
   if (isPending && session.nativeConversation) mobileConversation.showPending(session.name);
-  else mobileConversation.select(hasSession ? session.name : null);
+  else mobileConversation.select(hasSession ? session.name : null, {
+    expected: hasSession && sessionUsesNativeConversation(session),
+  });
   const showMobileConversation = Boolean(session && mobileConversation.isVisibleFor(session.name));
   workspace.dataset.view = isPending ? 'loading' : hasSession ? 'terminal' : 'empty';
   terminalElement.hidden = !hasSession || showMobileConversation;
