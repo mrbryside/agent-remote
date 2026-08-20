@@ -511,6 +511,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('#mobile-conversation-boot')).toBeHidden();
   await expect(conversation.locator('.mobile-conversation-loading')).toHaveCount(0, { timeout: 8_000 });
   await expect(conversation.locator('.mobile-message')).toHaveCount(18);
+  await expect(conversation.locator('.mobile-message-assistant .mobile-message-author')).toHaveCount(0);
+  await expect(conversation.locator('.mobile-message-user .mobile-message-author').first()).toHaveText('You');
   await expect(messages).toHaveCSS('scroll-behavior', 'auto');
   await expect.poll(() => messages.evaluate((element) =>
     element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(1);

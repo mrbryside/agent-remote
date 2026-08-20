@@ -2183,16 +2183,18 @@ export function createMobileConversationView({
     if (item.type === 'message') {
       const article = element('article', `mobile-message mobile-message-${item.role}`);
       article.dataset.messageId = item.id;
-      const author = item.role === 'user'
-        ? item.pendingStatus === 'sending' ? 'Sending…'
-          : item.pendingStatus === 'accepted' ? 'Waiting for Grok…' : 'You'
-        : conversation.provider.label;
-      article.append(
-        element('span', 'mobile-message-author', author),
-        item.role === 'assistant'
-          ? markdownNode(item.text, { onFileReference: (reference) => void openFileReference(reference) })
-          : element('div', 'mobile-message-content', item.text),
-      );
+      if (item.role === 'user') {
+        const author = item.pendingStatus === 'sending' ? 'Sending…'
+          : item.pendingStatus === 'accepted' ? 'Waiting for Grok…' : 'You';
+        article.append(
+          element('span', 'mobile-message-author', author),
+          element('div', 'mobile-message-content', item.text),
+        );
+      } else {
+        article.append(markdownNode(item.text, {
+          onFileReference: (reference) => void openFileReference(reference),
+        }));
+      }
       return article;
     }
     if (item.type === 'tool_group') return toolGroupNode(item);
