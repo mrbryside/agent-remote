@@ -1192,13 +1192,117 @@ export function createGrokConversationProvider({
     };
   }
 
+  function liveConversation(handle, options, snapshot, previous) {
+    const threadId = options?.threadId || handle.rootThreadId;
+    const parsed = timeline(snapshot.events, { turnActive: snapshot.turn?.active });
+    const active = snapshot.turn?.active ?? parsed.status === 'working';
+    const cancelRequested = snapshot.turn?.cancelRequested === true;
+    const detail = snapshot.metadata?._meta?.['x.ai/sessionDetail'] || {};
+    const isRoot = threadId === handle.rootThreadId;
+    const model = isRoot ? modelControls(snapshot.metadata) : undefined;
+    const controls = isRoot ? {
+      ...(model ? { model } : {}),
+      ...(snapshot.controls?.mode ? { mode: snapshot.controls.mode } : {}),
+      ...(snapshot.controls?.commands ? { commands: snapshot.controls.commands } : {}),
+    } : undefined;
+    const activity = active ? {
+      active: true,
+      phase: cancelRequested ? 'stopping' : parsed.activity?.phase || 'waiting',
+      label: cancelRequested ? 'Stopping…' : parsed.activity?.label || 'Waiting for response…',
+      canCancel: true,
+      cancelRequested,
+    } : { active: false };
+    const children = parsed.children.map((child) => ({
+      id: child.threadId,
+      title: child.title,
+      agentName: child.role,
+      status: child.status,
+    }));
+    return {
+      thread: {
+        id: threadId,
+        title: shortText(detail.title, detail.kind || 'Grok'),
+        agentName: shortText(detail.kind, 'grok', 80),
+        model: shortText(detail.currentModelId || snapshot.metadata?.models?.currentModelId, '', 80),
+        status: active ? 'working' : active === false ? 'idle' : parsed.status,
+      },
+      items: parsed.items.map((item) => item.type === 'plan_review' ? { ...item, threadId } : item),
+      children,
+      recap: parsed.recap,
+      ...(isRoot && controls && Object.keys(controls).length ? { controls } : {}),
+      ...(isRoot ? { queue: snapshot.queue || [] } : {}),
+      ...(isRoot && previous?.context ? { context: previous.context } : {}),
+      activity,
+      parent: isRoot ? null : previous?.parent ?? null,
+      rootThreadId: handle.rootThreadId,
+      capabilities: { send: isRoot, children: children.length > 0 },
+    };
+  }
+
+  function appendLiveAgentChunk(previous, snapshot, delta) {
+    if (!delta) return previous;
+    const items = previous.items.slice();
+    const last = items.at(-1);
+    if (last?.type === 'message' && last.role === 'assistant') {
+      items[items.length - 1] = { ...last, text: `${last.text}${delta}` };
+    } else {
+      const index = Math.max(0, (snapshot.events?.length || 1) - 1);
+      items.push({
+        id: `assistant-${index}`, type: 'message', role: 'assistant', text: delta,
+        timestamp: snapshot.events?.at(-1)?.timestamp,
+      });
+    }
+    return {
+      ...previous,
+      items,
+      thread: { ...previous.thread, status: 'working' },
+      activity: {
+        active: true, phase: 'responding', label: 'Responding…', canCancel: true,
+        cancelRequested: false,
+      },
+    };
+  }
+
+  function completeLiveTurn(previous) {
+    const settle = (item) => {
+      if (item.type === 'thought' && item.status === 'working') return { ...item, status: 'completed' };
+      if (item.type === 'tool' && !['completed', 'failed', 'cancelled'].includes(item.status)) {
+        return { ...item, status: 'completed' };
+      }
+      if (item.type === 'tool_group') {
+        const tools = item.tools.map(settle);
+        const status = tools.some((tool) => tool.status === 'failed') ? 'failed'
+          : tools.some((tool) => tool.status === 'cancelled') ? 'cancelled' : 'completed';
+        return { ...item, tools, status };
+      }
+      return item;
+    };
+    return {
+      ...previous,
+      items: previous.items.map(settle),
+      thread: { ...previous.thread, status: 'idle' },
+      activity: { active: false },
+    };
+  }
+
   async function watchConversation(handle, options, listener) {
     let stopped = false;
     let timer;
     let revision = 0;
     let publishing = false;
     let rerun = false;
+    let latestConversation;
+    let latestSignature;
     const subscriptions = new Map();
+    const selectedThreadId = options?.threadId || handle.rootThreadId;
+
+    const emit = (conversation, stream) => {
+      const signature = JSON.stringify(conversation);
+      if (!stream && signature === latestSignature) return;
+      latestConversation = conversation;
+      latestSignature = signature;
+      listener(conversation, stream);
+    };
 
     const requestPublish = (delay = 20) => {
       revision += 1;
@@ -1209,7 +1313,39 @@ export function createGrokConversationProvider({
     const arm = (ids) => {
       for (const id of ids) {
         if (subscriptions.has(id)) continue;
-        subscriptions.set(id, acpClient.watch(id, () => requestPublish()));
+        subscriptions.set(id, acpClient.watch(id, (snapshot) => {
+          revision += 1;
+          clearTimeout(timer);
+          if (id !== selectedThreadId || !snapshot || !latestConversation) {
+            requestPublish(0);
+            return;
+          }
+          // ACP already owns an in-memory, append-only event stream. Rebuild
+          // the selected timeline synchronously from that snapshot instead of
+          // re-reading session files, lifecycle files, child graphs, and
+          // context signals for every model token. This also publishes
+          // turn_completed before a slower filesystem poll can leave mobile
+          // stuck on Responding.
+          const update = snapshot.events?.at(-1)?.params?.update;
+          const delta = update?.sessionUpdate === 'agent_message_chunk'
+            ? textContent(update.content) : '';
+          // Agent text is the hot path. Mutate the provider-neutral snapshot
+          // by the exact ACP suffix so cost stays O(chunk), not O(history),
+          // even after a long conversation. Other event kinds still rebuild
+          // the in-memory timeline because they can alter grouping/lifecycle.
+          const conversation = delta
+            ? appendLiveAgentChunk(latestConversation, snapshot, delta)
+            : update?.sessionUpdate === 'turn_completed'
+              ? completeLiveTurn(latestConversation)
+              : liveConversation(handle, options, snapshot, latestConversation);
+          const stream = update?.sessionUpdate === 'agent_message_chunk'
+            ? { kind: 'agent_message_chunk', delta }
+            : update?.sessionUpdate ? { kind: update.sessionUpdate } : undefined;
+          emit(conversation, stream);
+          if (conversation.activity?.active) {
+            timer = setTimeout(() => requestPublish(0), 250);
+          }
+        }));
       }
     };
     const publish = async () => {
@@ -1235,7 +1371,7 @@ export function createGrokConversationProvider({
               rerun = true;
               continue;
             }
-            listener(conversation);
+            emit(conversation);
             if (conversation.activity?.active) {
               clearTimeout(timer);
               timer = setTimeout(() => requestPublish(0), 250);

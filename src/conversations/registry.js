@@ -29,11 +29,12 @@ export function createConversationRegistry({ providers = [] } = {}) {
     async watch(session, options = {}, listener) {
       const resolved = await resolve(session);
       if (!resolved?.provider.watch) throw new Error('This conversation provider does not support streaming');
-      return resolved.provider.watch(resolved.handle, options, (payload) => listener({
+      return resolved.provider.watch(resolved.handle, options, (payload, stream) => listener({
         conversation: {
           provider: { id: resolved.provider.id, label: resolved.provider.label },
           ...payload,
         },
+        ...(stream ? { stream } : {}),
       }));
     },
 

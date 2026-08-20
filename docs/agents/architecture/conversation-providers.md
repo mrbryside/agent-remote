@@ -270,23 +270,34 @@ graph.
 
 After the initial HTTP read, `/api/conversations/:session/stream` publishes the
 provider-neutral snapshots over SSE. Provider watchers are released when the
-browser disconnects or the server stops. Grok snapshot reads are serialized and
-revision-checked: an ACP update received during a graph read invalidates that
-read and rebuilds it before publishing. A slow active-turn snapshot therefore
-cannot overwrite a newer completed-turn snapshot. Root snapshots also publish
-without hydrating child sessions; a slow or unavailable child can never delay
-the main agent's `turn_completed`, activity indicator, or Send/Stop state.
-Assistant text is painted immediately
-from those provider chunks; the browser does not add a synthetic typewriter
-delay after a chunk arrives. The mobile renderer keeps timeline nodes keyed by
-message/event id and reconciles the changing contents in place. A tool batch is
+browser disconnects or the server stops. Every live ACP notification for the
+selected thread is translated synchronously from the client's in-memory event
+snapshot and written to SSE immediately; it does not wait for the filesystem
+poll, child graph hydration, an animation-frame batch, or a synthetic
+typewriter timer. Agent-message updates use the exact ACP suffix, keeping the
+provider hot path O(chunk) rather than reparsing the complete session history.
+The slower persisted-session read remains a 250 ms fallback
+for desktop-originated lifecycle boundaries that some Grok versions omit from
+ACP. Those full reads are serialized and revision-checked: an ACP update
+received during a read invalidates that read and rebuilds it before publishing.
+A slow active-turn snapshot therefore cannot overwrite a newer completed-turn
+snapshot. Root snapshots also publish without hydrating child sessions; a slow
+or unavailable child can never delay the main agent's `turn_completed`,
+activity indicator, or Send/Stop state.
+
+The mobile renderer keeps timeline nodes keyed by message/event id and
+reconciles changing contents in place. While the last assistant message is
+active, each SSE chunk appends only its new suffix to the existing text node;
+it does not replace the article or the existing code viewport. A newly opened
+or closed fenced block is reparsed once at that structural boundary; code
+inside an open fence then appends in place so it remains scrollable. When `turn_completed`
+arrives, that one message is rendered once as sanitized Markdown and the
+Responding/Stop state clears in the same update. A tool batch is
 identified by its first tool call, so appending later adjacent tools never
 changes the group key. Unchanged item fingerprints skip DOM work entirely;
 existing nested details, scroll positions, compositor layers, tool-group and
 event toggles retain identity while output streams, so a touch cannot lose its
-click target between pointer down and click. Incoming SSE
-snapshots are latest-wins within one animation frame instead of forcing a full
-history detach for every chunk. Opening or switching a root conversation places
+click target between pointer down and click. Opening or switching a root conversation places
 the message viewport at its latest item synchronously, with no smooth initial
 scroll animation. Later stream updates follow the tail only while the reader
 is already there. Scrolling up reveals a jump-to-latest control; that explicit
@@ -304,8 +315,8 @@ metadata rather than a conversation timeline item. The mobile view validates
 the command shape, opens the existing session-keyed graphics renderer, and
 publishes Browser availability into the shared Browser/Plan/Subagents activity dock.
 
-Assistant message text is reparsed on each snapshot as GitHub-flavored Markdown
-with the locally bundled Marked runtime. Its HTML output must pass through
+Completed assistant message text is parsed as GitHub-flavored Markdown with the
+locally bundled Marked runtime. Its HTML output must pass through
 DOMPurify's HTML-only profile before entering the DOM; raw forms and styling are
 forbidden, unsafe URLs are removed, external links receive `noopener noreferrer`,
 and remote images omit referrers. Code blocks and tables get bounded scroll

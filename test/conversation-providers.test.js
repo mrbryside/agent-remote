@@ -743,6 +743,44 @@ test('Grok provider streams file changes through the provider-neutral registry',
   assert.equal(updates.at(-1).conversation.provider.id, 'grok');
 });
 
+test('Grok provider publishes every live agent chunk and completion synchronously', async () => {
+  const data = await fixture();
+  const registry = createConversationRegistry({
+    providers: [createGrokConversationProvider({ acpClient: data.acpClient })],
+  });
+  const session = {
+    name: 'ar-chat', cwd: data.cwd,
+    command: `grok --leader --session-id ${data.parentId}`, conversationThreadId: data.parentId,
+  };
+  const updates = [];
+  const stop = await registry.watch(session, {}, (event) => updates.push(event));
+  const root = data.snapshots.get(data.parentId);
+  root.turn = { active: true, cancelRequested: false, changedAt: 8_000 };
+  const before = updates.length;
+  for (const [offset, text] of ['A', 'B', 'C'].entries()) {
+    data.acpClient.append(data.parentId, { timestamp: 8 + offset, params: { update: {
+      sessionUpdate: 'agent_message_chunk', content: { type: 'text', text },
+    } } });
+  }
+  const chunks = updates.slice(before);
+  assert.equal(chunks.length, 3, 'no provider timer may collapse live chunks');
+  assert.deepEqual(chunks.map((event) => event.stream), [
+    { kind: 'agent_message_chunk', delta: 'A' },
+    { kind: 'agent_message_chunk', delta: 'B' },
+    { kind: 'agent_message_chunk', delta: 'C' },
+  ]);
+  assert.deepEqual(chunks.map((event) => event.conversation.items.at(-1).text), ['A', 'AB', 'ABC']);
+
+  root.turn = { active: false, cancelRequested: false, changedAt: 12_000 };
+  data.acpClient.append(data.parentId, { timestamp: 12, params: { update: {
+    sessionUpdate: 'turn_completed', stop_reason: 'end_turn',
+  } } });
+  assert.equal(updates.at(-1).stream.kind, 'turn_completed');
+  assert.equal(updates.at(-1).conversation.activity.active, false);
+  assert.equal(updates.at(-1).conversation.thread.status, 'idle');
+  await stop();
+});
+
 test('Grok provider never lets a slow active snapshot overwrite a completed turn', async () => {
   const data = await fixture();
   const provider = createGrokConversationProvider({ acpClient: data.acpClient });
@@ -789,7 +827,13 @@ test('Grok provider never lets a slow active snapshot overwrite a completed turn
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   await new Promise((resolve) => setTimeout(resolve, 80));
-  assert.deepEqual(updates.slice(1).map((event) => event.conversation.thread.status), ['idle']);
+  const firstWorking = updates.findIndex((event) => event.conversation.thread.status === 'working');
+  const firstIdle = updates.findIndex(
+    (event, index) => index > firstWorking && event.conversation.thread.status === 'idle',
+  );
+  assert.notEqual(firstWorking, -1);
+  assert.notEqual(firstIdle, -1);
+  assert.ok(updates.slice(firstIdle).every((event) => event.conversation.thread.status === 'idle'));
   assert.deepEqual(updates.at(-1).conversation.activity, { active: false });
   await stop();
 });

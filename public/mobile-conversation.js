@@ -129,8 +129,6 @@ export function createMobileConversationView({
   let streamPointerActive = false;
   let deferredStreamRender;
   let deferredStreamRenderTimer;
-  let streamRenderFrame;
-  let scheduledStreamConversation;
   let fileSheet;
   let fileSheetPanel;
   let fileSheetTitle;
@@ -569,20 +567,81 @@ export function createMobileConversationView({
     eventSource?.close();
     eventSource = undefined;
     streamKey = '';
-    scheduledStreamConversation = undefined;
-    if (streamRenderFrame) cancelAnimationFrame(streamRenderFrame);
-    streamRenderFrame = undefined;
   }
 
-  function scheduleStreamRender(conversation) {
-    scheduledStreamConversation = conversation;
-    if (streamRenderFrame) return;
-    streamRenderFrame = requestAnimationFrame(() => {
-      streamRenderFrame = undefined;
-      const latest = scheduledStreamConversation;
-      scheduledStreamConversation = undefined;
-      if (latest) render(latest, { animate: true, fromStream: true });
-    });
+  function streamingAssistant(conversation) {
+    if (conversation?.activity?.active !== true) return undefined;
+    return [...(conversation.items || [])].reverse().find(
+      (item) => item.type === 'message' && item.role === 'assistant',
+    );
+  }
+
+  function fenceCount(text) {
+    return (String(text || '').match(/^(?:```|~~~)/gm) || []).length;
+  }
+
+  function appendStreamingMarkdown(content, nextText) {
+    const previousText = content?.__mobileRawText;
+    if (!content || typeof previousText !== 'string' || !nextText.startsWith(previousText)) return undefined;
+    const suffix = nextText.slice(previousText.length);
+    if (!suffix) return content;
+    const previousFences = fenceCount(previousText);
+    const nextFences = fenceCount(nextText);
+    const previousLastLine = previousText.slice(previousText.lastIndexOf('\n') + 1);
+    const openingFenceCompleted = previousFences % 2 === 1 &&
+      /^(?:```|~~~)/.test(previousLastLine) && suffix.includes('\n');
+    if (previousFences !== nextFences || openingFenceCompleted) {
+      const fresh = markdownNode(nextText, {
+        onFileReference: (reference) => void openFileReference(reference),
+      });
+      fresh.dataset.streaming = 'true';
+      fresh.__mobileRawText = nextText;
+      content.replaceWith(fresh);
+      return fresh;
+    }
+    const openCode = nextFences % 2 === 1 ? content.querySelector('pre code') : undefined;
+    if (openCode) {
+      openCode.append(document.createTextNode(suffix));
+    } else {
+      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+      let lastText;
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) lastText = node;
+      if (lastText) lastText.data += suffix;
+      else content.append(document.createTextNode(suffix));
+    }
+    content.__mobileRawText = nextText;
+    return content;
+  }
+
+  function applyStreamTextDelta(conversation, stream) {
+    if (stream?.kind !== 'agent_message_chunk' || !lastConversation ||
+        lastConversation.thread?.id !== conversation.thread?.id) return false;
+    const next = streamingAssistant(conversation);
+    const previous = (lastConversation.items || []).find((item) => item.id === next?.id);
+    if (!next || !previous || typeof next.text !== 'string' ||
+        typeof previous.text !== 'string' || !next.text.startsWith(previous.text)) return false;
+    const suffix = next.text.slice(previous.text.length);
+    if (!suffix) return false;
+    const isRoot = !conversation.parent && conversation.thread.id === rootThreadId;
+    const targetMessages = isRoot ? messages : sheetMessages || messages;
+    const article = [...targetMessages.querySelectorAll('.mobile-message')]
+      .find((node) => node.dataset.messageId === next.id);
+    const content = article?.querySelector(':scope > .mobile-message-content[data-streaming="true"]');
+    if (!content || content.__mobileRawText !== previous.text) return false;
+
+    const atBottom = distanceFromBottom(targetMessages) <= 1;
+    appendStreamingMarkdown(content, next.text);
+    lastConversation = conversation;
+    if (isRoot) {
+      rootConversation = conversation;
+      state.textContent = statusLabel(conversation.thread.status);
+      state.dataset.state = conversation.thread.status;
+      onStatusChange(sessionName, conversation.thread.status);
+      updateComposerAction();
+    }
+    if (atBottom) targetMessages.scrollTop = targetMessages.scrollHeight;
+    if (isRoot) updateJumpToLatest();
+    return true;
   }
 
   function subagentState(item) {
@@ -958,7 +1017,9 @@ export function createMobileConversationView({
         const payload = JSON.parse(event.data);
         if (payload.conversation?.thread?.id !== threadId) return;
         providerId = payload.conversation.provider.id;
-        scheduleStreamRender(payload.conversation);
+        if (!applyStreamTextDelta(payload.conversation, payload.stream)) {
+          render(payload.conversation, { animate: true, fromStream: true });
+        }
       } catch {
         schedule();
       }
@@ -2260,9 +2321,20 @@ export function createMobileConversationView({
           element('div', 'mobile-message-content', item.text),
         );
       } else {
-        article.append(markdownNode(item.text, {
-          onFileReference: (reference) => void openFileReference(reference),
-        }));
+        const streaming = streamingAssistant(conversation)?.id === item.id;
+        if (streaming) {
+          const content = markdownNode(item.text, {
+            onFileReference: (reference) => void openFileReference(reference),
+          });
+          content.dataset.streaming = 'true';
+          content.__mobileRawText = item.text;
+          article.dataset.streaming = 'true';
+          article.append(content);
+        } else {
+          article.append(markdownNode(item.text, {
+            onFileReference: (reference) => void openFileReference(reference),
+          }));
+        }
       }
       return article;
     }
@@ -2363,7 +2435,16 @@ export function createMobileConversationView({
         node = syncEventCard(current, fresh);
       } else if (current && current.matches('.mobile-message') && fresh.matches('.mobile-message')) {
         syncAttributes(current, fresh);
-        current.replaceChildren(...fresh.childNodes);
+        const currentContent = current.querySelector(':scope > .mobile-message-content[data-streaming="true"]');
+        const freshContent = fresh.querySelector(':scope > .mobile-message-content[data-streaming="true"]');
+        const previousText = currentContent?.__mobileRawText;
+        const nextText = freshContent?.__mobileRawText;
+        if (currentContent && freshContent && typeof previousText === 'string' &&
+            typeof nextText === 'string' && nextText.startsWith(previousText)) {
+          appendStreamingMarkdown(currentContent, nextText);
+        } else {
+          current.replaceChildren(...fresh.childNodes);
+        }
         node = current;
       }
       if (node === current) node.__mobileItemSignature = fresh.__mobileItemSignature;
@@ -2911,7 +2992,6 @@ export function createMobileConversationView({
       clearTimeout(refreshTimer);
       clearTimeout(pendingAcceptanceTimer);
       clearTimeout(deferredStreamRenderTimer);
-      if (streamRenderFrame) cancelAnimationFrame(streamRenderFrame);
       closeStream();
       document.removeEventListener('pointerdown', dismissModelList);
       root.removeEventListener('pointerdown', beginStreamInteraction, true);

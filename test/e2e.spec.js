@@ -1078,6 +1078,91 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(streamedMessage.locator('.mobile-message-content')).toHaveText(streamText);
   await expect(streamedMessage).not.toHaveAttribute('data-streaming', 'true');
 
+  currentActivity = { active: true, phase: 'responding', label: 'Responding…' };
+  rootItems.push({ id: 'assistant-live-token', type: 'message', role: 'assistant', text: 'Token' });
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation, stream: {
+        kind: 'agent_message_chunk', delta: 'Token',
+      } }),
+    });
+  }, rootConversation());
+  const liveTokenMessage = conversation.locator('[data-message-id="assistant-live-token"]');
+  await expect(liveTokenMessage).toHaveAttribute('data-streaming', 'true');
+  await page.evaluate(() => {
+    window.__liveTokenContent = document.querySelector(
+      '[data-message-id="assistant-live-token"] > .mobile-message-content',
+    );
+  });
+  for (const delta of [' by', ' token']) {
+    const item = rootItems.find((entry) => entry.id === 'assistant-live-token');
+    item.text += delta;
+    await page.evaluate(({ nextConversation, delta: nextDelta }) => {
+      window.__conversationStreams.at(-1).emit('conversation', {
+        data: JSON.stringify({ conversation: nextConversation, stream: {
+          kind: 'agent_message_chunk', delta: nextDelta,
+        } }),
+      });
+    }, { nextConversation: rootConversation(), delta });
+  }
+  await expect(liveTokenMessage.locator('.mobile-message-content')).toHaveText('Token by token');
+  expect(await page.evaluate(() => window.__liveTokenContent.isSameNode(document.querySelector(
+    '[data-message-id="assistant-live-token"] > .mobile-message-content',
+  )))).toBe(true);
+
+  currentActivity = { active: false };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation, stream: { kind: 'turn_completed' } }),
+    });
+  }, rootConversation());
+  await expect(liveTokenMessage).not.toHaveAttribute('data-streaming', 'true');
+  await expect(liveTokenMessage.locator('.mobile-markdown')).toHaveText('Token by token');
+  await expect(conversation.locator('#mobile-conversation-activity')).toBeHidden();
+  await expect(conversation.locator('#mobile-conversation-send')).toHaveAttribute('data-action', 'send');
+
+  currentActivity = { active: true, phase: 'responding', label: 'Responding…' };
+  const liveCodeItem = {
+    id: 'assistant-live-code', type: 'message', role: 'assistant',
+    text: `\`\`\`js\nconst value = "${'wide '.repeat(40)}";`,
+  };
+  rootItems.push(liveCodeItem);
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation, stream: {
+        kind: 'agent_message_chunk', delta: nextConversation.items.at(-1).text,
+      } }),
+    });
+  }, rootConversation());
+  const liveCodeMessage = conversation.locator('[data-message-id="assistant-live-code"]');
+  const liveCodePre = liveCodeMessage.locator('pre');
+  await liveCodePre.evaluate((node) => {
+    node.scrollLeft = 72;
+    window.__liveCodePre = node;
+  });
+  liveCodeItem.text += '\nconsole.log(value);';
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation, stream: {
+        kind: 'agent_message_chunk', delta: '\nconsole.log(value);',
+      } }),
+    });
+  }, rootConversation());
+  expect(await page.evaluate(() => window.__liveCodePre.isSameNode(document.querySelector(
+    '[data-message-id="assistant-live-code"] pre',
+  )))).toBe(true);
+  expect(await liveCodePre.evaluate((node) => node.scrollLeft)).toBeGreaterThan(0);
+  await expect(liveCodePre).toContainText('console.log(value);');
+
+  liveCodeItem.text += '\n```';
+  currentActivity = { active: false };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation, stream: { kind: 'turn_completed' } }),
+    });
+  }, rootConversation());
+  await expect(liveCodeMessage).not.toHaveAttribute('data-streaming', 'true');
+
   const streamedCode = {
     id: 'assistant-code-stream', type: 'message', role: 'assistant',
     text: `\`\`\`js\n${Array.from({ length: 50 }, (_, index) =>

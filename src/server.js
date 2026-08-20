@@ -1976,6 +1976,7 @@ export function createTerminalServer(options = {}) {
             'x-content-type-options': 'nosniff',
           });
           response.flushHeaders?.();
+          response.socket?.setNoDelay?.(true);
           let stopWatching = async () => {};
           let closed = false;
           const close = async () => {
@@ -2002,6 +2003,7 @@ export function createTerminalServer(options = {}) {
             stopWatching = await conversationRegistry.watch(session, { threadId }, (event) => {
               if (!closed && !response.writableEnded) {
                 response.write(`event: conversation\ndata: ${JSON.stringify(event)}\n\n`);
+                response.flush?.();
               }
             });
             if (closed) await stopWatching();
