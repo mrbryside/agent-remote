@@ -225,7 +225,9 @@ sections are never split into separate cards. Shell commands use that same
 surface while preserving whitespace and two-axis scrolling. Edit results
 similarly render only the compact unified diff—with line numbers, green
 additions, red removals, colored add/remove counts, bounded context, and
-independent two-axis scrolling.
+independent two-axis scrolling. Write and Edit share that renderer: each source
+line is one non-wrapping row with one relevant line-number column and a separate
+`+`/`−` marker, so narrow screens scroll horizontally instead of wrapping code.
 
 Tool groups, their child tools, standalone tools, and thoughts share one
 content-height disclosure animation. It measures the rendered panel and

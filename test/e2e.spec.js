@@ -1116,7 +1116,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(1);
 
   rootItems.push({
-    id: 'tool-single-root', type: 'tool', title: 'Edited standalone.js', kind: 'edit', status: 'completed',
+    id: 'tool-single-root', type: 'tool', title: 'Wrote standalone.js', kind: 'write', status: 'completed',
     diffs: [{ path: 'standalone.js', oldText: 'const state = "old";\n', newText: 'const state = "ready";\n' }],
   });
   await page.evaluate((nextConversation) => {
@@ -1273,6 +1273,17 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(editCard.locator('.mobile-event-change-line[data-kind="add"]')).toContainText('const status = "ready";');
   await expect(editCard.locator('.mobile-event-change-line[data-kind="add"] .hljs-keyword')).toHaveText('const');
   await expect(editCard.locator('.mobile-event-change-line[data-kind="add"] .hljs-string')).toHaveText('"ready"');
+  await expect.poll(() => editCard.locator('.mobile-event-change-line[data-kind="add"]').evaluate((row) => ({
+    columns: row.children.length,
+    lineNumber: row.children[0].textContent,
+    marker: row.children[1].textContent,
+    whiteSpace: getComputedStyle(row.children[2]).whiteSpace,
+  }))).toEqual({ columns: 3, lineNumber: '1', marker: '+', whiteSpace: 'pre' });
+  await expect.poll(() => editCard.locator('.mobile-event-change-line[data-kind="remove"]').evaluate((row) => ({
+    columns: row.children.length,
+    lineNumber: row.children[0].textContent,
+    marker: row.children[1].textContent,
+  }))).toEqual({ columns: 3, lineNumber: '1', marker: '−' });
   await expect.poll(() => editCard.locator('.mobile-event-change').evaluate((node) => {
     const added = node.querySelector('[data-kind="add"]');
     const removed = node.querySelector('[data-kind="remove"]');

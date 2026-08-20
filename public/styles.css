@@ -555,7 +555,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-event-change-stats [data-kind="remove"] { color: var(--color-diff-remove); }
   .mobile-event-change-scroll { max-height: min(38dvh, 300px); min-width: 0; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   .mobile-event-change-lines { display: grid; min-width: 100%; width: max-content; padding-block: 4px; }
-  .mobile-event-change-line { display: grid; grid-template-columns: 32px 32px 16px minmax(max-content, 1fr); min-width: 100%; color: var(--color-text-secondary); font: 10px/1.55 var(--font-family-mono); }
+  .mobile-event-change-line { display: grid; grid-template-columns: 42px 16px minmax(max-content, 1fr); min-width: 100%; align-items: baseline; color: var(--color-text-secondary); font: 10px/1.55 var(--font-family-mono); }
   .mobile-event-change-line > span { padding-inline: 5px; color: var(--color-text-muted); text-align: right; user-select: none; }
   .mobile-event-change-line > i { color: var(--color-text-muted); font-style: normal; text-align: center; user-select: none; }
   .mobile-event-change-line > code { padding-right: 12px; color: inherit; font: inherit; white-space: pre; }

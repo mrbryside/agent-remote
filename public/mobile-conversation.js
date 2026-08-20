@@ -1149,8 +1149,7 @@ export function createMobileConversationView({
     const row = element('div', 'mobile-event-change-line');
     row.dataset.kind = kind;
     row.append(
-      element('span', '', oldNumber || ''),
-      element('span', '', newNumber || ''),
+      element('span', '', kind === 'remove' ? oldNumber || '' : newNumber || oldNumber || ''),
       element('i', '', kind === 'add' ? '+' : kind === 'remove' ? '−' : ' '),
       highlightCodeNode(element('code'), text, language),
     );
