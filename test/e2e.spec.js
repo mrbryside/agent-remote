@@ -827,7 +827,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       bottom: Math.round(innerHeight - box.bottom),
       slidesFromBelow: Boolean(firstFrame?.style.transform && firstFrame.style.transform !== 'none'),
     };
-  })).toEqual({ height: 591, bottom: 0, slidesFromBelow: true });
+  })).toEqual({ height: 675, bottom: 0, slidesFromBelow: true });
   await conversation.locator('.mobile-subagent-sheet-browser').click();
   await expect(conversation.locator('.mobile-subagent-sheet')).toBeHidden();
   await expect(page.locator('#graphics-split')).toBeVisible();
@@ -1453,7 +1453,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const box = await handle.boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 120);
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 120, { steps: 4 });
   await page.mouse.up();
   await expect(sheet).toBeHidden();
   await expect(page.locator('#terminal')).toBeHidden();

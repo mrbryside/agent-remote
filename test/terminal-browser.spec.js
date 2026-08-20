@@ -468,7 +468,7 @@ test('agent terminal-browser command opens a rendered web split on the right', a
         bottom: Math.round(844 - box.y - box.height),
         slidesFromBelow: animation,
       };
-    }).toEqual({ height: 591, bottom: 0, slidesFromBelow: true });
+    }).toEqual({ height: 675, bottom: 0, slidesFromBelow: true });
     const handle = await page.locator('#graphics-sheet-handle').boundingBox();
     await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
     await page.mouse.down();
