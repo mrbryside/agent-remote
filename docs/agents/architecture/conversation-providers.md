@@ -38,14 +38,20 @@ so HTTP can acknowledge a mobile submission immediately while Grok completes
 the preceding turn. The ACP client owns this pre-send queue because Grok's
 shared pager queue mutations are not exposed to a generic ACP client. Queue
 rows are therefore still removable before delivery; `Steer` removes one row
-and sends the real `_x.ai/interject` request to the active turn. A
+and sends the real `_x.ai/interject` request to the active turn. Grok does not
+echo that interjection as a user-message update, so the ACP client inserts one
+local `user_message_chunk` boundary using the queue row's display text. If the
+RPC fails it removes the boundary and restores the row atomically. This keeps
+the steered prompt visible in history and prevents later assistant chunks from
+joining the preceding response or its Markdown code fence. A
 `turn_completed` update drains the next row. No tmux cursor state, focus key,
 `send-keys`, or concurrent headless resume process participates in native
 input.
 
 Queue order is provider-owned state rather than a browser-only arrangement.
-Mobile queue rows expose full-size Steer/Delete actions plus a pointer and
-keyboard reorder handle. A drop posts the complete ordered id set; the ACP
+Mobile queue rows stay one compact, ellipsized line while preserving 44px
+Steer/Delete targets plus a pointer and keyboard reorder handle. Attachments
+collapse to a file count instead of increasing row height. A drop posts the complete ordered id set; the ACP
 client applies it atomically only when it still matches the current pending
 queue, otherwise the browser rolls back with the same layout animation. This
 prevents a concurrent drain or steer from silently reordering the wrong prompt.

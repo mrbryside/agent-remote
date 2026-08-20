@@ -1020,6 +1020,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }, rootConversation());
   const queuedRows = conversation.locator('.mobile-conversation-queue-item');
   await expect(queuedRows).toHaveCount(2);
+  await expect(conversation.locator('.mobile-conversation-queue-title')).toHaveCount(0);
+  expect((await queuedRows.first().boundingBox()).height).toBeLessThanOrEqual(64);
   const firstQueuedRow = queuedRows.filter({ hasText: 'queued follow up' });
   await firstQueuedRow.evaluate((row) => { row.dataset.renderIdentity = 'preserved'; });
   currentActivity = { ...currentActivity, label: 'Streaming while a message is queued' };
@@ -1034,7 +1036,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const deleteButton = firstQueuedRow.getByRole('button', { name: 'Delete queued message' });
   expect((await steerButton.boundingBox()).height).toBeGreaterThanOrEqual(44);
   expect((await deleteButton.boundingBox()).height).toBeGreaterThanOrEqual(44);
-  await expect(deleteButton).toHaveText('Delete');
+  await expect(deleteButton).toHaveAccessibleName('Delete queued message');
 
   const dragHandle = firstQueuedRow.getByRole('button', { name: /Reorder queued message/ });
   const handleBox = await dragHandle.boundingBox();

@@ -286,6 +286,24 @@ test('ACP client keeps follow-ups local until the active turn completes and can 
   reply(child, interject.id, {});
   await steering;
   assert.deepEqual(client.read(sessionId).queue, []);
+  assert.deepEqual(client.read(sessionId).events.at(-1).params.update, {
+    sessionUpdate: 'user_message_chunk',
+    content: { type: 'text', text: 'follow up' },
+    source: 'steer',
+    queueId: 'queue-1',
+  });
+
+  await client.prompt({ sessionId, cwd: '/tmp/project', id: 'queue-2', text: 'keep this queued' });
+  const failedSteer = client.steerQueuedPrompt({ sessionId, queueId: 'queue-2' });
+  const failedInterject = await waitForRequest(fake, '_x.ai/interject');
+  child.stdout.write(`${JSON.stringify({
+    jsonrpc: '2.0', id: failedInterject.id,
+    error: { code: -32_000, message: 'Interject rejected' },
+  })}\n`);
+  await assert.rejects(failedSteer, /Interject rejected/);
+  assert.deepEqual(client.read(sessionId).queue.map((entry) => entry.text), ['keep this queued']);
+  assert.equal(client.read(sessionId).events.some((record) =>
+    record.params.update.queueId === 'queue-2'), false);
   await client.close();
 });
 

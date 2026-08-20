@@ -1802,8 +1802,6 @@ export function createMobileConversationView({
       await action();
       row.remove();
       const remaining = queueRows().length;
-      const title = queue.querySelector('.mobile-conversation-queue-title');
-      if (title) title.textContent = `${remaining} queued`;
       if (!remaining) queue.hidden = true;
     } catch (error) {
       exitAnimation?.cancel();
@@ -1828,35 +1826,34 @@ export function createMobileConversationView({
       return;
     }
     const fragment = document.createDocumentFragment();
-    fragment.append(element('small', 'mobile-conversation-queue-title', `${entries.length} queued`));
     for (const entry of entries) {
       const row = element('article', 'mobile-conversation-queue-item');
       row.dataset.queueId = entry.id;
-      const handle = element('button', 'mobile-conversation-queue-handle', '↕');
+      row.append(element('span', 'mobile-conversation-queue-icon', '↳'));
+      const handle = element('button', 'mobile-conversation-queue-handle', '⋯');
       handle.type = 'button';
       handle.disabled = entries.length < 2;
       handle.setAttribute('aria-label', `Reorder queued message: ${entry.text}`);
       handle.title = 'Drag to reorder';
       setupQueueReorder(row, handle);
       const copy = element('div', 'mobile-conversation-queue-copy');
-      copy.append(element('span', '', '↳'), element('p', '', entry.text));
-      const previews = element('div', 'mobile-conversation-queue-attachments');
-      for (const attachment of entry.attachments || []) previews.append(attachmentNode(attachment));
-      if (previews.childNodes.length) copy.append(previews);
+      copy.append(element('p', '', entry.text));
+      const attachmentCount = entry.attachments?.length || 0;
+      if (attachmentCount) copy.append(element('small', '', `+${attachmentCount} file${attachmentCount === 1 ? '' : 's'}`));
       const actions = element('div', 'mobile-conversation-queue-actions');
       const steer = element('button', '', '↪ Steer');
       steer.type = 'button';
       steer.addEventListener('click', () => runQueueAction(
         row, () => steerQueuedInput(sessionName, entry.id), 'Steer failed',
       ));
-      const remove = element('button', '', 'Delete');
+      const remove = element('button', 'mobile-conversation-queue-delete', '⌫');
       remove.type = 'button';
       remove.setAttribute('aria-label', 'Delete queued message');
       remove.addEventListener('click', () => runQueueAction(
         row, () => removeQueuedInput(sessionName, entry.id), 'Delete failed',
       ));
       actions.append(steer, remove);
-      row.append(handle, copy, actions);
+      row.append(copy, actions, handle);
       fragment.append(row);
     }
     queue.replaceChildren(fragment);

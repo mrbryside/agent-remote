@@ -760,10 +760,27 @@ export function createGrokAcpClient({
       throw rpcError('There is no active turn to steer', 'GROK_ACP_SESSION_IDLE');
     }
     const [entry] = current.queuedPrompts.splice(index, 1);
+    // Grok's interject RPC does not echo the steered text back as a
+    // user_message_chunk. Keep an explicit user boundary in the local event
+    // stream so the next assistant chunks cannot merge into the preceding
+    // response (especially an open Markdown code fence).
+    const userBoundary = {
+      id: `agent-remote-steer:${entry.id}`,
+      timestamp: Date.now(),
+      params: { update: {
+        sessionUpdate: 'user_message_chunk',
+        content: { type: 'text', text: entry.displayText },
+        source: 'steer',
+        queueId: entry.id,
+      } },
+    };
+    current.events.push(userBoundary);
     publish(sessionId);
     try {
       await request('_x.ai/interject', { sessionId, text: entry.text });
     } catch (error) {
+      const boundaryIndex = current.events.indexOf(userBoundary);
+      if (boundaryIndex >= 0) current.events.splice(boundaryIndex, 1);
       current.queuedPrompts.splice(Math.min(index, current.queuedPrompts.length), 0, entry);
       publish(sessionId);
       throw error;

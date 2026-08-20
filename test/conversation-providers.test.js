@@ -160,6 +160,39 @@ test('Grok provider maps a managed tmux process to messages and subagents', asyn
   assert.equal(data.prompts[0].text, 'hello from phone');
 });
 
+test('Grok provider keeps a steered user message between assistant markdown segments', async () => {
+  const data = await fixture();
+  const snapshot = await data.acpClient.loadSession({ sessionId: data.parentId });
+  snapshot.events = [
+    { timestamp: 1, params: { update: {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: '```go\npackage main\n```' },
+    } } },
+    { timestamp: 2, params: { update: {
+      sessionUpdate: 'user_message_chunk', source: 'steer', queueId: 'queue-1',
+      content: { type: 'text', text: 'Explain the result' },
+    } } },
+    { timestamp: 3, params: { update: {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'The result is ready.' },
+    } } },
+  ];
+  const registry = createConversationRegistry({
+    providers: [createGrokConversationProvider({ acpClient: data.acpClient })],
+  });
+
+  const result = await registry.read({
+    cwd: data.cwd, command: `grok --leader --session-id ${data.parentId}`,
+    conversationThreadId: data.parentId,
+  });
+
+  assert.deepEqual(result.items.map(({ type, role, text }) => ({ type, role, text })), [
+    { type: 'message', role: 'assistant', text: '```go\npackage main\n```' },
+    { type: 'message', role: 'user', text: 'Explain the result' },
+    { type: 'message', role: 'assistant', text: 'The result is ready.' },
+  ]);
+});
+
 test('Grok provider groups adjacent mixed tools across resolved permissions and closes thoughts at boundaries', async () => {
   const data = await fixture();
   const snapshot = await data.acpClient.loadSession({ sessionId: data.parentId });
