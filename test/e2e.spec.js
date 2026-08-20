@@ -911,6 +911,16 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   });
   await expect(conversation.locator('.mobile-browser-pill')).toBeVisible();
   await expect(conversation.locator('.mobile-activity-pill-cluster > button')).toHaveCount(4);
+  await expect.poll(() => conversation.locator('.mobile-activity-pill-cluster').evaluate((cluster) => {
+    const pill = cluster.querySelector('.mobile-browser-pill');
+    const dismiss = cluster.querySelector('.mobile-activity-pill-dismiss');
+    return {
+      height: Math.round(cluster.getBoundingClientRect().height),
+      fontSize: getComputedStyle(pill).fontSize,
+      horizontalPadding: getComputedStyle(pill).paddingLeft,
+      dismissWidth: Math.round(dismiss.getBoundingClientRect().width),
+    };
+  })).toEqual({ height: 38, fontSize: '12px', horizontalPadding: '9px', dismissWidth: 34 });
   await page.locator('#graphics-sheet-backdrop').click();
   await expect(page.locator('#graphics-split')).toBeHidden();
   await conversation.getByRole('button', { name: 'Hide activity' }).click();
