@@ -132,18 +132,18 @@ function decorateCode(root) {
     const code = pre.querySelector(':scope > code');
     if (!code) continue;
     pre.dataset.markdownScroll = `code:${index}`;
-    const language = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9) || 'Code';
+    const suppliedLanguage = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9);
     const source = code.textContent;
     const frame = document.createElement('div');
     frame.className = 'mobile-markdown-code';
     const toolbar = document.createElement('div');
     toolbar.className = 'mobile-markdown-code-toolbar';
     const label = document.createElement('span');
-    label.textContent = language;
+    highlightCodeNode(code, source, suppliedLanguage);
+    label.textContent = suppliedLanguage || code.dataset.language || 'Code';
     toolbar.append(label, copyButton(source));
     pre.replaceWith(frame);
     frame.append(toolbar, pre);
-    highlightCodeNode(code, source, language);
   }
 }
 

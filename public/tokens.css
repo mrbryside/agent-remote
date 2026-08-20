@@ -56,9 +56,13 @@
   --color-danger-surface: #342528;
   --color-danger-border: #593a3f;
   --color-status-stopped: var(--color-text-muted);
-  --color-status-connecting: #c6ae7b;
-  --color-status-online: var(--color-success);
-  --color-status-error: var(--color-danger);
+  --color-status-connecting: #f2c75c;
+  --color-status-online: #65dc8c;
+  --color-status-error: #ff7480;
+  --color-diff-add: #58e187;
+  --color-diff-add-surface: #173822;
+  --color-diff-remove: #ff6f7c;
+  --color-diff-remove-surface: #3d1d24;
 
   /* Terminal palette */
   --color-terminal-background: #141416;
@@ -83,16 +87,16 @@
   --color-terminal-bright-white: #efefec;
 
   /* Syntax highlighting */
-  --color-syntax-comment: #718096;
-  --color-syntax-keyword: #c792ea;
-  --color-syntax-string: #b9e47c;
-  --color-syntax-number: #ff9d6e;
-  --color-syntax-title: #78a9ff;
-  --color-syntax-variable: #ff7b9c;
-  --color-syntax-attribute: #ffd166;
-  --color-syntax-built-in: #62d6e8;
-  --color-syntax-literal: #7dd3fc;
-  --color-syntax-meta: #f0b86e;
+  --color-syntax-comment: #667985;
+  --color-syntax-keyword: #67c7df;
+  --color-syntax-string: #8fc7bd;
+  --color-syntax-number: #7fb4d8;
+  --color-syntax-title: #8bd7e8;
+  --color-syntax-variable: #a2c7d6;
+  --color-syntax-attribute: #72b7c7;
+  --color-syntax-built-in: #5fd0df;
+  --color-syntax-literal: #82c4d7;
+  --color-syntax-meta: #739eae;
 
   /* Sizing and layout */
   --sidebar-width: clamp(252px, 25.5vw, 326px);

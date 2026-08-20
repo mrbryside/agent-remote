@@ -243,6 +243,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       'const ready = true;',
       '```',
       '',
+      '```python',
+      'def greet(name):',
+      '    return f"Hello {name}"',
+      '```',
+      '',
       '[Unsafe link](javascript:alert(1))',
       '<img src="javascript:alert(2)" onerror="window.__markdownXss = true" alt="Unsafe image">',
       '<script>window.__markdownXss = true</script>',
@@ -524,10 +529,17 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(markdownMessage.locator('strong')).toHaveText('bold');
   await expect(markdownMessage.locator('li')).toHaveCount(2);
   await expect(markdownMessage.locator('table')).toContainText('Renderer');
-  await expect(markdownMessage.locator('.mobile-markdown-code-toolbar')).toContainText('js');
-  await expect(markdownMessage.getByRole('button', { name: 'Copy code' })).toBeVisible();
-  await expect(markdownMessage.locator('.mobile-markdown-code .hljs-keyword')).toHaveText('const');
-  await expect(markdownMessage.locator('.mobile-markdown-code .hljs-literal')).toHaveText('true');
+  const codeBlocks = markdownMessage.locator('.mobile-markdown-code');
+  await expect(codeBlocks).toHaveCount(2);
+  await expect(codeBlocks.nth(0).locator('.mobile-markdown-code-toolbar')).toContainText('js');
+  await expect(codeBlocks.nth(0).getByRole('button', { name: 'Copy code' })).toBeVisible();
+  await expect(codeBlocks.nth(0).locator('code')).toHaveAttribute('data-language', 'javascript');
+  await expect(codeBlocks.nth(0).locator('.hljs-keyword')).toHaveText('const');
+  await expect(codeBlocks.nth(0).locator('.hljs-literal')).toHaveText('true');
+  await expect(codeBlocks.nth(1).locator('.mobile-markdown-code-toolbar')).toContainText('python');
+  await expect(codeBlocks.nth(1).locator('code')).toHaveAttribute('data-language', 'python');
+  await expect(codeBlocks.nth(1).locator('.hljs-keyword')).toHaveText(['def', 'return']);
+  await expect(codeBlocks.nth(1).locator('.hljs-title.function_')).toHaveText('greet');
   const inlineType = markdownMessage.locator('code.hljs', { hasText: 'class None implements Option' });
   await expect(inlineType).toBeVisible();
   await expect(inlineType.locator('.hljs-keyword')).toHaveText(['class', 'implements']);
@@ -1183,6 +1195,16 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
   const toolPanel = conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-panel');
   await expect.poll(() => toolPanel.evaluate((panel) => panel.clientHeight)).toBeGreaterThan(200);
+  await expect.poll(() => toolPanel.evaluate((panel) => {
+    const rows = [...panel.querySelectorAll(':scope > .mobile-event-card > .mobile-event-toggle')].slice(0, 2)
+      .map((row) => row.getBoundingClientRect());
+    return {
+      firstHeight: Math.round(rows[0].height),
+      secondHeight: Math.round(rows[1].height),
+      gap: Math.round(rows[1].top - rows[0].bottom),
+      gutter: getComputedStyle(panel).scrollbarGutter,
+    };
+  })).toEqual({ firstHeight: 36, secondHeight: 36, gap: 0, gutter: 'stable both-edges' });
   await expect.poll(() => toolPanel.locator(':scope > .mobile-event-card').first().evaluate((node) => ({
     border: getComputedStyle(node).borderTopStyle,
     background: getComputedStyle(node).backgroundColor,
@@ -1208,8 +1230,29 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   expect(childDisclosureMotion.start).toBeLessThan(childDisclosureMotion.end);
   expect(childDisclosureMotion.closing).toBe('closing');
   expect(childDisclosureMotion.closed).toBe(true);
+  const editStatusRight = await editCard.locator('.mobile-event-status').evaluate((status) => status.getBoundingClientRect().right);
   await conversation.getByRole('button', { name: /Edited app\.js/ }).click();
   await expect(editCard.locator('.mobile-event-panel')).toBeVisible();
+  await expect.poll(() => editCard.evaluate((card, before) => {
+    const toggle = card.querySelector(':scope > .mobile-event-toggle');
+    const panel = card.querySelector(':scope > .mobile-event-panel');
+    const diff = panel.querySelector('.mobile-event-change-scroll');
+    return {
+      active: document.activeElement === toggle,
+      outline: getComputedStyle(toggle).outlineStyle,
+      statusShift: Math.round(Math.abs(card.querySelector('.mobile-event-status').getBoundingClientRect().right - before)),
+      panelOverflow: getComputedStyle(panel).overflowY,
+      diffOverflow: getComputedStyle(diff).overflowY,
+      nestedVerticalScroll: diff.scrollHeight > diff.clientHeight,
+    };
+  }, editStatusRight)).toEqual({
+    active: false,
+    outline: 'none',
+    statusShift: 0,
+    panelOverflow: 'visible',
+    diffOverflow: 'hidden',
+    nestedVerticalScroll: false,
+  });
   await expect(editCard.locator('.mobile-event-detail')).toHaveCount(0);
   await expect(editCard.locator('.mobile-event-change')).toContainText('public/app.js');
   await expect(editCard.locator('.mobile-event-toggle .mobile-event-change-stats [data-kind="add"]')).toHaveText('+1');
@@ -1221,16 +1264,28 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => editCard.locator('.mobile-event-change').evaluate((node) => {
     const added = node.querySelector('[data-kind="add"]');
     const removed = node.querySelector('[data-kind="remove"]');
+    const tokenColor = (name) => {
+      const probe = document.createElement('i');
+      probe.style.color = `var(${name})`;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
     return {
       addColor: getComputedStyle(node.querySelector(':scope > header .mobile-event-change-stats [data-kind="add"]')).color,
       removeColor: getComputedStyle(node.querySelector(':scope > header .mobile-event-change-stats [data-kind="remove"]')).color,
       addBackground: getComputedStyle(added).backgroundColor,
       removeBackground: getComputedStyle(removed).backgroundColor,
+      addToken: tokenColor('--color-diff-add'),
+      removeToken: tokenColor('--color-diff-remove'),
     };
-  })).not.toEqual({
-    addColor: 'rgb(0, 0, 0)', removeColor: 'rgb(0, 0, 0)',
-    addBackground: 'rgba(0, 0, 0, 0)', removeBackground: 'rgba(0, 0, 0, 0)',
-  });
+  })).toEqual(expect.objectContaining({
+    addColor: 'rgb(88, 225, 135)',
+    removeColor: 'rgb(255, 111, 124)',
+    addToken: 'rgb(88, 225, 135)',
+    removeToken: 'rgb(255, 111, 124)',
+  }));
   await conversation.locator('[data-event-id="tool-search-app"] > .mobile-event-toggle').click();
   const searchMatch = conversation.locator('.mobile-event-matches button');
   await expect(searchMatch).toContainText('render(status);');
@@ -1247,8 +1302,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => shellDetail.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
   await expect.poll(() => toolPanel.evaluate((panel) => panel.scrollHeight > panel.clientHeight)).toBe(true);
   const shellPanel = conversation.locator('[data-event-id="tool-shell"] > .mobile-event-panel');
-  await expect.poll(() => shellPanel.evaluate((panel) => panel.scrollHeight > panel.clientHeight)).toBe(true);
-  await expect.poll(() => shellPanel.evaluate((panel) => getComputedStyle(panel).overscrollBehaviorY)).toBe('auto');
+  await expect.poll(() => shellPanel.evaluate((panel) => panel.scrollHeight <= panel.clientHeight)).toBe(true);
+  await expect.poll(() => shellPanel.evaluate((panel) => getComputedStyle(panel).overflowY)).toBe('visible');
   await expect.poll(() => toolPanel.evaluate((panel) => getComputedStyle(panel).overscrollBehaviorY)).toBe('auto');
   await expect.poll(() => messages.evaluate((panel) => getComputedStyle(panel).overscrollBehaviorY)).toBe('contain');
 
