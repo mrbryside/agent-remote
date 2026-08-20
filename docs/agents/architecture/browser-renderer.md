@@ -9,18 +9,29 @@ uses an explicit session when one can be proven and otherwise sends its cwd.
 The server resolves that cwd only against connected managed chats, preferring
 the single working conversation and rejecting ambiguous matches instead of
 broadcasting a browser command to unrelated sessions. Commands outside an
-agent-remote project still fall back to the real host binary when the backend
-has no matching chat. An explicitly identified ACP route instead exits with an
-actionable error; it never falls back to the host terminal's Kitty renderer or
-prints a false success message.
+agent-remote project fall back to the real host binary only when the local
+backend is unreachable. A reachable backend's routing rejection is
+authoritative: the shim exits with its actionable error and never launches the
+host terminal's Kitty renderer from a Grok subprocess. This distinction avoids
+false success, cross-session ownership, and long-lived renderer children that
+the agent runtime may later kill.
 
 Each session owns one keyed renderer and one UI split state. The browser toolbar reflects the daemon's real tabs with keyed DOM nodes, so polling can update labels and active state without replacing a button during a click. Back/forward/reload, tab changes, Inspect, and Record are routed to that renderer. Refresh and session switching reattach to the same backend renderer; closing the final tab, split, session, or project must clean up the renderer and daemon.
+
+Public browser-state discovery, the shim's `ls`, and implicit `action` commands
+resolve through the same owning session and expose only that session's browser
+and tabs. Server-internal renderer discovery uses a private graphics-routing
+marker so it can inspect all owned daemon processes without passing through the
+public session filter. Never expose that global view through a client route.
 
 Desktop control events use the selected terminal WebSocket. Native mobile conversations intentionally suspend that socket, so their SSE stream also carries validated `open-graphics` control events. Both transports address the same session-keyed renderer. On phones the renderer is presented in a draggable 70%-viewport bottom sheet that slides up from below rather than a full-screen xterm layer. Dismissing the sheet only changes frontend visibility and keeps the renderer alive; a Browser activity pill reopens it. If subagents are also present, Browser and Subagents share one activity dock, and each sheet exposes a direct switch to the other so the two surfaces never stack.
 
 The sheet's close button is different from dismissal: it closes the keyed
 renderer and unregisters the owning terminal-browser process, while dragging
 down or tapping the backdrop remains the reversible hide action.
+Shutdown allows a bounded two-second grace period for the renderer to process
+`SIGINT` and unregister cleanly. Closing one session's browser must leave every
+other session-owned browser alive.
 
 The page viewport displays Chromium's compositor screencast directly. Layout,
 input, and raster dimensions share CSS-pixel coordinates, so there is no

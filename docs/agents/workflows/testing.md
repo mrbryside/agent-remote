@@ -23,6 +23,7 @@ Playwright runs serially because the tmux fixture, browser renderer, SQLite file
 - Grok ACP transport ownership and request/response extensions (leader socket, permissions, questions, and Plan Review): `test/grok-acp.test.js`
 - Provider-neutral timeline mapping, child-thread ownership, and interaction projection: `test/conversation-providers.test.js`
 - Real terminal-browser routing (including cwd fallback with tmux and routing environment removed), direct compositor-stream cadence/backpressure, stable frame source during motion, desktop split, mobile sheet persistence, tabs, DevTools, Record, cursor, refresh, and cleanup: `test/terminal-browser.spec.js`
+- Terminal-browser shim reachability, authoritative routing rejection, and session-filtered discovery: `test/terminal-browser-shim.test.js`
 - Remote configuration: `test/config.test.js`
 - Remote SQLite state and device audit lifecycle: `test/remote-store.test.js`
 - Keychain, Cloudflare API, ownership provisioning, auth, controller, and tunnel state machines: `test/remote-*.test.js`
@@ -31,5 +32,14 @@ Playwright runs serially because the tmux fixture, browser renderer, SQLite file
 - Tauri configuration and wrapper lifecycle: `test/tauri-contract.test.js` and `src-tauri/src/main.rs` tests
 
 Tests that create tmux sessions, projects, remote stores, or child tunnels must clean up even after failure. Use unique project/session markers, temporary SQLite paths, and fake cloudflared processes; the Grok leader socket follows the temporary database path so tests cannot attach to a user's default leader. Assert Remote Stop/close leaves no orphaned child. Avoid relying on execution order beyond the suite's explicit serial configuration. Run sidecar and desktop checks only on Darwin ARM64.
+
+Before handing off cross-surface lifecycle or renderer changes, also exercise
+the running app through Codex's in-app browser at a phone viewport. Complete a
+real Grok turn, wait beyond one sidebar polling interval, and confirm the
+composer, native activity, and sidebar all settle together. For browser
+ownership changes, open distinct URLs from two managed sessions, verify each
+session sees only its own tab list, then close one renderer and confirm the
+other remains usable. This manual check complements Playwright by using the
+actual in-app browser transport and compositor.
 
 [Back to workflow index](index.md)

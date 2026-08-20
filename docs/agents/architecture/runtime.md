@@ -36,12 +36,11 @@ Desktop Grok startup is also provider-gated. Its xterm runtime may attach and
 buffer output behind one opaque startup surface until the conversation endpoint
 confirms ACP readiness. The successful readiness response removes that cover in
 one atomic hand-off; the client does not inspect Grok's terminal text, inject
-focus keys, or otherwise drive the TUI. If readiness is delayed, the same cover
-reports the delay and keeps polling instead of flashing the terminal. Pending
-chat creation and the promoted managed session use the same stable `Opening
-Grok…` title, so the opaque cover does not visibly switch through a separate
-Connecting state before the TUI is ready. Other
-catalog agents and standalone terminal commands retain the bounded quiet-window reveal path.
+focus keys, or otherwise drive the TUI. The cover is deliberately neutral: one
+spinner with no `Opening` or `Connecting` copy that can change or flash while
+readiness is delayed. Pending chat creation and the promoted managed session
+reuse that same uninterrupted cover. Other catalog agents and standalone
+terminal commands retain the bounded quiet-window reveal path.
 
 ## State ownership
 

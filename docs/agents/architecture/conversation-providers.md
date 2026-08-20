@@ -69,6 +69,12 @@ timeline boundary. An ACP disconnect also clears the transient active flag
 before reconnecting. This keeps the mobile Responding action and the sidebar
 spinner from surviving a turn that is already complete on disk.
 
+An HTTP `202` prompt response is only a delivery receipt, not evidence that a
+turn remains active. The optimistic pending message may show `Sending`, but it
+must not force the composer into Stop or keep the sidebar busy. Once the
+provider has reported an active-to-idle transition, the client clears that
+pending state even if replay normalizes the user message differently.
+
 The root snapshot also exposes provider-owned controls. Grok uses
 `session/set_model` and one mutually exclusive mode control: `Normal`, `Plan`,
 `Auto`, or `Always approve`. `Plan` maps to ACP `session/set_mode` `plan`; the
@@ -212,6 +218,12 @@ the message viewport at its latest item synchronously, with no smooth initial
 scroll animation. Later stream updates follow the tail only while the reader
 is already there. Scrolling up reveals a jump-to-latest control; that explicit
 action scrolls smoothly unless the device requests reduced motion.
+
+The sidebar consumes the same provider lifecycle as the native conversation.
+Each live snapshot records when it was observed; a slower `/api/sessions` poll
+may refresh catalog metadata but cannot overwrite a newer SSE idle state with
+an older persisted `working` flag. This timestamp boundary keeps Responding,
+Stop, and the sidebar spinner aligned after `turn_completed`.
 
 The same session-scoped SSE connection may carry a `control` event for browser
 surface requests originating inside the headless ACP leader. This is transport
