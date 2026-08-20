@@ -137,7 +137,7 @@ async function buildServerSidecar() {
   const copied = new Set();
   for (const dependency of [
     'node-pty', 'ws', 'qrcode', '@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-image',
-    'marked', 'dompurify',
+    'marked', 'dompurify', '@highlightjs/cdn-assets',
   ]) {
     await copyRuntimePackage(dependency, copied);
   }

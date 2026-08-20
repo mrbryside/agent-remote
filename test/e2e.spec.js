@@ -525,6 +525,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(markdownMessage.locator('table')).toContainText('Renderer');
   await expect(markdownMessage.locator('.mobile-markdown-code-toolbar')).toContainText('js');
   await expect(markdownMessage.getByRole('button', { name: 'Copy code' })).toBeVisible();
+  await expect(markdownMessage.locator('.mobile-markdown-code .hljs-keyword')).toHaveText('const');
+  await expect(markdownMessage.locator('.mobile-markdown-code .hljs-literal')).toHaveText('true');
   await expect(markdownMessage.getByRole('link', { name: 'safe link' })).toHaveAttribute('rel', 'noopener noreferrer');
   await expect(markdownMessage.locator('script, [onerror]')).toHaveCount(0);
   await expect(markdownMessage.locator('a', { hasText: 'Unsafe link' })).not.toHaveAttribute('href', /.+/);
@@ -538,6 +540,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(fileSheet.locator('.mobile-file-sheet-header')).toContainText('public/app.js · Lines 1–2');
   await expect(fileSheet.locator('.mobile-file-line[data-highlighted="true"]')).toHaveCount(2);
   await expect(fileSheet.locator('.mobile-file-lines')).toContainText('const status = "ready";');
+  await expect(fileSheet.locator('.mobile-file-line .hljs-keyword').first()).toHaveText('const');
+  await expect(fileSheet.locator('.mobile-file-line .hljs-string').first()).toHaveText('"ready"');
   await fileSheet.getByRole('button', { name: 'Close file preview' }).click();
   await expect(fileSheet).toBeHidden();
   await expect(conversation.locator('.mobile-event-card')).toHaveCount(10);
@@ -1204,6 +1208,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(editCard.locator('.mobile-event-toggle .mobile-event-change-stats [data-kind="remove"]')).toHaveText('-1');
   await expect(editCard.locator('.mobile-event-change-line[data-kind="remove"]')).toContainText('const status = "old";');
   await expect(editCard.locator('.mobile-event-change-line[data-kind="add"]')).toContainText('const status = "ready";');
+  await expect(editCard.locator('.mobile-event-change-line[data-kind="add"] .hljs-keyword')).toHaveText('const');
+  await expect(editCard.locator('.mobile-event-change-line[data-kind="add"] .hljs-string')).toHaveText('"ready"');
   await expect.poll(() => editCard.locator('.mobile-event-change').evaluate((node) => {
     const added = node.querySelector('[data-kind="add"]');
     const removed = node.querySelector('[data-kind="remove"]');

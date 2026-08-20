@@ -408,6 +408,20 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-markdown-copy { min-width: 54px; min-height: 30px; padding: 0 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--color-text-secondary); font: 9px/1 var(--font-family-mono); text-transform: none; }
   .mobile-markdown-copy:hover, .mobile-markdown-copy:focus-visible { border-color: var(--color-border-strong); color: var(--color-text-strong); }
   .mobile-markdown-code pre { max-width: 100%; max-height: 360px; margin: 0; padding: 13px 14px; overflow: auto; background: transparent; color: var(--color-terminal-foreground); font: 12px/1.55 var(--font-family-mono); overscroll-behavior: contain; tab-size: 2; white-space: pre; }
+  .hljs { color: var(--color-terminal-foreground); background: transparent; }
+  .hljs-comment, .hljs-quote { color: var(--color-syntax-comment); font-style: italic; }
+  .hljs-keyword, .hljs-selector-tag, .hljs-subst { color: var(--color-syntax-keyword); }
+  .hljs-string, .hljs-regexp, .hljs-addition { color: var(--color-syntax-string); }
+  .hljs-number, .hljs-symbol, .hljs-bullet { color: var(--color-syntax-number); }
+  .hljs-title, .hljs-title.class_, .hljs-title.function_, .hljs-section { color: var(--color-syntax-title); }
+  .hljs-variable, .hljs-template-variable, .hljs-selector-class, .hljs-selector-id { color: var(--color-syntax-variable); }
+  .hljs-attr, .hljs-attribute, .hljs-property { color: var(--color-syntax-attribute); }
+  .hljs-built_in, .hljs-type, .hljs-class .hljs-title { color: var(--color-syntax-built-in); }
+  .hljs-literal, .hljs-selector-pseudo { color: var(--color-syntax-literal); }
+  .hljs-meta, .hljs-doctag { color: var(--color-syntax-meta); }
+  .hljs-deletion { color: var(--color-danger-strong); }
+  .hljs-emphasis { font-style: italic; }
+  .hljs-strong { font-weight: 700; }
   .mobile-markdown-table { max-width: 100%; margin: 14px 0; overflow: auto; border: 1px solid var(--color-border-strong); border-radius: 10px; overscroll-behavior: contain; }
   .mobile-markdown table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12px; }
   .mobile-markdown th, .mobile-markdown td { padding: 9px 11px; border-right: 1px solid var(--color-border-subtle); border-bottom: 1px solid var(--color-border-subtle); text-align: left; vertical-align: top; }

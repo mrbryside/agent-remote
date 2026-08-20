@@ -1,5 +1,6 @@
 import { marked } from '/vendor/marked.js';
 import DOMPurify from '/vendor/dompurify.js';
+import { highlightCodeNode } from './syntax.js';
 
 marked.use({
   gfm: true,
@@ -115,15 +116,17 @@ function decorateCode(root) {
     if (!code) continue;
     pre.dataset.markdownScroll = `code:${index}`;
     const language = [...code.classList].find((name) => name.startsWith('language-'))?.slice(9) || 'Code';
+    const source = code.textContent;
     const frame = document.createElement('div');
     frame.className = 'mobile-markdown-code';
     const toolbar = document.createElement('div');
     toolbar.className = 'mobile-markdown-code-toolbar';
     const label = document.createElement('span');
     label.textContent = language;
-    toolbar.append(label, copyButton(code.textContent));
+    toolbar.append(label, copyButton(source));
     pre.replaceWith(frame);
     frame.append(toolbar, pre);
+    highlightCodeNode(code, source, language);
   }
 }
 

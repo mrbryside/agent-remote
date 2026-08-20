@@ -232,6 +232,7 @@ const staticRoutes = new Map([
   ['/remote-control.js', join(publicDir, 'remote-control.js')],
   ['/mobile-conversation.js', join(publicDir, 'mobile-conversation.js')],
   ['/markdown.js', join(publicDir, 'markdown.js')],
+  ['/syntax.js', join(publicDir, 'syntax.js')],
   ['/tokens.css', join(publicDir, 'tokens.css')],
   ['/styles.css', join(publicDir, 'styles.css')],
   ['/vendor/xterm.js', join(root, 'node_modules/@xterm/xterm/lib/xterm.js')],
@@ -240,6 +241,7 @@ const staticRoutes = new Map([
   ['/vendor/addon-image.js', join(root, 'node_modules/@xterm/addon-image/lib/addon-image.js')],
   ['/vendor/marked.js', join(root, 'node_modules/marked/lib/marked.esm.js')],
   ['/vendor/dompurify.js', join(root, 'node_modules/dompurify/dist/purify.es.mjs')],
+  ['/vendor/highlight.js', join(root, 'node_modules/@highlightjs/cdn-assets/es/highlight.min.js')],
 ]);
 
 const contentTypes = {

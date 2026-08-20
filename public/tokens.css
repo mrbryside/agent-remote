@@ -82,6 +82,18 @@
   --color-terminal-bright-cyan: #a5c6c3;
   --color-terminal-bright-white: #efefec;
 
+  /* Syntax highlighting */
+  --color-syntax-comment: #718096;
+  --color-syntax-keyword: #c792ea;
+  --color-syntax-string: #b9e47c;
+  --color-syntax-number: #ff9d6e;
+  --color-syntax-title: #78a9ff;
+  --color-syntax-variable: #ff7b9c;
+  --color-syntax-attribute: #ffd166;
+  --color-syntax-built-in: #62d6e8;
+  --color-syntax-literal: #7dd3fc;
+  --color-syntax-meta: #f0b86e;
+
   /* Sizing and layout */
   --sidebar-width: clamp(252px, 25.5vw, 326px);
   --graphics-width: 50%;

@@ -29,6 +29,12 @@ entry animation on every streamed snapshot.
 
 Scrollbar colors use the semantic `--color-scrollbar-thumb`, `--color-scrollbar-thumb-hover`, and `--color-scrollbar-thumb-active` tokens. `public/styles.css` applies one cross-browser 6px scrollbar contract to every scroll surface: transparent, borderless tracks and corners; rounded low-contrast thumbs; and no arrow buttons. Do not hide a component scrollbar or add a component-specific track frame.
 
+Syntax colors use the `--color-syntax-*` tokens. `public/syntax.js` applies the
+same Highlight.js grammar and palette to assistant code fences, file previews,
+edit diffs, and shell commands. Extend language aliases there and keep syntax
+markup separate from diff add/remove backgrounds; do not add per-language raw
+colors in component CSS.
+
 ## Consumption rules
 
 - Prefer semantic names such as `--color-surface-hover` over palette-position names or raw hex values.

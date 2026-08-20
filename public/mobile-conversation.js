@@ -1,4 +1,5 @@
 import { markdownNode } from './markdown.js';
+import { highlightCodeNode, languageForPath } from './syntax.js';
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -990,12 +991,15 @@ export function createMobileConversationView({
     const firstLine = Math.max(1, Number(file?.startLine) || 1);
     const highlightStart = Math.max(1, Number(startLine) || 0);
     const highlightEnd = Math.max(highlightStart, Number(endLine) || highlightStart);
+    const language = languageForPath(file?.path);
     for (const [index, text] of lines.entries()) {
       const number = firstLine + index;
       const row = element('div', 'mobile-file-line');
       if (highlightStart && number >= highlightStart && number <= highlightEnd) row.dataset.highlighted = 'true';
       if (file?.changed) row.dataset.changed = 'true';
-      row.append(element('span', '', number), element('code', '', text || ' '));
+      const code = element('code');
+      highlightCodeNode(code, text || ' ', language);
+      row.append(element('span', '', number), code);
       viewport.append(row);
     }
     return viewport;
@@ -1112,14 +1116,14 @@ export function createMobileConversationView({
     panel.append(section);
   }
 
-  function changeLine(kind, oldNumber, newNumber, text) {
+  function changeLine(kind, oldNumber, newNumber, text, language) {
     const row = element('div', 'mobile-event-change-line');
     row.dataset.kind = kind;
     row.append(
       element('span', '', oldNumber || ''),
       element('span', '', newNumber || ''),
       element('i', '', kind === 'add' ? '+' : kind === 'remove' ? '−' : ' '),
-      element('code', '', text),
+      highlightCodeNode(element('code'), text, language),
     );
     return row;
   }
@@ -1157,6 +1161,7 @@ export function createMobileConversationView({
     const { before, after, prefix, suffix, removed, added } = changeParts(change);
     const oldBase = Math.max(1, Number(change.oldLine) || 1);
     const newBase = Math.max(1, Number(change.newLine) || 1);
+    const language = languageForPath(change.path);
     const section = element('section', 'mobile-event-change');
     const header = element('header');
     header.append(
@@ -1167,25 +1172,25 @@ export function createMobileConversationView({
     scroll.dataset.streamScroll = `diff:${index}:${change.path || 'changed-file'}`;
     const lines = element('div', 'mobile-event-change-lines');
     const contextStart = Math.max(0, prefix - 3);
-    if (contextStart > 0) lines.append(changeLine('skip', '', '', '…'));
+    if (contextStart > 0) lines.append(changeLine('skip', '', '', '…', language));
     for (let index = contextStart; index < prefix; index += 1) {
-      lines.append(changeLine('context', oldBase + index, newBase + index, before[index]));
+      lines.append(changeLine('context', oldBase + index, newBase + index, before[index], language));
     }
     removed.forEach((line, index) => {
-      lines.append(changeLine('remove', oldBase + prefix + index, '', line));
+      lines.append(changeLine('remove', oldBase + prefix + index, '', line, language));
     });
     added.forEach((line, index) => {
-      lines.append(changeLine('add', '', newBase + prefix + index, line));
+      lines.append(changeLine('add', '', newBase + prefix + index, line, language));
     });
     const contextCount = Math.min(3, suffix);
     for (let index = 0; index < contextCount; index += 1) {
       lines.append(changeLine(
         'context', oldBase + before.length - suffix + index, newBase + after.length - suffix + index,
-        before[before.length - suffix + index],
+        before[before.length - suffix + index], language,
       ));
     }
-    if (suffix > contextCount) lines.append(changeLine('skip', '', '', '…'));
-    if (!lines.childNodes.length) lines.append(changeLine('context', oldBase, newBase, before[0] || after[0] || ''));
+    if (suffix > contextCount) lines.append(changeLine('skip', '', '', '…', language));
+    if (!lines.childNodes.length) lines.append(changeLine('context', oldBase, newBase, before[0] || after[0] || '', language));
     scroll.append(lines);
     section.append(header, scroll);
     return section;
@@ -1194,7 +1199,7 @@ export function createMobileConversationView({
   function commandNode(item) {
     const section = element('section', 'mobile-tool-command');
     const command = element('div', 'mobile-tool-command-line');
-    command.append(element('i', '', '$'), element('code', '', item.command));
+    command.append(element('i', '', '$'), highlightCodeNode(element('code'), item.command, 'bash'));
     section.append(command);
     if (item.output) section.append(element('pre', 'mobile-tool-command-output', item.output));
     return section;
