@@ -331,7 +331,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       '[Unsafe link](javascript:alert(1))',
       '<img src="javascript:alert(2)" onerror="window.__markdownXss = true" alt="Unsafe image">',
       '<script>window.__markdownXss = true</script>',
-    ].join('\n') : `History message ${index + 1}`,
+    ].join('\n') : index === 2
+      ? 'พิมพ์\nมาแบบนั้นอีกแล้ว....'
+      : `History message ${index + 1}`,
   }));
   rootItems.push(
     { id: 'thought-1', type: 'thought', title: 'Thought', text: 'I should inspect the provider.', status: 'working' },
@@ -669,6 +671,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(markdownMessage.locator('a', { hasText: 'Unsafe link' })).not.toHaveAttribute('href', /.+/);
   await expect(markdownMessage).toContainText('Unsafe image');
   expect(await page.evaluate(() => window.__markdownXss)).toBeUndefined();
+  const softBreakHistory = conversation.locator('[data-message-id="assistant-2"] .mobile-markdown');
+  await expect(softBreakHistory).toHaveText('พิมพ์ มาแบบนั้นอีกแล้ว....');
+  await expect(softBreakHistory.locator('br')).toHaveCount(0);
   const fileReference = markdownMessage.getByRole('button', { name: 'Open public/app.js at line 1' });
   await expect(fileReference).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(fileReference).toHaveCSS('color', 'rgb(100, 190, 172)');
@@ -1300,6 +1305,35 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(liveTokenMessage.locator('.mobile-markdown')).toHaveText('Token by token final');
   await expect(conversation.locator('#mobile-conversation-activity')).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-send')).toHaveAttribute('data-action', 'send');
+
+  // ACP can split prose on a soft newline even though Grok's terminal renders
+  // the result as one sentence. Streaming and restored history must agree and
+  // must not turn that soft break into a visible <br>.
+  currentActivity = { active: true, phase: 'responding', label: 'Responding…' };
+  const liveSoftBreakItem = {
+    id: 'assistant-live-soft-break', type: 'message', role: 'assistant', text: 'พิมพ์',
+  };
+  rootItems.push(liveSoftBreakItem);
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation, stream: {
+        kind: 'agent_message_chunk', delta: nextConversation.items.at(-1).text,
+        threadId: 'root-thread', messageId: 'assistant-live-soft-break',
+      } }),
+    });
+  }, rootConversation());
+  liveSoftBreakItem.text += '\nมาแบบนั้นอีกแล้ว....';
+  await page.evaluate(() => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ stream: {
+        kind: 'agent_message_chunk', delta: '\nมาแบบนั้นอีกแล้ว....',
+        threadId: 'root-thread', messageId: 'assistant-live-soft-break',
+      } }),
+    });
+  });
+  const liveSoftBreak = conversation.locator('[data-message-id="assistant-live-soft-break"] .mobile-markdown');
+  await expect(liveSoftBreak).toHaveText('พิมพ์ มาแบบนั้นอีกแล้ว....');
+  await expect(liveSoftBreak.locator('br')).toHaveCount(0);
 
   currentActivity = { active: true, phase: 'responding', label: 'Responding…' };
   const liveMarkdownItem = {

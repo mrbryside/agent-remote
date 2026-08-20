@@ -4,7 +4,11 @@ import { highlightCodeNode } from './syntax.js';
 
 marked.use({
   gfm: true,
-  breaks: true,
+  // Grok can emit a soft newline between streamed text chunks. Keep CommonMark
+  // soft-break semantics so that newline is rendered as whitespace, matching
+  // the terminal. Authors can still request a hard break with two spaces or an
+  // empty line.
+  breaks: false,
 });
 
 const sanitizeOptions = {
