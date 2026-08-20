@@ -396,7 +396,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-markdown > :first-child { margin-top: 0; }
   .mobile-markdown > :last-child { margin-bottom: 0; }
   .mobile-markdown p { margin: 0 0 12px; }
-  .mobile-markdown strong { color: var(--color-text-strong); }
+  .mobile-markdown strong { font-weight: 700; }
   .mobile-markdown p > strong:only-child { color: var(--color-heading); }
   .mobile-markdown h1, .mobile-markdown h2, .mobile-markdown h3, .mobile-markdown h4 { margin: 22px 0 9px; color: var(--color-heading); line-height: 1.28; letter-spacing: -.015em; }
   .mobile-markdown h1 { font-size: 21px; }
