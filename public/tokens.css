@@ -33,7 +33,7 @@
   --color-border: #2b2b2f;
   --color-border-strong: #343438;
   --color-border-emphasis: #49494e;
-  --color-focus-ring: #777f7c;
+  --color-focus-ring: #668d86;
   --color-scrollbar-thumb: #3a3a3f;
   --color-scrollbar-thumb-hover: #505057;
   --color-scrollbar-thumb-active: #626269;
@@ -48,8 +48,9 @@
   --color-icon: #95959a;
 
   /* Status and intent */
-  --color-accent: #919a96;
-  --color-accent-strong: #a8b0ad;
+  --color-accent: #6f9f96;
+  --color-accent-strong: #82b0a6;
+  --color-heading: #d69a68;
   --color-success: #879a92;
   --color-danger: #c59da3;
   --color-danger-strong: #d2a0a7;
@@ -87,16 +88,16 @@
   --color-terminal-bright-white: #efefec;
 
   /* Syntax highlighting */
-  --color-syntax-comment: #667985;
-  --color-syntax-keyword: #67c7df;
-  --color-syntax-string: #8fc7bd;
-  --color-syntax-number: #7fb4d8;
-  --color-syntax-title: #8bd7e8;
-  --color-syntax-variable: #a2c7d6;
-  --color-syntax-attribute: #72b7c7;
-  --color-syntax-built-in: #5fd0df;
-  --color-syntax-literal: #82c4d7;
-  --color-syntax-meta: #739eae;
+  --color-syntax-comment: #657873;
+  --color-syntax-keyword: #72a99f;
+  --color-syntax-string: #8aad9d;
+  --color-syntax-number: #82a89f;
+  --color-syntax-title: var(--color-heading);
+  --color-syntax-variable: #a0b5ad;
+  --color-syntax-attribute: #7fa59c;
+  --color-syntax-built-in: #68ad9f;
+  --color-syntax-literal: #89aaa2;
+  --color-syntax-meta: #78978f;
 
   /* Sizing and layout */
   --sidebar-width: clamp(252px, 25.5vw, 326px);

@@ -387,7 +387,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-markdown > :first-child { margin-top: 0; }
   .mobile-markdown > :last-child { margin-bottom: 0; }
   .mobile-markdown p { margin: 0 0 12px; }
-  .mobile-markdown h1, .mobile-markdown h2, .mobile-markdown h3, .mobile-markdown h4 { margin: 22px 0 9px; color: var(--color-text-strong); line-height: 1.28; letter-spacing: -.015em; }
+  .mobile-markdown h1, .mobile-markdown h2, .mobile-markdown h3, .mobile-markdown h4 { margin: 22px 0 9px; color: var(--color-heading); line-height: 1.28; letter-spacing: -.015em; }
   .mobile-markdown h1 { font-size: 21px; }
   .mobile-markdown h2 { font-size: 18px; }
   .mobile-markdown h3 { font-size: 16px; }
@@ -405,6 +405,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-file-reference:hover, .mobile-file-reference:focus-visible { outline: 0; text-decoration: underline; text-underline-offset: 3px; }
   .mobile-markdown-code { min-width: 0; margin: 14px 0; overflow: hidden; border: 1px solid var(--color-border-strong); border-radius: 12px; background: var(--color-terminal-background); }
   .mobile-markdown-code-toolbar { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--color-border); color: var(--color-text-muted); font: 9px/1 var(--font-family-mono); text-transform: uppercase; }
+  .mobile-markdown-code-toolbar > span { color: var(--color-heading); }
   .mobile-markdown-copy { min-width: 54px; min-height: 30px; padding: 0 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--color-text-secondary); font: 9px/1 var(--font-family-mono); text-transform: none; }
   .mobile-markdown-copy:hover, .mobile-markdown-copy:focus-visible { border-color: var(--color-border-strong); color: var(--color-text-strong); }
   .mobile-markdown-code pre { max-width: 100%; max-height: 360px; margin: 0; padding: 13px 14px; overflow: auto; background: transparent; color: var(--color-terminal-foreground); font: 12px/1.55 var(--font-family-mono); overscroll-behavior: contain; tab-size: 2; white-space: pre; }
@@ -505,7 +506,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-file-sheet-header { display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: center; min-height: 54px; padding: 0 7px 0 14px; border-bottom: 1px solid var(--color-border-subtle); }
   .mobile-file-sheet-header > span { display: grid; gap: 3px; min-width: 0; }
   .mobile-file-sheet-header strong, .mobile-file-sheet-header small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mobile-file-sheet-header strong { color: var(--color-text-strong); font: 600 13px/1.2 var(--font-family-sans); }
+  .mobile-file-sheet-header strong { color: var(--color-heading); font: 600 13px/1.2 var(--font-family-sans); }
   .mobile-file-sheet-header small { color: var(--color-text-muted); font: 9px/1.2 var(--font-family-mono); }
   .mobile-file-sheet-header button { display: grid; width: 44px; height: 44px; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--color-text-secondary); font: 24px/1 var(--font-family-sans); cursor: pointer; }
   .mobile-file-sheet-header button:hover, .mobile-file-sheet-header button:focus-visible { border-color: var(--color-border-strong); }
@@ -547,7 +548,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-event-detail pre { box-sizing: border-box; width: 100%; max-width: 100%; max-height: min(38dvh, 300px); margin: 0; overflow: auto; color: var(--color-text-secondary); font: 10px/1.55 var(--font-family-mono); overflow-wrap: normal; white-space: pre; word-break: normal; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   .mobile-event-change { display: grid; min-width: 0; overflow: hidden; border: 1px solid var(--color-border-faint); border-radius: 8px; background: var(--color-canvas); }
   .mobile-event-change > header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 9px; border-bottom: 1px solid var(--color-border-faint); }
-  .mobile-event-change > header strong { overflow: hidden; color: var(--color-text-secondary); font: 600 10px/1.3 var(--font-family-mono); text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-event-change > header strong { overflow: hidden; color: var(--color-heading); font: 600 10px/1.3 var(--font-family-mono); text-overflow: ellipsis; white-space: nowrap; }
   .mobile-event-change-stats { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
   .mobile-event-change-stats small { font: 10px/1 var(--font-family-mono); }
   .mobile-event-change-stats [data-kind="add"] { color: var(--color-diff-add); }
@@ -564,7 +565,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-event-change-line[data-kind="add"] > i, .mobile-event-change-line[data-kind="add"] > span { color: var(--color-diff-add); }
   .mobile-event-file { display: grid; min-width: 0; overflow: hidden; border: 1px solid var(--color-border-faint); border-radius: 9px; background: var(--color-canvas); }
   .mobile-event-file > header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--color-border-faint); }
-  .mobile-event-file > header strong { overflow: hidden; color: var(--color-text-secondary); font: 600 10px/1.3 var(--font-family-mono); text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-event-file > header strong { overflow: hidden; color: var(--color-heading); font: 600 10px/1.3 var(--font-family-mono); text-overflow: ellipsis; white-space: nowrap; }
   .mobile-event-file > header small { flex: 0 0 auto; color: var(--color-text-muted); font: 9px/1 var(--font-family-mono); }
   .mobile-file-lines { max-height: min(42dvh, 340px); min-width: 0; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
   .mobile-file-line { display: grid; grid-template-columns: 42px minmax(max-content, 1fr); min-width: 100%; width: max-content; color: var(--color-text-secondary); font: 10px/1.58 var(--font-family-mono); }

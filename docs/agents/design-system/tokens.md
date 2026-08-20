@@ -33,11 +33,12 @@ Syntax colors use the `--color-syntax-*` tokens. `public/syntax.js` applies the
 same Highlight.js grammar and palette to assistant code fences, file previews,
 edit diffs, shell commands, and recognizable inline code. Inline file references
 use the syntax accent even when they become preview buttons. The palette is
-intentionally theme-cohesive (cyan, blue, and muted teal); reserve the vivid
-`--color-diff-add`, `--color-diff-remove`, and `--color-status-*` families for
-meaningful state. Extend language aliases in `public/syntax.js`, keep syntax
-markup separate from diff add/remove backgrounds, and do not add per-language
-raw colors in component CSS.
+intentionally built from muted sea-green tones, while `--color-heading` gives
+Markdown headings and file-oriented headers one restrained warm accent. Reserve
+the vivid `--color-diff-add`, `--color-diff-remove`, and `--color-status-*`
+families for meaningful state. Extend language aliases in `public/syntax.js`,
+keep syntax markup separate from diff add/remove backgrounds, and do not add
+per-language raw colors in component CSS.
 
 Expanded mobile Tool groups own their vertical scrolling and reserve scrollbar
 space on both edges with `scrollbar-gutter: stable both-edges`, so opening a
