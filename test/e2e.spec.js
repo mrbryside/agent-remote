@@ -2024,7 +2024,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const continueButton = questionCard.getByRole('button', { name: 'Continue' });
   await expect(continueButton).toBeDisabled();
   await questionCard.getByRole('checkbox', { name: /Unit tests/ }).check();
-  await questionCard.getByRole('textbox', { name: /Other answer/ }).fill('Custom integration check');
+  const otherAnswer = questionCard.getByRole('textbox', { name: /Other answer/ });
+  await otherAnswer.click();
+  await otherAnswer.pressSequentially('Custom');
+  await otherAnswer.evaluate((node) => { node.dataset.focusProbe = 'stable'; });
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(otherAnswer).toBeFocused();
+  await expect(otherAnswer).toHaveAttribute('data-focus-probe', 'stable');
+  await otherAnswer.pressSequentially(' integration check');
   await expect(continueButton).toBeEnabled();
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', {

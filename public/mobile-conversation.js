@@ -1712,6 +1712,7 @@ export function createMobileConversationView({
     const questions = item.questions || [];
     const lastStep = Math.max(questions.length - 1, 0);
     const step = Math.min(Math.max(pending?.step || 0, 0), lastStep);
+    card.dataset.questionStep = String(step);
     const question = questions[step];
     const form = element('form', 'mobile-question-form');
     form.append(element('p', 'mobile-question-progress', `Question ${step + 1} of ${questions.length}`));
@@ -2451,10 +2452,24 @@ export function createMobileConversationView({
       }, { once: true });
     }
     interactionDock.dataset.kind = interaction.type;
-    interactionDock.replaceChildren(interaction.type === 'question'
-      ? questionNode(interaction, { docked: true })
-      : interaction.type === 'plan_review' ? planReviewNode(interaction)
-        : permissionDockNode(interaction));
+    const activeElement = document.activeElement;
+    const currentQuestion = interactionDock.firstElementChild;
+    const localQuestionState = interaction.type === 'question'
+      ? pendingQuestions.get(interaction.questionId)
+      : undefined;
+    const preserveFocusedCustomAnswer = interaction.type === 'question'
+      && currentQuestion?.matches('.mobile-question-card')
+      && currentQuestion.dataset.questionId === String(interaction.questionId)
+      && currentQuestion.dataset.questionStep === String(questionStep)
+      && activeElement?.matches('.mobile-question-custom')
+      && currentQuestion.contains(activeElement)
+      && !['submitting', 'failed'].includes(localQuestionState?.status);
+    if (!preserveFocusedCustomAnswer) {
+      interactionDock.replaceChildren(interaction.type === 'question'
+        ? questionNode(interaction, { docked: true })
+        : interaction.type === 'plan_review' ? planReviewNode(interaction)
+          : permissionDockNode(interaction));
+    }
   }
 
   function messageNode(item, conversation, { suppressPendingInteractions = false } = {}) {
