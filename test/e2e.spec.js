@@ -991,9 +991,26 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const toolPanel = conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-panel');
   await expect.poll(() => toolPanel.evaluate((panel) => panel.clientHeight)).toBeGreaterThan(200);
   await conversation.getByRole('button', { name: /Edited app\.js/ }).click();
-  await expect(conversation.locator('.mobile-event-change')).toContainText('public/app.js');
-  await expect(conversation.locator('.mobile-event-change-line[data-kind="remove"]')).toContainText('const status = "old";');
-  await expect(conversation.locator('.mobile-event-change-line[data-kind="add"]')).toContainText('const status = "ready";');
+  const editCard = conversation.locator('[data-event-id="tool-edit-app"]');
+  await expect(editCard.locator('.mobile-event-detail')).toHaveCount(0);
+  await expect(editCard.locator('.mobile-event-change')).toContainText('public/app.js');
+  await expect(editCard.locator('.mobile-event-change-stats [data-kind="add"]')).toHaveText('+1');
+  await expect(editCard.locator('.mobile-event-change-stats [data-kind="remove"]')).toHaveText('-1');
+  await expect(editCard.locator('.mobile-event-change-line[data-kind="remove"]')).toContainText('const status = "old";');
+  await expect(editCard.locator('.mobile-event-change-line[data-kind="add"]')).toContainText('const status = "ready";');
+  await expect.poll(() => editCard.locator('.mobile-event-change').evaluate((node) => {
+    const added = node.querySelector('[data-kind="add"]');
+    const removed = node.querySelector('[data-kind="remove"]');
+    return {
+      addColor: getComputedStyle(node.querySelector('.mobile-event-change-stats [data-kind="add"]')).color,
+      removeColor: getComputedStyle(node.querySelector('.mobile-event-change-stats [data-kind="remove"]')).color,
+      addBackground: getComputedStyle(added).backgroundColor,
+      removeBackground: getComputedStyle(removed).backgroundColor,
+    };
+  })).not.toEqual({
+    addColor: 'rgb(0, 0, 0)', removeColor: 'rgb(0, 0, 0)',
+    addBackground: 'rgba(0, 0, 0, 0)', removeBackground: 'rgba(0, 0, 0, 0)',
+  });
   await conversation.locator('[data-event-id="tool-search-app"] > .mobile-event-toggle').click();
   const searchMatch = conversation.locator('.mobile-event-matches button');
   await expect(searchMatch).toContainText('render(status);');

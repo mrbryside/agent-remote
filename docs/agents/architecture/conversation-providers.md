@@ -205,9 +205,10 @@ events remain visible as generic expandable cards.
 
 On mobile, expanded tool groups own a bounded, max-height vertical scroll viewport.
 Nested Shell, output, input, and generic detail blocks preserve whitespace and
-can scroll both axes instead of wrapping long commands. Edit results render as
-a compact unified diff with line numbers, add/remove counts, bounded context,
-and independent two-axis scrolling.
+can scroll both axes instead of wrapping long commands. Edit results render only
+the compact unified diff—no duplicate input, location, or output sections—with
+line numbers, green additions, red removals, colored add/remove counts, bounded
+context, and independent two-axis scrolling.
 
 Spawn calls, permission-first embedded tool calls, `subagent_spawned`,
 completion, and output polling collapse into one stable lifecycle item:

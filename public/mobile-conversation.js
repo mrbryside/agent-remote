@@ -1120,9 +1120,15 @@ export function createMobileConversationView({
     const added = after.slice(prefix, after.length - suffix);
     const section = element('section', 'mobile-event-change');
     const header = element('header');
+    const stats = element('span', 'mobile-event-change-stats');
+    const addedCount = element('small', '', `+${added.length}`);
+    addedCount.dataset.kind = 'add';
+    const removedCount = element('small', '', `-${removed.length}`);
+    removedCount.dataset.kind = 'remove';
+    stats.append(addedCount, removedCount);
     header.append(
       element('strong', '', change.path || 'Changed file'),
-      element('small', '', `+${added.length} −${removed.length}`),
+      stats,
     );
     const scroll = element('div', 'mobile-event-change-scroll');
     scroll.dataset.streamScroll = `diff:${index}:${change.path || 'changed-file'}`;
@@ -1173,13 +1179,17 @@ export function createMobileConversationView({
     }
     if (item.type === 'permission') detail(panel, 'Request', item.text || item.title);
     if (item.type === 'tool') {
-      if (item.command) detail(panel, 'Shell', item.command, 'mobile-event-shell');
-      else if (!item.diffs?.length && !item.file && !item.matches?.length) detail(panel, 'Input', item.input);
-      if (item.file) panel.append(filePreviewNode(item.file, { streamId: `read:${item.id}` }));
-      if (item.matches?.length) panel.append(searchMatchesNode(item.matches));
-      if (!item.file && !item.matches?.length) detail(panel, 'Locations', item.locations?.join('\n'));
-      for (const [index, change] of (item.diffs || []).entries()) panel.append(changeNode(change, index));
-      if (!item.file && !item.matches?.length) detail(panel, 'Output', item.output);
+      const diffs = Array.isArray(item.diffs) ? item.diffs : [];
+      if (diffs.length) {
+        for (const [index, change] of diffs.entries()) panel.append(changeNode(change, index));
+      } else {
+        if (item.command) detail(panel, 'Shell', item.command, 'mobile-event-shell');
+        else if (!item.file && !item.matches?.length) detail(panel, 'Input', item.input);
+        if (item.file) panel.append(filePreviewNode(item.file, { streamId: `read:${item.id}` }));
+        if (item.matches?.length) panel.append(searchMatchesNode(item.matches));
+        if (!item.file && !item.matches?.length) detail(panel, 'Locations', item.locations?.join('\n'));
+        if (!item.file && !item.matches?.length) detail(panel, 'Output', item.output);
+      }
       for (const output of item.images || []) {
         const image = element('img', 'mobile-event-image');
         image.alt = `${item.title || 'Tool'} output`;
