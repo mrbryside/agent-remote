@@ -646,7 +646,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(markdownMessage.locator('h1')).toHaveText('Markdown response');
   await expect(markdownMessage.locator('h1')).toHaveCSS('color', 'rgb(232, 164, 101)');
   const inlineBold = markdownMessage.locator('strong').filter({ hasText: /^bold$/ });
-  await expect(inlineBold).toHaveCSS('color', 'rgb(100, 190, 172)');
+  await expect(inlineBold).toHaveCSS('color', 'rgb(222, 222, 224)');
   const standaloneHeading = markdownMessage.locator('p > strong').filter({ hasText: /^Standalone section:$/ });
   await expect(standaloneHeading).toHaveCSS('color', 'rgb(232, 164, 101)');
   await expect(markdownMessage.locator('li')).toHaveCount(2);
