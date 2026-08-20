@@ -759,7 +759,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => conversation.locator('[data-event-id="tool-group-1"]').evaluate((node) => ({
     groupBorder: getComputedStyle(node).borderTopStyle,
     groupBackground: getComputedStyle(node).backgroundColor,
-  }))).toEqual({ groupBorder: 'none', groupBackground: 'rgba(0, 0, 0, 0)' });
+    mutedHeading: getComputedStyle(node.querySelector(':scope > .mobile-tool-group-toggle strong')).color === (() => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--color-text-muted)';
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    })(),
+  }))).toEqual({
+    groupBorder: 'none', groupBackground: 'rgba(0, 0, 0, 0)',
+    mutedHeading: true,
+  });
   const streamedToolGroup = rootItems.find((item) => item.id === 'tool-group-1');
   streamedToolGroup.status = 'working';
   streamedToolGroup.tools.find((tool) => tool.id === 'tool-shell').status = 'working';
@@ -1038,6 +1049,23 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }))).toEqual({ border: 'none', background: 'rgba(0, 0, 0, 0)', columns: 4 });
   await standaloneTool.getByRole('button').click();
   await expect(standaloneTool.locator(':scope > .mobile-event-panel')).toBeVisible();
+  await expect.poll(() => standaloneTool.getByRole('button').evaluate((button) => ({
+    pointerFocusReleased: document.activeElement !== button,
+    mutedHeading: getComputedStyle(button.querySelector('strong')).color === (() => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--color-text-muted)';
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    })(),
+    outline: getComputedStyle(button).outlineStyle,
+  }))).toEqual({ pointerFocusReleased: true, mutedHeading: true, outline: 'none' });
+  expect(await standaloneTool.getByRole('button').evaluate((button) => {
+    button.focus();
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }));
+    return document.activeElement === button;
+  })).toBe(true);
 
   rootItems.push({
     id: 'tool-group-short', type: 'tool_group', title: 'Read 2 short files', status: 'completed', tools: [

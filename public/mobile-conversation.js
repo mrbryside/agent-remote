@@ -1373,11 +1373,12 @@ export function createMobileConversationView({
     initializeDisclosure(toggle, panel, expandedItems.has(item.id));
     eventDetails(panel, item);
     toggle.append(copy, state, arrow);
-    toggle.addEventListener('click', () => {
+    toggle.addEventListener('click', (event) => {
       if (expandedItems.has(item.id)) expandedItems.delete(item.id);
       else expandedItems.add(item.id);
       const open = expandedItems.has(item.id);
       animateDisclosure(toggle, panel, open);
+      if (item.type === 'tool' && event.detail !== 0) toggle.blur();
     });
     card.append(toggle, panel);
     if (item.type === 'permission' && item.status === 'pending') {
@@ -1826,11 +1827,12 @@ export function createMobileConversationView({
       nested.__mobileItemSignature = JSON.stringify(tool);
       panel.append(nested);
     }
-    toggle.addEventListener('click', () => {
+    toggle.addEventListener('click', (event) => {
       if (expandedItems.has(item.id)) expandedItems.delete(item.id);
       else expandedItems.add(item.id);
       const open = expandedItems.has(item.id);
       animateDisclosure(toggle, panel, open);
+      if (event.detail !== 0) toggle.blur();
     });
     group.append(toggle, panel);
     return group;
