@@ -763,7 +763,6 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     button.querySelector('span').clientWidth)).toBe(true);
   await expect(conversation.locator('#mobile-conversation-permission-mode')).toHaveCount(0);
   const input = conversation.locator('#mobile-conversation-input');
-  const activity = conversation.locator('#mobile-conversation-activity');
   const sendButton = conversation.locator('#mobile-conversation-send');
   const scrollbarStyles = await conversation.locator(
     '#mobile-conversation-messages, #mobile-conversation-input',
@@ -828,8 +827,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const idleComposerHeight = await conversation.locator('#mobile-conversation-composer').evaluate(
     (node) => node.getBoundingClientRect().height,
   );
-  await expect(activity).toBeHidden();
-  await expect.poll(() => activity.evaluate((node) => node.getBoundingClientRect().height)).toBe(26);
+  await expect(conversation.locator('#mobile-conversation-activity')).toHaveCount(0);
   currentActivity = {
     active: true, phase: 'waiting', label: 'Waiting for response…',
     canCancel: true, cancelRequested: false,
@@ -839,14 +837,15 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       data: JSON.stringify({ conversation: nextConversation }),
     });
   }, rootConversation());
-  await expect(activity).toBeVisible();
-  await expect(activity).toContainText('Waiting for response…');
-  await expect(activity.locator('i')).toHaveCount(1);
   await expect.poll(() => conversation.locator('#mobile-conversation-composer').evaluate(
     (node) => node.getBoundingClientRect().height,
   )).toBe(idleComposerHeight);
   await expect(sendButton).toHaveAttribute('data-action', 'stop');
   await expect(sendButton).toHaveAttribute('aria-label', 'Stop response');
+  await expect(sendButton).toHaveText('');
+  await expect.poll(() => sendButton.evaluate(
+    (node) => getComputedStyle(node, '::before').animationName,
+  )).toBe('mobile-activity-spin');
   await expect(sidebarSession).toHaveClass(/working/);
   await expect(modelButton).toBeEnabled();
   await expect(conversation.locator('#mobile-conversation-mode')).toBeEnabled();
@@ -876,7 +875,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       data: JSON.stringify({ conversation: nextConversation }),
     });
   }, rootConversation());
-  await expect(activity).toContainText('Preparing read_file…');
+  await expect(sendButton).toHaveAttribute('data-action', 'stop');
   await input.fill('queue this while Grok works');
   await expect(sendButton).toHaveAttribute('data-action', 'send');
   await expect(sendButton).toHaveAttribute('aria-label', 'Send message');
@@ -884,7 +883,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(sendButton).toHaveAttribute('data-action', 'stop');
   await sendButton.click();
   await expect.poll(() => cancellations).toEqual([{}]);
-  await expect(activity).toContainText('Stopping…');
+  await expect(sendButton).toHaveAttribute('data-action', 'stopping');
+  await expect(sendButton).toHaveAttribute('aria-label', 'Stopping response');
+  await expect.poll(() => sendButton.evaluate(
+    (node) => getComputedStyle(node, '::before').animationName,
+  )).toBe('mobile-stop-pulse');
   await expect(sendButton).toBeDisabled();
 
   currentActivity = { active: false };
@@ -893,7 +896,6 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       data: JSON.stringify({ conversation: nextConversation }),
     });
   }, rootConversation());
-  await expect(activity).toBeHidden();
   await expect(sendButton).toHaveAttribute('data-action', 'send');
   await expect(sendButton).toBeDisabled();
   await expect(sidebarSession).not.toHaveClass(/working/);
@@ -924,7 +926,6 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   // echo the exact user text, mobile must still keep Send/Ready instead of
   // inventing an endless Responding + Stop state from its optimistic message.
   await expect(sendButton).toHaveAttribute('data-action', 'send');
-  await expect(activity).toBeHidden();
   const thoughtCard = conversation.locator('.mobile-event-thought').first();
   await expect(thoughtCard.getByRole('button')).toContainText('Thinking…');
   await expect(thoughtCard.locator('.mobile-thinking-indicator')).toHaveCount(1);
@@ -1319,7 +1320,6 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }, rootConversation());
   await expect(liveTokenMessage).not.toHaveAttribute('data-streaming', 'true');
   await expect(liveTokenMessage.locator('.mobile-markdown')).toHaveText('Token by token final');
-  await expect(conversation.locator('#mobile-conversation-activity')).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-send')).toHaveAttribute('data-action', 'send');
 
   // ACP can split prose on a soft newline even though Grok's terminal renders
@@ -1383,7 +1383,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const liveMarkdownMessage = conversation.locator('[data-message-id="assistant-live-markdown"]');
   await expect(liveMarkdownMessage.locator('li')).toHaveCount(3);
   await expect(liveMarkdownMessage.locator('strong')).toHaveCount(3);
-  await expect(conversation.locator('#mobile-conversation-activity')).toContainText('Responding…');
+  await expect(sendButton).toHaveAttribute('data-action', 'stop');
   currentActivity = { active: false };
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', {
@@ -1789,7 +1789,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await conversation.locator('#mobile-conversation-send').click();
   await expect(conversation.locator('.mobile-message[data-pending="true"]')).toContainText('hello from phone');
   await expect(conversation.locator('.mobile-message[data-pending="true"] .mobile-message-author'))
-    .toHaveText('Sending…');
+    .toHaveText('You');
+  await expect(sendButton).toHaveAttribute('data-action', 'waiting');
+  await expect(sendButton).toHaveAttribute('aria-label', 'Waiting for response');
   await expect.poll(() => mobileInputs).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ text: 'hello from phone' }),
@@ -1938,21 +1940,19 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => queueActions.some((entry) => entry.action === 'steer')).toBe(true);
   const pendingSteer = conversation.locator('.mobile-message[data-pending="true"]');
   await expect(pendingSteer).toContainText('queued follow up');
-  await expect(pendingSteer.locator('.mobile-message-author')).toHaveText('Waiting for Grok…');
+  await expect(pendingSteer.locator('.mobile-message-author')).toHaveText('You');
   await expect.poll(() => messages.evaluate((node) =>
     node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(1);
   await expect(conversation.locator('#mobile-conversation-jump')).toBeHidden();
-  await expect(activity).not.toContainText('Stopping…');
   await expect(sendButton).toHaveAttribute('data-action', 'stop');
   await sendButton.click();
   await expect.poll(() => cancellations).toHaveLength(2);
-  await expect(activity).toContainText('Stopping…');
+  await expect(sendButton).toHaveAttribute('data-action', 'stopping');
 
   currentActivity = { active: false };
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', { data: JSON.stringify({ conversation: nextConversation }) });
   }, rootConversation());
-  await expect(activity).toBeHidden();
   await expect(sendButton).toHaveAttribute('data-action', 'send');
 
   await conversation.locator('#mobile-conversation-file').setInputFiles({

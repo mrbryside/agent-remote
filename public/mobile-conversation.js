@@ -71,8 +71,6 @@ export function createMobileConversationView({
   const context = document.querySelector('#mobile-conversation-context');
   const contextProgress = document.querySelector('#mobile-conversation-context-progress');
   const contextValue = document.querySelector('#mobile-conversation-context-value');
-  const activity = document.querySelector('#mobile-conversation-activity');
-  const activityLabel = activity.querySelector('span');
   let sessionName;
   let threadId;
   let parentId;
@@ -2581,12 +2579,9 @@ export function createMobileConversationView({
       const article = element('article', `mobile-message mobile-message-${item.role}`);
       article.dataset.messageId = item.id;
       if (item.role === 'user') {
-        const author = item.pendingStatus === 'sending' ? 'Sending…'
-          : item.pendingStatus === 'accepted' ? 'Waiting for Grok…' : 'You';
-        article.append(
-          element('span', 'mobile-message-author', author),
-          element('div', 'mobile-message-content', item.text),
-        );
+        const content = element('div', 'mobile-message-content', item.text);
+        const author = item.pendingStatus === 'failed' ? 'Not received · tap to retry' : 'You';
+        article.append(element('span', 'mobile-message-author', author), content);
       } else {
         const streaming = streamingAssistant(conversation)?.id === item.id;
         if (streaming) {
@@ -2935,18 +2930,15 @@ export function createMobileConversationView({
     if (!turnActive) cancellingTurn = false;
     const hasDraft = Boolean(input.value.trim() || attachments.length);
     const stopAction = turnActive && !hasDraft;
-    const statusText = cancellingTurn
-      ? 'Stopping…'
-      : lastConversation?.activity?.label || (pendingDelivery ? 'Sending…' : '');
-    activity.hidden = !turnActive && !pendingDelivery;
-    activity.dataset.phase = cancellingTurn
-      ? 'stopping'
-      : lastConversation?.activity?.phase || (pendingDelivery ? 'sending' : 'waiting');
-    activityLabel.textContent = statusText;
-    sendButton.dataset.action = stopAction ? 'stop' : 'send';
-    sendButton.textContent = stopAction ? '■' : '↑';
-    sendButton.setAttribute('aria-label', stopAction ? 'Stop response' : 'Send message');
-    sendButton.disabled = uploadingAttachments > 0 || (stopAction ? cancellingTurn : !hasDraft);
+    const waitingAction = pendingDelivery && !turnActive && !hasDraft;
+    const action = cancellingTurn ? 'stopping' : stopAction ? 'stop' : waitingAction ? 'waiting' : 'send';
+    sendButton.dataset.action = action;
+    sendButton.textContent = action === 'send' ? '↑' : '';
+    sendButton.setAttribute('aria-label', action === 'stop' ? 'Stop response'
+      : action === 'stopping' ? 'Stopping response'
+        : action === 'waiting' ? 'Waiting for response' : 'Send message');
+    sendButton.disabled = uploadingAttachments > 0 || action === 'stopping' || action === 'waiting' ||
+      (action === 'send' && !hasDraft);
   }
 
   composer.addEventListener('submit', async (event) => {
@@ -3236,7 +3228,6 @@ export function createMobileConversationView({
       setBooting(true);
       composer.hidden = false;
       context.hidden = true;
-      activity.hidden = true;
       modelButton.hidden = true;
       modeButton.hidden = true;
       queue.hidden = true;
@@ -3293,7 +3284,6 @@ export function createMobileConversationView({
       interactionDock.replaceChildren();
       composer.hidden = false;
       context.hidden = true;
-      activity.hidden = true;
       modelButton.hidden = true;
       modeButton.hidden = true;
       queue.hidden = true;
