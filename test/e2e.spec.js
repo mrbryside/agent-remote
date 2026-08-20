@@ -740,6 +740,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await thoughtCard.getByRole('button').click();
   await expect(thoughtCard.getByText('Interaction remains available.')).toBeVisible();
   await expect(conversation.locator('.mobile-tool-group')).toContainText('Listed 1 dir, Read 2 files, Searched 1 time, Edited 1 file, Ran 1 command');
+  await expect.poll(() => conversation.locator('[data-event-id="tool-group-1"]').evaluate((node) => ({
+    groupBorder: getComputedStyle(node).borderTopStyle,
+    groupBackground: getComputedStyle(node).backgroundColor,
+  }))).toEqual({ groupBorder: 'none', groupBackground: 'rgba(0, 0, 0, 0)' });
   const stableToolGroup = await page.evaluate(async (nextConversation) => {
     const button = document.querySelector('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle');
     const detail = document.querySelector('[data-event-id="tool-group-1"] .mobile-event-card .mobile-event-panel > *');
@@ -990,20 +994,24 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
   const toolPanel = conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-panel');
   await expect.poll(() => toolPanel.evaluate((panel) => panel.clientHeight)).toBeGreaterThan(200);
+  await expect.poll(() => toolPanel.locator(':scope > .mobile-event-card').first().evaluate((node) => ({
+    border: getComputedStyle(node).borderTopStyle,
+    background: getComputedStyle(node).backgroundColor,
+  }))).toEqual({ border: 'none', background: 'rgba(0, 0, 0, 0)' });
   await conversation.getByRole('button', { name: /Edited app\.js/ }).click();
   const editCard = conversation.locator('[data-event-id="tool-edit-app"]');
   await expect(editCard.locator('.mobile-event-detail')).toHaveCount(0);
   await expect(editCard.locator('.mobile-event-change')).toContainText('public/app.js');
-  await expect(editCard.locator('.mobile-event-change-stats [data-kind="add"]')).toHaveText('+1');
-  await expect(editCard.locator('.mobile-event-change-stats [data-kind="remove"]')).toHaveText('-1');
+  await expect(editCard.locator('.mobile-event-toggle .mobile-event-change-stats [data-kind="add"]')).toHaveText('+1');
+  await expect(editCard.locator('.mobile-event-toggle .mobile-event-change-stats [data-kind="remove"]')).toHaveText('-1');
   await expect(editCard.locator('.mobile-event-change-line[data-kind="remove"]')).toContainText('const status = "old";');
   await expect(editCard.locator('.mobile-event-change-line[data-kind="add"]')).toContainText('const status = "ready";');
   await expect.poll(() => editCard.locator('.mobile-event-change').evaluate((node) => {
     const added = node.querySelector('[data-kind="add"]');
     const removed = node.querySelector('[data-kind="remove"]');
     return {
-      addColor: getComputedStyle(node.querySelector('.mobile-event-change-stats [data-kind="add"]')).color,
-      removeColor: getComputedStyle(node.querySelector('.mobile-event-change-stats [data-kind="remove"]')).color,
+      addColor: getComputedStyle(node.querySelector(':scope > header .mobile-event-change-stats [data-kind="add"]')).color,
+      removeColor: getComputedStyle(node.querySelector(':scope > header .mobile-event-change-stats [data-kind="remove"]')).color,
       addBackground: getComputedStyle(added).backgroundColor,
       removeBackground: getComputedStyle(removed).backgroundColor,
     };
@@ -1018,8 +1026,12 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(fileSheet).toBeVisible();
   await expect(fileSheet.locator('.mobile-file-line[data-highlighted="true"]')).toHaveCount(1);
   await fileSheet.getByRole('button', { name: 'Close file preview' }).click();
-  await conversation.getByRole('button', { name: /Shell/ }).click();
-  const shellDetail = conversation.locator('.mobile-event-shell pre');
+  await conversation.getByRole('button', { name: /Ran node --test/ }).click();
+  const shellDetail = conversation.locator('[data-event-id="tool-shell"] .mobile-tool-command');
+  await expect(shellDetail.locator('.mobile-tool-command-line > i')).toHaveText('$');
+  await expect(shellDetail.locator('.mobile-tool-command-line > code')).toContainText('node --test');
+  await expect(shellDetail.locator('.mobile-tool-command-output')).toContainText('test output line 1');
+  await expect(conversation.locator('[data-event-id="tool-shell"] .mobile-event-detail')).toHaveCount(0);
   await expect.poll(() => shellDetail.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
   await expect.poll(() => toolPanel.evaluate((panel) => panel.scrollHeight > panel.clientHeight)).toBe(true);
   const toolReadingPosition = await toolPanel.evaluate((panel) => {

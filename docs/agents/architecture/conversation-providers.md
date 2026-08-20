@@ -203,12 +203,15 @@ closes it; completed thoughts no longer remain falsely marked `Running`.
 is retained as metadata instead of becoming a chat message. Unknown future
 events remain visible as generic expandable cards.
 
-On mobile, expanded tool groups own a bounded, max-height vertical scroll viewport.
-Nested Shell, output, input, and generic detail blocks preserve whitespace and
-can scroll both axes instead of wrapping long commands. Edit results render only
-the compact unified diff—no duplicate input, location, or output sections—with
-line numbers, green additions, red removals, colored add/remove counts, bounded
-context, and independent two-axis scrolling.
+On mobile, a collapsed tool group is a borderless activity row. Expanding it
+reveals a borderless transcript of tool rows; only a tool whose details are open
+gets one containing frame, avoiding nested cards. The group owns a bounded,
+max-height vertical scroll viewport. A Shell tool places `$ command` above its
+output inside that single frame, preserving whitespace and two-axis scrolling
+without separate Shell, location, and output sections. Edit results similarly
+render only the compact unified diff—with line numbers, green additions, red
+removals, colored add/remove counts, bounded context, and independent two-axis
+scrolling.
 
 Spawn calls, permission-first embedded tool calls, `subagent_spawned`,
 completion, and output polling collapse into one stable lifecycle item:

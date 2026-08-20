@@ -1102,33 +1102,44 @@ export function createMobileConversationView({
     return row;
   }
 
-  function changeNode(change, index) {
+  function changeParts(change) {
     const splitLines = (value) => {
       const text = String(value || '').replace(/\n$/, '');
       return text ? text.split('\n') : [];
     };
     const before = splitLines(change.oldText);
     const after = splitLines(change.newText);
-    const oldBase = Math.max(1, Number(change.oldLine) || 1);
-    const newBase = Math.max(1, Number(change.newLine) || 1);
     let prefix = 0;
     while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
     let suffix = 0;
     while (suffix < before.length - prefix && suffix < after.length - prefix &&
       before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix += 1;
-    const removed = before.slice(prefix, before.length - suffix);
-    const added = after.slice(prefix, after.length - suffix);
-    const section = element('section', 'mobile-event-change');
-    const header = element('header');
+    return {
+      before, after, prefix, suffix,
+      removed: before.slice(prefix, before.length - suffix),
+      added: after.slice(prefix, after.length - suffix),
+    };
+  }
+
+  function changeStatsNode(added, removed) {
     const stats = element('span', 'mobile-event-change-stats');
-    const addedCount = element('small', '', `+${added.length}`);
+    const addedCount = element('small', '', `+${added}`);
     addedCount.dataset.kind = 'add';
-    const removedCount = element('small', '', `-${removed.length}`);
+    const removedCount = element('small', '', `-${removed}`);
     removedCount.dataset.kind = 'remove';
     stats.append(addedCount, removedCount);
+    return stats;
+  }
+
+  function changeNode(change, index) {
+    const { before, after, prefix, suffix, removed, added } = changeParts(change);
+    const oldBase = Math.max(1, Number(change.oldLine) || 1);
+    const newBase = Math.max(1, Number(change.newLine) || 1);
+    const section = element('section', 'mobile-event-change');
+    const header = element('header');
     header.append(
       element('strong', '', change.path || 'Changed file'),
-      stats,
+      changeStatsNode(added.length, removed.length),
     );
     const scroll = element('div', 'mobile-event-change-scroll');
     scroll.dataset.streamScroll = `diff:${index}:${change.path || 'changed-file'}`;
@@ -1158,6 +1169,15 @@ export function createMobileConversationView({
     return section;
   }
 
+  function commandNode(item) {
+    const section = element('section', 'mobile-tool-command');
+    const command = element('div', 'mobile-tool-command-line');
+    command.append(element('i', '', '$'), element('code', '', item.command));
+    section.append(command);
+    if (item.output) section.append(element('pre', 'mobile-tool-command-output', item.output));
+    return section;
+  }
+
   function planListNode(item) {
     const list = element('ol', 'mobile-plan-list');
     for (const entry of item.entries || []) {
@@ -1183,12 +1203,12 @@ export function createMobileConversationView({
       if (diffs.length) {
         for (const [index, change] of diffs.entries()) panel.append(changeNode(change, index));
       } else {
-        if (item.command) detail(panel, 'Shell', item.command, 'mobile-event-shell');
+        if (item.command) panel.append(commandNode(item));
         else if (!item.file && !item.matches?.length) detail(panel, 'Input', item.input);
         if (item.file) panel.append(filePreviewNode(item.file, { streamId: `read:${item.id}` }));
         if (item.matches?.length) panel.append(searchMatchesNode(item.matches));
-        if (!item.file && !item.matches?.length) detail(panel, 'Locations', item.locations?.join('\n'));
-        if (!item.file && !item.matches?.length) detail(panel, 'Output', item.output);
+        if (!item.command && !item.file && !item.matches?.length) detail(panel, 'Locations', item.locations?.join('\n'));
+        if (!item.command && !item.file && !item.matches?.length) detail(panel, 'Output', item.output);
       }
       for (const output of item.images || []) {
         const image = element('img', 'mobile-event-image');
@@ -1304,10 +1324,21 @@ export function createMobileConversationView({
     toggle.setAttribute('aria-expanded', String(expandedItems.has(item.id)));
     const thinking = item.type === 'thought' && ['working', 'running'].includes(item.status);
     const copy = element('span');
-    copy.append(
-      element('small', '', item.type === 'thought' ? 'Reasoning' : item.kind || item.type),
-      element('strong', '', item.type === 'thought' ? thinking ? 'Thinking…' : 'Thought' : item.title || 'Event'),
-    );
+    copy.append(element('small', '', item.type === 'thought' ? 'Reasoning' : item.kind || item.type));
+    const heading = element('span', 'mobile-event-heading');
+    heading.append(element('strong', '', item.type === 'thought'
+      ? thinking ? 'Thinking…' : 'Thought'
+      : item.title || 'Event'));
+    if (item.type === 'tool' && item.diffs?.length) {
+      const totals = item.diffs.reduce((summary, change) => {
+        const parts = changeParts(change);
+        summary.added += parts.added.length;
+        summary.removed += parts.removed.length;
+        return summary;
+      }, { added: 0, removed: 0 });
+      heading.append(changeStatsNode(totals.added, totals.removed));
+    }
+    copy.append(heading);
     const state = element('span', 'mobile-event-status', item.type === 'thought' ? '' : statusLabel(item.status));
     state.dataset.state = item.status;
     if (thinking) {
@@ -1762,9 +1793,11 @@ export function createMobileConversationView({
     panel.dataset.streamScroll = 'tools';
     panel.hidden = !expandedItems.has(item.id);
     for (const tool of item.tools || []) {
-      const displayTitle = tool.subject && !tool.title?.includes(tool.subject)
-        ? [tool.title, tool.subject].filter(Boolean).join(' ')
-        : tool.title;
+      const displayTitle = tool.command
+        ? `Ran ${tool.command}`
+        : tool.subject && !tool.title?.includes(tool.subject)
+          ? [tool.title, tool.subject].filter(Boolean).join(' ')
+          : tool.title;
       const nested = eventNode({
         ...tool,
         title: displayTitle,
