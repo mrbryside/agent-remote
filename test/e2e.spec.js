@@ -1023,8 +1023,23 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       data: JSON.stringify({ conversation: nextConversation }),
     });
   }, rootConversation());
-  await conversation.getByRole('button', { name: /Read 2 short files/ }).click();
   const shortToolPanel = conversation.locator('[data-event-id="tool-group-short"] > .mobile-tool-group-panel');
+  const groupDisclosureMotion = await conversation.locator('[data-event-id="tool-group-short"]').evaluate(async (group) => {
+    const toggle = group.querySelector(':scope > .mobile-tool-group-toggle');
+    const panel = group.querySelector(':scope > .mobile-tool-group-panel');
+    toggle.click();
+    const opening = panel.dataset.disclosureMotion;
+    const start = panel.getBoundingClientRect().height;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const middle = panel.getBoundingClientRect().height;
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    const end = panel.getBoundingClientRect().height;
+    return { opening, start, middle, end, hidden: panel.hidden };
+  });
+  expect(groupDisclosureMotion.opening).toBe('opening');
+  expect(groupDisclosureMotion.start).toBeLessThan(groupDisclosureMotion.middle);
+  expect(groupDisclosureMotion.start).toBeLessThan(groupDisclosureMotion.end);
+  expect(groupDisclosureMotion.hidden).toBe(false);
   await expect(shortToolPanel).toBeVisible();
   const shortToolPanelSize = await shortToolPanel.evaluate((panel) => ({
     height: panel.clientHeight,
@@ -1057,8 +1072,29 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     border: getComputedStyle(node).borderTopStyle,
     background: getComputedStyle(node).backgroundColor,
   }))).toEqual({ border: 'none', background: 'rgba(0, 0, 0, 0)' });
-  await conversation.getByRole('button', { name: /Edited app\.js/ }).click();
   const editCard = conversation.locator('[data-event-id="tool-edit-app"]');
+  const childDisclosureMotion = await editCard.evaluate(async (card) => {
+    const toggle = card.querySelector(':scope > .mobile-event-toggle');
+    const panel = card.querySelector(':scope > .mobile-event-panel');
+    toggle.click();
+    const opening = panel.dataset.disclosureMotion;
+    const start = panel.getBoundingClientRect().height;
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const middle = panel.getBoundingClientRect().height;
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    const end = panel.getBoundingClientRect().height;
+    toggle.click();
+    const closing = panel.dataset.disclosureMotion;
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    return { opening, start, middle, end, closing, closed: panel.hidden };
+  });
+  expect(childDisclosureMotion.opening).toBe('opening');
+  expect(childDisclosureMotion.start).toBeLessThan(childDisclosureMotion.middle);
+  expect(childDisclosureMotion.start).toBeLessThan(childDisclosureMotion.end);
+  expect(childDisclosureMotion.closing).toBe('closing');
+  expect(childDisclosureMotion.closed).toBe(true);
+  await conversation.getByRole('button', { name: /Edited app\.js/ }).click();
+  await expect(editCard.locator('.mobile-event-panel')).toBeVisible();
   await expect(editCard.locator('.mobile-event-detail')).toHaveCount(0);
   await expect(editCard.locator('.mobile-event-change')).toContainText('public/app.js');
   await expect(editCard.locator('.mobile-event-toggle .mobile-event-change-stats [data-kind="add"]')).toHaveText('+1');

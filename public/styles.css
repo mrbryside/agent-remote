@@ -518,6 +518,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
      animation on every incremental snapshot makes stable controls flash and
      can move them out from under a touch before click dispatch. */
   .mobile-event-panel:not([hidden]), .mobile-tool-group-panel:not([hidden]) { transform-origin: top; }
+  .mobile-event-panel[data-disclosure-motion], .mobile-tool-group-panel[data-disclosure-motion] { contain: layout paint; will-change: height, opacity, transform; }
   .mobile-event-detail { display: grid; gap: 5px; min-width: 0; padding-top: 9px; }
   .mobile-event-detail small { color: var(--color-text-muted); font: 600 8px/1.2 var(--font-family-mono); letter-spacing: .06em; text-transform: uppercase; }
   .mobile-event-detail pre { box-sizing: border-box; width: 100%; max-width: 100%; max-height: min(38dvh, 300px); margin: 0; overflow: auto; color: var(--color-text-secondary); font: 10px/1.55 var(--font-family-mono); overflow-wrap: normal; white-space: pre; word-break: normal; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }

@@ -107,6 +107,7 @@ export function createMobileConversationView({
   let sheetPointer;
   let subagentPillHost;
   const expandedItems = new Set();
+  const disclosureMotions = new WeakMap();
   const pendingQuestions = new Map();
   const pendingPlanReviews = new Map();
   let questionStateVersion = 0;
@@ -1369,15 +1370,14 @@ export function createMobileConversationView({
     const arrow = element('i', '', '›');
     const panel = element('div', 'mobile-event-panel');
     panel.dataset.streamScroll = 'details';
-    panel.hidden = !expandedItems.has(item.id);
+    initializeDisclosure(toggle, panel, expandedItems.has(item.id));
     eventDetails(panel, item);
     toggle.append(copy, state, arrow);
     toggle.addEventListener('click', () => {
       if (expandedItems.has(item.id)) expandedItems.delete(item.id);
       else expandedItems.add(item.id);
       const open = expandedItems.has(item.id);
-      toggle.setAttribute('aria-expanded', String(open));
-      panel.hidden = !open;
+      animateDisclosure(toggle, panel, open);
     });
     card.append(toggle, panel);
     if (item.type === 'permission' && item.status === 'pending') {
@@ -1812,7 +1812,7 @@ export function createMobileConversationView({
     );
     const panel = element('div', 'mobile-tool-group-panel');
     panel.dataset.streamScroll = 'tools';
-    panel.hidden = !expandedItems.has(item.id);
+    initializeDisclosure(toggle, panel, expandedItems.has(item.id));
     for (const tool of item.tools || []) {
       const displayTitle = tool.command
         ? `Ran ${tool.command}`
@@ -1830,8 +1830,7 @@ export function createMobileConversationView({
       if (expandedItems.has(item.id)) expandedItems.delete(item.id);
       else expandedItems.add(item.id);
       const open = expandedItems.has(item.id);
-      toggle.setAttribute('aria-expanded', String(open));
-      panel.hidden = !open;
+      animateDisclosure(toggle, panel, open);
     });
     group.append(toggle, panel);
     return group;
@@ -1877,6 +1876,60 @@ export function createMobileConversationView({
 
   function reducedMotion() {
     return matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  function initializeDisclosure(toggle, panel, open) {
+    toggle.setAttribute('aria-expanded', String(open));
+    panel.hidden = !open;
+    panel.inert = !open;
+    panel.setAttribute('aria-hidden', String(!open));
+  }
+
+  function motionDuration(panel, token, fallback) {
+    const value = getComputedStyle(panel).getPropertyValue(token).trim();
+    if (value.endsWith('ms')) return Number.parseFloat(value) || fallback;
+    if (value.endsWith('s')) return (Number.parseFloat(value) * 1_000) || fallback;
+    return fallback;
+  }
+
+  function animateDisclosure(toggle, panel, open) {
+    toggle.setAttribute('aria-expanded', String(open));
+    panel.setAttribute('aria-hidden', String(!open));
+    panel.inert = !open;
+    const active = disclosureMotions.get(panel);
+    const currentHeight = panel.hidden ? 0 : panel.getBoundingClientRect().height;
+    const currentOpacity = panel.hidden ? 0 : Number.parseFloat(getComputedStyle(panel).opacity) || 1;
+    active?.animation.cancel();
+
+    if (open) panel.hidden = false;
+    if (reducedMotion() || typeof panel.animate !== 'function') {
+      panel.hidden = !open;
+      panel.removeAttribute('data-disclosure-motion');
+      disclosureMotions.delete(panel);
+      return;
+    }
+
+    const targetHeight = open ? panel.getBoundingClientRect().height : 0;
+    const targetOpacity = open ? 1 : 0;
+    panel.dataset.disclosureMotion = open ? 'opening' : 'closing';
+    const style = getComputedStyle(panel);
+    const animation = panel.animate([
+      { height: `${currentHeight}px`, opacity: currentOpacity, transform: open ? 'translateY(-3px)' : 'translateY(0)' },
+      { height: `${targetHeight}px`, opacity: targetOpacity, transform: open ? 'translateY(0)' : 'translateY(-3px)' },
+    ], {
+      duration: motionDuration(panel, '--duration-normal', 220),
+      easing: style.getPropertyValue('--ease-out').trim() || 'cubic-bezier(.2, .8, .2, 1)',
+      fill: 'both',
+    });
+    const motion = { animation, open };
+    disclosureMotions.set(panel, motion);
+    animation.finished.then(() => {
+      if (disclosureMotions.get(panel) !== motion) return;
+      if (!open) panel.hidden = true;
+      panel.removeAttribute('data-disclosure-motion');
+      disclosureMotions.delete(panel);
+      animation.cancel();
+    }).catch(() => {});
   }
 
   function queueRows() {
@@ -2137,10 +2190,16 @@ export function createMobileConversationView({
   }
 
   function syncAttributes(current, fresh) {
+    const disclosureMoving = current.hasAttribute('data-disclosure-motion');
+    const preserve = disclosureMoving
+      ? new Set(['hidden', 'inert', 'aria-hidden', 'data-disclosure-motion'])
+      : undefined;
     for (const attribute of [...current.attributes]) {
+      if (preserve?.has(attribute.name)) continue;
       if (!fresh.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
     }
     for (const attribute of [...fresh.attributes]) {
+      if (preserve?.has(attribute.name)) continue;
       if (current.getAttribute(attribute.name) !== attribute.value) {
         current.setAttribute(attribute.name, attribute.value);
       }
