@@ -1977,6 +1977,10 @@ export function createTerminalServer(options = {}) {
           });
           response.flushHeaders?.();
           response.socket?.setNoDelay?.(true);
+          // Prime Safari and intermediary HTTP stacks with enough body bytes
+          // to enter streaming mode immediately instead of buffering the first
+          // model chunks. The comment is ignored by EventSource consumers.
+          response.write(`:${' '.repeat(2_048)}\nretry: 1000\n\n`);
           let stopWatching = async () => {};
           let closed = false;
           let streamedMessageId;
@@ -1995,8 +1999,11 @@ export function createTerminalServer(options = {}) {
             }
           };
           const heartbeat = setInterval(() => {
-            if (!response.writableEnded) response.write(': keep-alive\n\n');
-          }, 15_000);
+            if (!response.writableEnded) {
+              response.write(`event: heartbeat\ndata: ${Date.now()}\n\n`);
+              response.flush?.();
+            }
+          }, 3_000);
           heartbeat.unref?.();
           conversationStreams.add(close);
           response.once('close', () => void close());

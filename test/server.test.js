@@ -491,6 +491,9 @@ test('streams provider-neutral conversation updates and releases its watcher on 
       if (done) break;
       streamed += Buffer.from(value).toString('utf8');
     }
+    assert.equal(streamed.startsWith(':'), true);
+    assert.match(streamed, /retry: 1000/);
+    assert.ok(streamed.indexOf('event: conversation') > 2_048);
     assert.match(streamed, /"live chunk"/);
     assert.match(streamed, /"messageId":"a-1"/);
     assert.equal((streamed.match(/"conversation":/g) || []).length, 1);

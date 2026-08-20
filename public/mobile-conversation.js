@@ -81,6 +81,7 @@ export function createMobileConversationView({
   let generation = 0;
   let refreshTimer;
   let foregroundResumeTimer;
+  let streamWatchdogTimer;
   let eventSource;
   let streamKey = '';
   let backgrounded = document.visibilityState === 'hidden';
@@ -575,9 +576,25 @@ export function createMobileConversationView({
   }
 
   function closeStream() {
+    clearTimeout(streamWatchdogTimer);
+    streamWatchdogTimer = undefined;
     eventSource?.close();
     eventSource = undefined;
     streamKey = '';
+  }
+
+  function armStreamWatchdog(source) {
+    clearTimeout(streamWatchdogTimer);
+    streamWatchdogTimer = undefined;
+    if (!source || source !== eventSource || document.visibilityState === 'hidden') return;
+    streamWatchdogTimer = setTimeout(() => {
+      if (source !== eventSource || document.visibilityState === 'hidden') return;
+      state.textContent = 'Reconnecting';
+      state.dataset.state = 'working';
+      closeStream();
+      renderedSignature = '';
+      void refresh();
+    }, 7_000);
   }
 
   function suspendForBackground() {
@@ -1090,8 +1107,12 @@ export function createMobileConversationView({
     streamKey = nextKey;
     const url = apiUrl(`/api/conversations/${encodeURIComponent(sessionName)}/stream`);
     url.searchParams.set('thread', threadId);
-    eventSource = new EventSource(url);
-    eventSource.addEventListener('conversation', (event) => {
+    const source = new EventSource(url);
+    eventSource = source;
+    armStreamWatchdog(source);
+    source.addEventListener('conversation', (event) => {
+      if (source !== eventSource) return;
+      armStreamWatchdog(source);
       try {
         const payload = JSON.parse(event.data);
         const payloadThreadId = payload.conversation?.thread?.id || payload.stream?.threadId;
@@ -1105,7 +1126,9 @@ export function createMobileConversationView({
         schedule();
       }
     });
-    eventSource.addEventListener('control', (event) => {
+    source.addEventListener('control', (event) => {
+      if (source !== eventSource) return;
+      armStreamWatchdog(source);
       try {
         const payload = JSON.parse(event.data);
         if (payload?.type !== 'control' || payload.action !== 'open-graphics' ||
@@ -1118,11 +1141,20 @@ export function createMobileConversationView({
         // Ignore malformed control events without interrupting conversation streaming.
       }
     });
-    eventSource.addEventListener('open', () => clearTimeout(refreshTimer));
-    eventSource.addEventListener('error', () => {
+    source.addEventListener('heartbeat', () => {
+      if (source === eventSource) armStreamWatchdog(source);
+    });
+    source.addEventListener('open', () => {
+      if (source !== eventSource) return;
+      clearTimeout(refreshTimer);
+      armStreamWatchdog(source);
+    });
+    source.addEventListener('error', () => {
+      if (source !== eventSource) return;
       state.textContent = 'Reconnecting';
       state.dataset.state = 'working';
-      schedule();
+      closeStream();
+      schedule(150);
     });
   }
 
@@ -2770,6 +2802,11 @@ export function createMobileConversationView({
       } else {
         if (pendingMessage?.text === pendingText) pendingMessage.status = 'accepted';
         schedulePendingAcceptanceFailure(pendingText);
+        // An idle EventSource can be silently suspended by iOS without an
+        // error event. Replacing it after prompt acceptance gives the new turn
+        // a fresh transport. The snapshot fetched below also recovers chunks
+        // that Grok emitted between the POST and this reconnect.
+        closeStream();
       }
       state.textContent = 'Queued';
       state.dataset.state = 'working';
@@ -3074,6 +3111,7 @@ export function createMobileConversationView({
       generation += 1;
       clearTimeout(refreshTimer);
       clearTimeout(foregroundResumeTimer);
+      clearTimeout(streamWatchdogTimer);
       clearTimeout(pendingAcceptanceTimer);
       cancelAnimationFrame(tailSnapFrame);
       closeStream();

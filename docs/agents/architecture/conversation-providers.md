@@ -91,6 +91,15 @@ mobile client closes its owned stream and invalidates any in-flight snapshot on
 visible, `pageshow`, focus, or `online`, it first reads the authoritative full
 snapshot to recover every missed token and lifecycle boundary, then opens a
 new EventSource. The old stream is never reused after a foreground transition.
+The server primes every SSE response with a 2 KiB comment so Safari,
+Cloudflare, and intermediary HTTP stacks enter streaming mode before the first
+model token. It then emits a named heartbeat every three seconds. The client
+resets a seven-second watchdog for every conversation, control, open, or
+heartbeat frame; a silent stream is closed, reconciled from a full snapshot,
+and replaced. An accepted idle prompt performs that same snapshot-first stream
+replacement immediately, recovering any tokens emitted while the POST was in
+flight. Queued follow-ups keep the current live stream because they do not
+start a new turn yet.
 Plain token chunks append directly into the active message node. A chunk that
 completes Markdown structure (a line break, list/heading marker, emphasis,
 inline code, link, table, or fence) reparses only that active message and

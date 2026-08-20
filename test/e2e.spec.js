@@ -219,6 +219,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
         this.url = url;
         this.listeners = new Map();
         window.__conversationStreams.push(this);
+        this.heartbeat = setInterval(() => this.emit('heartbeat', {}), 1_000);
         queueMicrotask(() => this.emit('open', {}));
       }
       addEventListener(type, listener) {
@@ -229,7 +230,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       emit(type, event) {
         for (const listener of this.listeners.get(type) || []) listener(event);
       }
-      close() { this.closed = true; }
+      close() {
+        this.closed = true;
+        clearInterval(this.heartbeat);
+      }
     };
   });
   await page.reload();
@@ -404,6 +408,12 @@ test('uses native mobile conversation history, input, and subagent navigation', 
         queuedInputs.push({ id: queueId, text: submitted.text, createdAt: Date.now(), attachments: [] });
         return route.fulfill({ status: 202, json: { accepted: true, queued: true, queueId } });
       }
+      if (submitted.text === 'hello from phone') {
+        rootItems.push({
+          id: 'assistant-fast-start', type: 'message', role: 'assistant',
+          text: 'First Grok token arrived before the phone resumed its stream.',
+        });
+      }
       return route.fulfill({ status: 202, json: { accepted: true, queued: false } });
     }
     if (pathname.endsWith('/model')) {
@@ -551,6 +561,13 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.getByText('Streaming resumed after returning to Safari.')).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.__conversationStreams.length)).toBeGreaterThan(backgroundStreamCount);
   expect(conversationReads).toBeGreaterThan(backgroundReads);
+  const failedStreamCount = await page.evaluate(() => window.__conversationStreams.length);
+  const failedStreamReads = conversationReads;
+  const failedStream = await page.evaluateHandle(() => window.__conversationStreams.at(-1));
+  await failedStream.evaluate((stream) => stream.emit('error', {}));
+  await expect.poll(() => failedStream.evaluate((stream) => stream.closed)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__conversationStreams.length)).toBeGreaterThan(failedStreamCount);
+  await expect.poll(() => conversationReads).toBeGreaterThan(failedStreamReads);
   const markdownMessage = conversation.locator('[data-message-id="assistant-0"] .mobile-markdown');
   await expect(markdownMessage.locator('h1')).toHaveText('Markdown response');
   await expect(markdownMessage.locator('h1')).toHaveCSS('color', 'rgb(232, 164, 101)');
@@ -1582,6 +1599,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     behavior: 'smooth',
   }));
 
+  const streamCountBeforeSend = await page.evaluate(() => window.__conversationStreams.length);
+  const streamBeforeSend = await page.evaluateHandle(() => window.__conversationStreams.at(-1));
+  const readsBeforeSend = conversationReads;
   await input.fill('hello from phone');
   await conversation.locator('#mobile-conversation-send').click();
   await expect(conversation.locator('.mobile-message[data-pending="true"]')).toContainText('hello from phone');
@@ -1593,6 +1613,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     ]),
   );
   expect(queuedInputs).toHaveLength(0);
+  await expect.poll(() => streamBeforeSend.evaluate((stream) => stream.closed)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__conversationStreams.length)).toBeGreaterThan(streamCountBeforeSend);
+  await expect.poll(() => conversationReads).toBeGreaterThan(readsBeforeSend);
+  await expect(conversation.getByText('First Grok token arrived before the phone resumed its stream.')).toBeVisible();
 
   await input.fill('accepted without terminal focus');
   await conversation.locator('#mobile-conversation-send').click();
