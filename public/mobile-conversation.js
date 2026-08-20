@@ -102,6 +102,7 @@ export function createMobileConversationView({
   let sheetHandle;
   let sheetMode = 'list';
   let selectedChildId;
+  let selectedPlanId;
   let sheetReturnFocus;
   let sheetPointer;
   let subagentPillHost;
@@ -562,6 +563,18 @@ export function createMobileConversationView({
     return (conversation.items || []).filter((item) => item.type === 'subagent');
   }
 
+  function plans(conversation) {
+    return (conversation.items || []).filter((item) => item.type === 'plan');
+  }
+
+  function planProgress(plan) {
+    const entries = Array.isArray(plan?.entries) ? plan.entries : [];
+    return {
+      completed: entries.filter((entry) => entry.status === 'completed').length,
+      total: entries.length,
+    };
+  }
+
   function subagentForThread(nextThreadId) {
     return subagents(rootConversation || {}).find((item) => item.threadId === nextThreadId);
   }
@@ -586,12 +599,12 @@ export function createMobileConversationView({
     sheet.hidden = true;
     sheet.setAttribute('role', 'dialog');
     sheet.setAttribute('aria-modal', 'true');
-    sheet.setAttribute('aria-label', 'Subagents');
+    sheet.setAttribute('aria-label', 'Activity details');
     sheet.tabIndex = -1;
     sheetPanel = element('div', 'mobile-subagent-sheet-panel');
     sheetHandle = element('button', 'mobile-subagent-sheet-handle');
     sheetHandle.type = 'button';
-    sheetHandle.setAttribute('aria-label', 'Drag down to close subagents');
+    sheetHandle.setAttribute('aria-label', 'Drag down to close activity');
     const header = element('header', 'mobile-subagent-sheet-header');
     sheetBack = element('button', 'mobile-subagent-sheet-back', '‹');
     sheetBack.type = 'button';
@@ -606,7 +619,7 @@ export function createMobileConversationView({
     sheetBrowser.hidden = !browserAvailable;
     sheetClose = element('button', 'mobile-subagent-sheet-close', '×');
     sheetClose.type = 'button';
-    sheetClose.setAttribute('aria-label', 'Close subagents');
+    sheetClose.setAttribute('aria-label', 'Close activity');
     const actions = element('span', 'mobile-subagent-sheet-actions');
     actions.append(sheetBrowser, sheetClose);
     header.append(sheetBack, copy, sheetState, actions);
@@ -703,8 +716,9 @@ export function createMobileConversationView({
       scrollShell.append(subagentPillHost);
     }
     const items = subagents(conversation);
+    const plan = plans(conversation).at(-1);
     onSubagentAvailabilityChange(items.length > 0);
-    if (!items.length && !browserAvailable) {
+    if (!items.length && !browserAvailable && !plan) {
       subagentPillHost.replaceChildren();
       subagentPillHost.hidden = true;
       activityToggle.hidden = true;
@@ -724,6 +738,17 @@ export function createMobileConversationView({
       });
       cluster.append(browser);
     }
+    if (plan) {
+      const progress = planProgress(plan);
+      const label = progress.total ? `Plan ${progress.completed} / ${progress.total}` : 'Plan';
+      const planButton = element('button', 'mobile-plan-pill');
+      planButton.type = 'button';
+      planButton.dataset.state = plan.status || 'pending';
+      planButton.setAttribute('aria-label', `${label}. View plan`);
+      planButton.append(element('i'), element('span', '', label));
+      planButton.addEventListener('click', () => openPlanSheet(plan.id));
+      cluster.append(planButton);
+    }
     if (items.length) {
       const running = items.filter((item) => ['calling', 'running'].includes(subagentState(item))).length;
       const label = running ? `${running} agent${running === 1 ? '' : 's'} running`
@@ -738,7 +763,7 @@ export function createMobileConversationView({
     }
     const dismiss = element('button', 'mobile-activity-pill-dismiss', '×');
     dismiss.type = 'button';
-    dismiss.setAttribute('aria-label', 'Hide browser and agent activity');
+    dismiss.setAttribute('aria-label', 'Hide activity');
     dismiss.addEventListener('click', () => {
       pillDismissed = true;
       subagentPillHost.hidden = true;
@@ -768,6 +793,7 @@ export function createMobileConversationView({
     sheet.hidden = false;
     sheetMode = 'list';
     selectedChildId = undefined;
+    selectedPlanId = undefined;
     onHideBrowser(sessionName);
     sheetBrowser.hidden = !browserAvailable;
     renderSubagentList();
@@ -777,8 +803,47 @@ export function createMobileConversationView({
     requestAnimationFrame(() => sheetClose.focus({ preventScroll: true }));
   }
 
+  function renderPlanSheet(conversation = rootConversation) {
+    if (!sheet || !conversation) return;
+    const availablePlans = plans(conversation);
+    const plan = availablePlans.find((item) => item.id === selectedPlanId) || availablePlans.at(-1);
+    if (!plan) {
+      sheetTitle.textContent = 'Plan';
+      sheetMeta.textContent = 'No plan available';
+      sheetState.textContent = '';
+      sheetMessages.replaceChildren(element('p', 'mobile-subagent-empty', 'No plan available.'));
+      return;
+    }
+    selectedPlanId = plan.id;
+    const progress = planProgress(plan);
+    sheetTitle.textContent = plan.title || 'Plan';
+    sheetMeta.textContent = `${progress.completed} of ${progress.total} task${progress.total === 1 ? '' : 's'} complete`;
+    sheetState.textContent = statusLabel(plan.status);
+    sheetState.dataset.state = plan.status || 'pending';
+    const content = element('section', 'mobile-plan-sheet-content');
+    content.append(planListNode(plan));
+    sheetMessages.replaceChildren(content);
+  }
+
+  function openPlanSheet(planId) {
+    ensureSheet();
+    sheetReturnFocus = document.activeElement;
+    sheet.hidden = false;
+    sheetMode = 'plan';
+    selectedChildId = undefined;
+    selectedPlanId = planId;
+    onHideBrowser(sessionName);
+    sheetBrowser.hidden = !browserAvailable;
+    sheetList.hidden = true;
+    sheetMessages.hidden = false;
+    sheetBack.hidden = true;
+    renderPlanSheet();
+    requestAnimationFrame(() => sheetClose.focus({ preventScroll: true }));
+  }
+
   function openChild(nextThreadId) {
     selectedChildId = nextThreadId;
+    selectedPlanId = undefined;
     const lifecycle = subagentForThread(nextThreadId);
     sheetMode = 'child';
     sheetList.hidden = true;
@@ -812,13 +877,17 @@ export function createMobileConversationView({
 
   function closeSheet() {
     if (!sheet || sheet.hidden) return;
-    closeStream();
+    const childWasOpen = sheetMode === 'child';
+    if (childWasOpen) closeStream();
     sheet.hidden = true;
     sheetMode = 'list';
     selectedChildId = undefined;
+    selectedPlanId = undefined;
     threadId = rootThreadId;
-    renderedSignature = '';
-    void refresh();
+    if (childWasOpen) {
+      renderedSignature = '';
+      void refresh();
+    }
     sheetReturnFocus?.focus?.({ preventScroll: true });
   }
 
@@ -1083,6 +1152,21 @@ export function createMobileConversationView({
     return section;
   }
 
+  function planListNode(item) {
+    const list = element('ol', 'mobile-plan-list');
+    for (const entry of item.entries || []) {
+      const row = element('li');
+      row.dataset.state = entry.status;
+      row.append(
+        element('i'),
+        element('span', '', entry.content),
+        element('small', '', statusLabel(entry.status)),
+      );
+      list.append(row);
+    }
+    return list;
+  }
+
   function eventDetails(panel, item) {
     if (item.type === 'thought' || item.type === 'recap' || item.type === 'event') {
       detail(panel, item.type === 'thought' ? 'Reasoning' : 'Details', item.text);
@@ -1105,18 +1189,7 @@ export function createMobileConversationView({
       }
     }
     if (item.type === 'plan') {
-      const list = element('ol', 'mobile-plan-list');
-      for (const entry of item.entries || []) {
-        const row = element('li');
-        row.dataset.state = entry.status;
-        row.append(
-          element('i'),
-          element('span', '', entry.content),
-          element('small', '', statusLabel(entry.status)),
-        );
-        list.append(row);
-      }
-      panel.append(list);
+      panel.append(planListNode(item));
     }
     if (item.type === 'goal') {
       detail(panel, 'Objective', item.objective);
@@ -1981,6 +2054,7 @@ export function createMobileConversationView({
     if (suppressPendingInteractions && pendingInteraction(item)) return document.createDocumentFragment();
     if (item.type === 'question') return questionNode(item);
     if (item.type === 'plan_review') return document.createDocumentFragment();
+    if (item.type === 'plan') return document.createDocumentFragment();
     if (item.type === 'turn' || item.type === 'recap') return document.createDocumentFragment();
     if (item.type === 'subagent') return document.createDocumentFragment();
     return eventNode(item);
@@ -2190,7 +2264,10 @@ export function createMobileConversationView({
     if (initialThreadRender || atBottom || pendingMessage) targetMessages.scrollTop = targetMessages.scrollHeight;
     if (isRoot) updateJumpToLatest();
     if (isRoot) updateComposerAction();
-    if (isRoot && !sheet?.hidden && sheetMode === 'list') renderSubagentList(conversation);
+    if (isRoot && !sheet?.hidden) {
+      if (sheetMode === 'list') renderSubagentList(conversation);
+      else if (sheetMode === 'plan') renderPlanSheet(conversation);
+    }
   }
 
   function beginStreamInteraction(event) {

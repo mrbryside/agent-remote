@@ -217,11 +217,13 @@ The spawn tool returning `completed` means only that the background child was
 created; it stays `Running` until `subagent_finished` or a child TaskOutput
 reports a terminal status.
 On mobile, root history aggregates these items into one persistent bottom pill
-showing the running count. The pill opens a selector; choosing an agent opens
-its realtime conversation in a draggable 70%-viewport bottom sheet that slides
-up from below. The shared Browser/Subagents dock has an explicit dismiss action;
-while dismissed, a compact header action restores it without covering history or
-the composer. Dismissal lasts for the selected chat and survives streamed dock
+showing the running count. Grok `plan` updates also stay out of the chat timeline:
+the shared Browser/Plan/Subagents dock shows completed/total plan progress, and
+its Plan action opens the same activity sheet with the live task states. Choosing
+an agent opens its realtime conversation in the draggable 80%-viewport sheet
+that slides up from below. The dock has an explicit dismiss action; while
+dismissed, a compact header action restores it without covering history or the
+composer. Dismissal lasts for the selected chat and survives streamed dock
 updates. Closing the sheet restores the root SSE stream and scroll position. When a child UUID
 appears, the provider loads that child through the same ACP connection. Its
 replay and live updates use the same translation recursively, so nested
@@ -262,7 +264,7 @@ The same session-scoped SSE connection may carry a `control` event for browser
 surface requests originating inside the headless ACP leader. This is transport
 metadata rather than a conversation timeline item. The mobile view validates
 the command shape, opens the existing session-keyed graphics renderer, and
-publishes Browser availability into the shared Browser/Subagents activity dock.
+publishes Browser availability into the shared Browser/Plan/Subagents activity dock.
 
 Assistant message text is reparsed on each snapshot as GitHub-flavored Markdown
 with the locally bundled Marked runtime. Its HTML output must pass through

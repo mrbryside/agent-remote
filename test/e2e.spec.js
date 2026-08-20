@@ -529,7 +529,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(fileSheet.locator('.mobile-file-lines')).toContainText('const status = "ready";');
   await fileSheet.getByRole('button', { name: 'Close file preview' }).click();
   await expect(fileSheet).toBeHidden();
-  await expect(conversation.locator('.mobile-event-card')).toHaveCount(11);
+  await expect(conversation.locator('.mobile-event-card')).toHaveCount(10);
   await expect(conversation.locator('#mobile-conversation-context')).toContainText('6K / 190K');
   const modelButton = conversation.locator('#mobile-conversation-model');
   await expect(modelButton).toContainText('Qwen 3.8 27B');
@@ -766,6 +766,28 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
   await expect(conversation.getByText('Turn completed')).toHaveCount(0);
   await expect(conversation.getByText('Session recap')).toHaveCount(0);
+  await expect(conversation.locator('.mobile-event-plan')).toHaveCount(0);
+  const planPill = conversation.locator('.mobile-plan-pill');
+  await expect(planPill).toContainText('Plan 1 / 2');
+  await planPill.click();
+  const activitySheet = conversation.locator('.mobile-subagent-sheet');
+  await expect(activitySheet).toBeVisible();
+  await expect(activitySheet.locator('.mobile-subagent-sheet-header strong')).toHaveText('Plan');
+  await expect(activitySheet.locator('.mobile-subagent-sheet-header small')).toHaveText('1 of 2 tasks complete');
+  await expect(activitySheet.getByText('Inspect events')).toBeVisible();
+  await expect(activitySheet.getByText('Render cards')).toBeVisible();
+  const streamedPlan = rootItems.find((item) => item.id === 'plan-1');
+  streamedPlan.entries[1].status = 'completed';
+  streamedPlan.status = 'completed';
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(planPill).toContainText('Plan 2 / 2');
+  await expect(activitySheet.locator('.mobile-subagent-sheet-header small')).toHaveText('2 of 2 tasks complete');
+  await expect(activitySheet.locator('.mobile-subagent-sheet-state')).toHaveText('Done');
+  await activitySheet.getByRole('button', { name: 'Close activity', exact: true }).click();
   const subagentPill = conversation.locator('.mobile-subagent-pill');
   await expect(subagentPill).toHaveCount(1);
   await expect(subagentPill).toContainText('2 agents running');
@@ -805,12 +827,12 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     });
   });
   await expect(conversation.locator('.mobile-browser-pill')).toBeVisible();
-  await expect(conversation.locator('.mobile-activity-pill-cluster > button')).toHaveCount(3);
+  await expect(conversation.locator('.mobile-activity-pill-cluster > button')).toHaveCount(4);
   await page.locator('#graphics-sheet-backdrop').click();
   await expect(page.locator('#graphics-split')).toBeHidden();
-  await conversation.getByRole('button', { name: 'Hide browser and agent activity' }).click();
+  await conversation.getByRole('button', { name: 'Hide activity' }).click();
   await expect(conversation.locator('.mobile-subagent-pill-host')).toBeHidden();
-  const activityToggle = conversation.getByRole('button', { name: 'Show browser and agent activity' });
+  const activityToggle = conversation.getByRole('button', { name: 'Show activity' });
   await expect(activityToggle).toBeVisible();
   await activityToggle.click();
   await expect(conversation.locator('.mobile-subagent-pill-host')).toBeVisible();
@@ -1499,7 +1521,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await page.mouse.click(195, 120);
   await expect(sheet).toBeHidden();
   await conversation.locator('.mobile-subagent-pill').click();
-  const handle = sheet.getByRole('button', { name: 'Drag down to close subagents' });
+  const handle = sheet.getByRole('button', { name: 'Drag down to close activity' });
   await handle.evaluate((node) => Promise.all(node.closest('.mobile-subagent-sheet-panel')
     .getAnimations().map((animation) => animation.finished)));
   const box = await handle.boundingBox();
