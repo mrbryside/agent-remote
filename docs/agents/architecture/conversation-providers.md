@@ -86,6 +86,15 @@ a later desktop-to-mobile resize, and the sidebar all settle from the same Grok
 turn without waiting for another ACP event. This keeps Responding, Stop, and the
 sidebar spinner from surviving a turn that is already complete on disk.
 
+The provider reconciles that same timestamped boundary into the ACP client's
+action state before Send, Steer, Stop, model, and mode operations. A durable
+completion releases a stale pending prompt RPC, clears a stale cancel request,
+and lets the next message start immediately instead of becoming a false queue
+row. Conversely, a boundary older than the current local prompt cannot stop or
+resurrect that newer turn. Re-reading an unchanged active boundary is
+idempotent and preserves an in-flight Stop request, preventing watcher loops or
+the composer from bouncing out of `Stopping…` before Grok completes the cancel.
+
 An HTTP `202` prompt response is only a delivery receipt, not evidence that a
 turn remains active. The optimistic pending message may show `Sending`, but it
 must not force the composer into Stop or keep the sidebar busy. Once the
