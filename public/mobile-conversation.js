@@ -80,8 +80,10 @@ export function createMobileConversationView({
   let available = false;
   let generation = 0;
   let refreshTimer;
+  let foregroundResumeTimer;
   let eventSource;
   let streamKey = '';
+  let backgrounded = document.visibilityState === 'hidden';
   let renderedSignature = '';
   let pendingMessage;
   let pendingAcceptanceTimer;
@@ -578,6 +580,50 @@ export function createMobileConversationView({
     streamKey = '';
   }
 
+  function suspendForBackground() {
+    if (!media.matches || !sessionName) return;
+    if (!backgrounded) generation += 1;
+    backgrounded = true;
+    clearTimeout(refreshTimer);
+    clearTimeout(foregroundResumeTimer);
+    foregroundResumeTimer = undefined;
+    closeStream();
+  }
+
+  function resumeFromBackground({ force = false } = {}) {
+    if (document.visibilityState === 'hidden' || !media.matches || !sessionName) return;
+    if (!backgrounded && !force) return;
+    if (foregroundResumeTimer) return;
+    foregroundResumeTimer = setTimeout(() => {
+      foregroundResumeTimer = undefined;
+      if (document.visibilityState === 'hidden' || !media.matches || !sessionName) return;
+      backgrounded = false;
+      closeStream();
+      renderedSignature = '';
+      // iOS can suspend an EventSource without delivering error/close. Read
+      // the authoritative snapshot first to recover every missed token and
+      // lifecycle boundary; refresh() then creates a brand-new stream.
+      void refresh();
+    }, 0);
+  }
+
+  function handleVisibilityChange() {
+    if (document.visibilityState === 'hidden') suspendForBackground();
+    else resumeFromBackground();
+  }
+
+  function handlePageShow(event) {
+    resumeFromBackground({ force: event.persisted === true });
+  }
+
+  function handleWindowFocus() {
+    resumeFromBackground();
+  }
+
+  function handleOnline() {
+    resumeFromBackground({ force: true });
+  }
+
   function streamingAssistant(conversation) {
     if (conversation?.activity?.active !== true) return undefined;
     return [...(conversation.items || [])].reverse().find(
@@ -1037,7 +1083,7 @@ export function createMobileConversationView({
   }
 
   function startStream() {
-    if (!media.matches || !sessionName || !threadId || !available) return;
+    if (document.visibilityState === 'hidden' || !media.matches || !sessionName || !threadId || !available) return;
     const nextKey = `${sessionName}:${threadId}`;
     if (eventSource && streamKey === nextKey) return;
     closeStream();
@@ -2887,6 +2933,12 @@ export function createMobileConversationView({
       setAvailable(false);
     }
   });
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('pagehide', suspendForBackground);
+  window.addEventListener('pageshow', handlePageShow);
+  window.addEventListener('blur', suspendForBackground);
+  window.addEventListener('focus', handleWindowFocus);
+  window.addEventListener('online', handleOnline);
   autoSizeInput();
 
   return {
@@ -2895,6 +2947,9 @@ export function createMobileConversationView({
       if (sessionName === nextSessionName && available) return;
       generation += 1;
       clearTimeout(refreshTimer);
+      clearTimeout(foregroundResumeTimer);
+      foregroundResumeTimer = undefined;
+      backgrounded = document.visibilityState === 'hidden';
       closeStream();
       closeFileSheet();
       sessionName = nextSessionName;
@@ -2948,6 +3003,9 @@ export function createMobileConversationView({
       if (sessionName === (nextSessionName || undefined)) return;
       generation += 1;
       clearTimeout(refreshTimer);
+      clearTimeout(foregroundResumeTimer);
+      foregroundResumeTimer = undefined;
+      backgrounded = document.visibilityState === 'hidden';
       closeStream();
       closeFileSheet();
       sessionName = nextSessionName || undefined;
@@ -3015,10 +3073,17 @@ export function createMobileConversationView({
     destroy() {
       generation += 1;
       clearTimeout(refreshTimer);
+      clearTimeout(foregroundResumeTimer);
       clearTimeout(pendingAcceptanceTimer);
       cancelAnimationFrame(tailSnapFrame);
       closeStream();
       document.removeEventListener('pointerdown', dismissModelList);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', suspendForBackground);
+      window.removeEventListener('pageshow', handlePageShow);
+      window.removeEventListener('blur', suspendForBackground);
+      window.removeEventListener('focus', handleWindowFocus);
+      window.removeEventListener('online', handleOnline);
     },
   };
 }

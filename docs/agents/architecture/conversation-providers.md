@@ -84,6 +84,13 @@ transferred, parsed, and traversed again for every token, which otherwise lets
 mobile Safari fall progressively behind the desktop UI. A reconnect starts
 with another complete snapshot so the compact frames never depend on state
 from an earlier connection.
+When iOS backgrounds the page, do not wait for `EventSource.onerror`: Safari
+can suspend the connection without delivering an error or close event. The
+mobile client closes its owned stream and invalidates any in-flight snapshot on
+`visibilitychange`, `pagehide`, or window blur. On `visibilitychange` back to
+visible, `pageshow`, focus, or `online`, it first reads the authoritative full
+snapshot to recover every missed token and lifecycle boundary, then opens a
+new EventSource. The old stream is never reused after a foreground transition.
 Plain token chunks append directly into the active message node. A chunk that
 completes Markdown structure (a line break, list/heading marker, emphasis,
 inline code, link, table, or fence) reparses only that active message and

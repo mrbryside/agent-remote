@@ -192,6 +192,13 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       visualViewport.dispatchEvent(new Event('scroll'));
     };
     Object.defineProperty(window, 'visualViewport', { configurable: true, value: visualViewport });
+    let pageVisibility = 'visible';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => pageVisibility });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => pageVisibility === 'hidden' });
+    window.__setPageVisibility = (next) => {
+      pageVisibility = next;
+      document.dispatchEvent(new Event('visibilitychange'));
+    };
     window.__mobileComposerFocusOptions = [];
     const nativeFocus = HTMLElement.prototype.focus;
     HTMLElement.prototype.focus = function focus(options) {
@@ -222,7 +229,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       emit(type, event) {
         for (const listener of this.listeners.get(type) || []) listener(event);
       }
-      close() {}
+      close() { this.closed = true; }
     };
   });
   await page.reload();
@@ -532,6 +539,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(1);
   expect(await page.evaluate(() => window.__mobileConversationScrollCalls
     .filter((call) => call?.behavior === 'smooth'))).toEqual([]);
+  const backgroundStreamCount = await page.evaluate(() => window.__conversationStreams.length);
+  const backgroundReads = conversationReads;
+  await page.evaluate(() => window.__setPageVisibility('hidden'));
+  await expect.poll(() => page.evaluate(() => window.__conversationStreams.at(-1).closed)).toBe(true);
+  rootItems.push({
+    id: 'assistant-after-background', type: 'message', role: 'assistant',
+    text: 'Streaming resumed after returning to Safari.',
+  });
+  await page.evaluate(() => window.__setPageVisibility('visible'));
+  await expect(conversation.getByText('Streaming resumed after returning to Safari.')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__conversationStreams.length)).toBeGreaterThan(backgroundStreamCount);
+  expect(conversationReads).toBeGreaterThan(backgroundReads);
   const markdownMessage = conversation.locator('[data-message-id="assistant-0"] .mobile-markdown');
   await expect(markdownMessage.locator('h1')).toHaveText('Markdown response');
   await expect(markdownMessage.locator('h1')).toHaveCSS('color', 'rgb(232, 164, 101)');
