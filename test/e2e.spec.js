@@ -422,6 +422,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const planReviewResponses = [];
   let releaseFirstQuestion;
   let releaseInitialConversation;
+  let releaseHelloInput;
   let holdNextInitialConversation = false;
   let firstQuestion = true;
   let conversationReads = 0;
@@ -450,9 +451,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       }
       if (submitted.text === 'hello from phone') {
         rootItems.push({
-          id: 'assistant-fast-start', type: 'message', role: 'assistant',
-          text: 'First Grok token arrived before the phone resumed its stream.',
+          id: 'user-fast-start', type: 'message', role: 'user', text: submitted.text,
         });
+        await new Promise((resolve) => { releaseHelloInput = resolve; });
       }
       return route.fulfill({ status: 202, json: { accepted: true, queued: false } });
     }
@@ -1712,17 +1713,52 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await conversation.locator('#mobile-conversation-send').click();
   await expect(conversation.locator('.mobile-message[data-pending="true"]')).toContainText('hello from phone');
   await expect(conversation.locator('.mobile-message[data-pending="true"] .mobile-message-author'))
-    .toHaveText('Waiting for Grok…');
+    .toHaveText('Sending…');
   await expect.poll(() => mobileInputs).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ text: 'hello from phone' }),
     ]),
   );
   expect(queuedInputs).toHaveLength(0);
-  await expect.poll(() => streamBeforeSend.evaluate((stream) => stream.closed)).toBe(true);
-  await expect.poll(() => page.evaluate(() => window.__conversationStreams.length)).toBeGreaterThan(streamCountBeforeSend);
-  await expect.poll(() => conversationReads).toBeGreaterThan(readsBeforeSend);
+  await expect.poll(() => typeof releaseHelloInput).toBe('function');
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(conversation.locator('.mobile-message[data-pending="true"]')).toHaveCount(0);
+  await messages.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  currentActivity = {
+    active: true, phase: 'writing', label: 'Writing response…',
+    canCancel: true, cancelRequested: false,
+  };
+  rootItems.push({
+    id: 'assistant-fast-start', type: 'message', role: 'assistant',
+    text: 'First Grok token arrived before the phone resumed its stream.',
+  });
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
   await expect(conversation.getByText('First Grok token arrived before the phone resumed its stream.')).toBeVisible();
+  await expect.poll(() => messages.evaluate((element) =>
+    element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(1);
+  expect(await streamBeforeSend.evaluate((stream) => Boolean(stream.closed))).toBe(false);
+  expect(await page.evaluate(() => window.__conversationStreams.length)).toBe(streamCountBeforeSend);
+  releaseHelloInput();
+  await expect.poll(() => conversationReads).toBeGreaterThan(readsBeforeSend);
+  expect(await streamBeforeSend.evaluate((stream) => Boolean(stream.closed))).toBe(false);
+  expect(await page.evaluate(() => window.__conversationStreams.length)).toBe(streamCountBeforeSend);
+  currentActivity = { active: false };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
 
   await input.fill('accepted without terminal focus');
   await conversation.locator('#mobile-conversation-send').click();

@@ -131,6 +131,10 @@ export function createMobileConversationView({
   let suggestionGeneration = 0;
   const mentionedFiles = new Set();
   let followStreamTail = true;
+  // A submitted turn owns the tail until it settles. Safari can emit scroll
+  // events while the visual viewport and pending row are being replaced;
+  // those layout-driven events must not look like the reader scrolled away.
+  let submittedTurnFollow = false;
   let tailSnapFrame;
   let fileSheet;
   let fileSheetPanel;
@@ -739,7 +743,7 @@ export function createMobileConversationView({
       onStatusChange(sessionName, conversation.thread.status);
       updateComposerAction();
     }
-    if (atBottom || (isRoot && followStreamTail)) {
+    if (atBottom || (isRoot && (followStreamTail || submittedTurnFollow))) {
       targetMessages.scrollTop = targetMessages.scrollHeight;
     }
     if (isRoot) updateJumpToLatest();
@@ -2443,6 +2447,7 @@ export function createMobileConversationView({
           };
           schedulePendingAcceptanceFailure(pendingText);
           followStreamTail = true;
+          submittedTurnFollow = true;
           renderedSignature = '';
           if (lastConversation) render(lastConversation);
           snapMessagesToLatest();
@@ -2675,7 +2680,11 @@ export function createMobileConversationView({
     // generous "near bottom" threshold makes short mobile histories snap back
     // down on every streamed update and effectively prevents scrolling.
     const atBottom = distanceFromBottom(targetMessages) <= 48;
-    const shouldFollowTail = isRoot ? followStreamTail : atBottom;
+    const turnSettled = isRoot && previousConversation?.activity?.active === true &&
+      conversation.activity?.active !== true;
+    const shouldFollowTail = isRoot
+      ? followStreamTail || submittedTurnFollow
+      : atBottom;
     const hadPendingMessage = Boolean(pendingMessage);
     const streamScroll = captureStreamScroll(targetMessages);
     const signature = JSON.stringify({
@@ -2764,7 +2773,12 @@ export function createMobileConversationView({
     restoreStreamScroll(targetMessages, streamScroll);
     if (initialThreadRender || shouldFollowTail || hadPendingMessage) {
       targetMessages.scrollTop = targetMessages.scrollHeight;
+      // Newly parsed Markdown can change height once layout settles. Commit a
+      // second tail position on the next frame so the first streamed chunk
+      // lands flush above the composer instead of leaving a small gap.
+      if (isRoot) snapMessagesToLatest();
     }
+    if (turnSettled) submittedTurnFollow = false;
     if (isRoot) updateJumpToLatest();
     if (isRoot) updateComposerAction();
     if (isRoot && !sheet?.hidden) {
@@ -2876,6 +2890,7 @@ export function createMobileConversationView({
       sentAt: Date.now(), status: 'sending',
     };
     followStreamTail = true;
+    submittedTurnFollow = true;
     input.value = '';
     attachments = [];
     mentionedFiles.clear();
@@ -2895,13 +2910,6 @@ export function createMobileConversationView({
       } else {
         if (pendingMessage?.text === pendingText) pendingMessage.status = 'accepted';
         schedulePendingAcceptanceFailure(pendingText);
-        // Replace the previous turn socket after prompt acceptance. The
-        // snapshot fetched below recovers chunks Grok emitted between the POST
-        // and the new websocket becoming ready.
-        closeStream();
-        // Open the new turn transport immediately; do not make first-token
-        // delivery wait for the recovery snapshot HTTP round trip.
-        startStream();
       }
       state.textContent = 'Queued';
       state.dataset.state = 'working';
@@ -2909,6 +2917,7 @@ export function createMobileConversationView({
       if (lastConversation) render(lastConversation);
       void refresh();
     } catch (error) {
+      submittedTurnFollow = false;
       pendingMessage = undefined;
       attachments = [];
       uploadingAttachments = 0;
@@ -3029,9 +3038,17 @@ export function createMobileConversationView({
     if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateSuggestions();
   });
   messages.addEventListener('scroll', () => {
-    followStreamTail = distanceFromBottom(messages) <= 48;
+    const atBottom = distanceFromBottom(messages) <= 48;
+    if (atBottom) followStreamTail = true;
+    else if (!submittedTurnFollow) followStreamTail = false;
     updateJumpToLatest();
   }, { passive: true });
+  const releaseSubmittedTailFollow = () => {
+    submittedTurnFollow = false;
+    followStreamTail = distanceFromBottom(messages) <= 48;
+  };
+  messages.addEventListener('wheel', releaseSubmittedTailFollow, { passive: true });
+  messages.addEventListener('touchmove', releaseSubmittedTailFollow, { passive: true });
   jumpToLatest.addEventListener('click', () => {
     followStreamTail = true;
     messages.scrollTo({
@@ -3092,6 +3109,7 @@ export function createMobileConversationView({
       rootThreadId = undefined;
       rootConversation = undefined;
       followStreamTail = true;
+      submittedTurnFollow = false;
       browserAvailable = false;
       pillDismissed = false;
       dismissedPlanRevision = loadDismissedPlanRevision(nextSessionName);
@@ -3147,6 +3165,7 @@ export function createMobileConversationView({
       rootThreadId = undefined;
       rootConversation = undefined;
       followStreamTail = true;
+      submittedTurnFollow = false;
       browserAvailable = false;
       pillDismissed = false;
       dismissedPlanRevision = loadDismissedPlanRevision(sessionName);

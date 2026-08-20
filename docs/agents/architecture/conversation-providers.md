@@ -74,8 +74,10 @@ position, and pressed control without withholding token or lifecycle events;
 this is important on iOS, where native scrolling can retain pointer capture
 without a matching `pointerup`. Send, Steer, and Jump to latest explicitly
 enable tail following. Incoming chunks continue snapping to the end until the
-reader deliberately scrolls more than the near-bottom threshold, after which
-the history remains anchored until Jump to latest is chosen again.
+reader deliberately wheels or drags the history, after which the history
+remains anchored until Jump to latest is chosen again. Scroll events caused by
+Safari's visual-viewport resize or replacement of the pending row do not
+release the submitted turn's tail latch.
 The dedicated `/conversation-ws` connection sends one complete snapshot when
 an assistant message starts, then sends compact
 `{ threadId, messageId, delta }` frames for
@@ -99,11 +101,12 @@ socket is never reused after a foreground transition. The server emits an
 application heartbeat every three seconds; the client resets a seven-second
 watchdog for every conversation, control, open, or heartbeat message. A silent
 socket is closed, reconciled from a full snapshot, and replaced. After an
-accepted idle prompt, the client opens the next-turn socket immediately instead
-of waiting for the recovery snapshot HTTP round trip; the snapshot runs in
-parallel and recovers any chunks emitted while the POST/socket handshake was in
-flight. Queued follow-ups keep the current live socket because they do not start
-a new turn yet.
+accepted prompt, the client keeps the already-open conversation socket. Grok
+can publish the user boundary and first token through that socket before the
+input POST finishes its Cloudflare round trip; closing it at acceptance would
+add another tunnel handshake and can miss fast start/completion boundaries.
+The parallel snapshot remains a recovery path, while only backgrounding,
+watchdog expiry, thread changes, or a real disconnect replace the socket.
 Plain token chunks append directly into the active message node. A chunk that
 completes Markdown structure (a line break, list/heading marker, emphasis,
 inline code, link, table, or fence) reparses only that active message and
