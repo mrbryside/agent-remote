@@ -494,6 +494,13 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       return route.fulfill({ status: 202, json: { accepted: true, modeId: currentModeId } });
     }
     if (pathname.endsWith('/attachments') && route.request().method() === 'POST') {
+      if (route.request().headers()['x-file-name'] === encodeURIComponent('rejected.mov')) {
+        return route.fulfill({
+          status: 413,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'Fixture rejected this upload' }),
+        });
+      }
       uploads.push({
         name: route.request().headers()['x-file-name'],
         bytes: route.request().postDataBuffer()?.toString('utf8'),
@@ -1909,6 +1916,14 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     name: encodeURIComponent('phone.png'), bytes: 'fake-image',
   });
   await expect(conversation.locator('.mobile-conversation-attachments img')).toHaveCount(1);
+  await conversation.locator('#mobile-conversation-file').setInputFiles({
+    name: 'rejected.mov', mimeType: 'video/quicktime', buffer: Buffer.from('rejected-video'),
+  });
+  const uploadError = conversation.locator('.mobile-conversation-uploading[data-state="error"]');
+  await expect(uploadError).toContainText('Upload failed');
+  await expect(uploadError).toContainText('Fixture rejected this upload');
+  await uploadError.getByRole('button', { name: 'Dismiss upload error' }).click();
+  await expect(uploadError).toHaveCount(0);
   await input.fill('inspect screenshot');
   await conversation.locator('#mobile-conversation-send').click();
   await expect.poll(() => mobileInputs).toContainEqual(expect.objectContaining({

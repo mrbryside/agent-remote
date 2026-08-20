@@ -31,3 +31,43 @@ test('conversation attachment limits reject empty and oversized payloads', async
     code: 'ATTACHMENT_SIZE_INVALID',
   });
 });
+
+test('chunked attachments can exceed the legacy single-request limit without buffering the whole file', async () => {
+  const writes = [];
+  const appends = [];
+  const store = createConversationAttachmentStore({
+    createTempDir: async () => '/tmp/agent-remote-chunk-test',
+    write: async (...args) => writes.push(args),
+    append: async (...args) => appends.push(args),
+    remove: async () => {},
+    maxBytes: 4,
+    maxChunkBytes: 3,
+  });
+  const uploadId = '11111111-1111-4111-8111-111111111111';
+  const first = await store.appendUploadChunk('chat', {
+    uploadId, name: 'recording.MOV', mimeType: 'video/quicktime',
+    offset: 0, totalBytes: 5, data: Buffer.from('abc'),
+  });
+  assert.deepEqual(first, { complete: false, nextOffset: 3 });
+  await assert.rejects(store.appendUploadChunk('chat', {
+    uploadId, name: 'recording.MOV', mimeType: 'video/quicktime',
+    offset: 0, totalBytes: 5, data: Buffer.from('abc'),
+  }), (error) => error.code === 'ATTACHMENT_UPLOAD_OFFSET' && error.nextOffset === 3);
+  const finished = await store.appendUploadChunk('chat', {
+    uploadId, name: 'recording.MOV', mimeType: 'video/quicktime',
+    offset: 3, totalBytes: 5, data: Buffer.from('de'),
+  });
+  assert.equal(finished.complete, true);
+  assert.equal(finished.attachment.size, 5);
+  assert.equal(finished.attachment.mimeType, 'video/quicktime');
+  const repeatedFinal = await store.appendUploadChunk('chat', {
+    uploadId, name: 'recording.MOV', mimeType: 'video/quicktime',
+    offset: 3, totalBytes: 5, data: Buffer.from('de'),
+  });
+  assert.equal(repeatedFinal.complete, true);
+  assert.equal(repeatedFinal.nextOffset, 5);
+  assert.equal(store.get('chat', uploadId).path, '/tmp/agent-remote-chunk-test/11111111-1111-4111-8111-111111111111.mov');
+  assert.equal(writes.length, 1);
+  assert.deepEqual(appends.map(([, data]) => data.toString()), ['abc', 'de']);
+  await store.close();
+});

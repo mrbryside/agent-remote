@@ -702,7 +702,16 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-conversation-attachment > span { color: var(--color-text-muted); font: 700 10px/1 var(--font-family-mono); }
   .mobile-conversation-attachment > small { position: absolute; right: 3px; bottom: 3px; left: 3px; overflow: hidden; padding: 2px 4px; border-radius: 4px; background: color-mix(in srgb, var(--color-canvas) 78%, transparent); color: var(--color-text-secondary); font: 7px/1.2 var(--font-family-mono); text-overflow: ellipsis; white-space: nowrap; }
   .mobile-conversation-attachment > button { position: absolute; top: 3px; right: 3px; display: grid; width: 23px; height: 23px; place-items: center; padding: 0; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--color-canvas) 88%, transparent); color: var(--color-text-strong); font: 15px/1 var(--font-family-sans); }
-  .mobile-conversation-uploading { display: grid; flex: 0 0 74px; width: 74px; height: 66px; place-items: center; border: 1px dashed var(--color-border-strong); border-radius: 10px; color: var(--color-text-muted); font: 8px/1.2 var(--font-family-mono); }
+  .mobile-conversation-uploading { position: relative; display: grid; flex: 0 0 min(210px, 68vw); width: min(210px, 68vw); min-height: 66px; box-sizing: border-box; align-content: center; gap: 5px; padding: 9px 11px; overflow: hidden; border: 1px solid var(--color-border-strong); border-radius: 10px; color: var(--color-text-muted); }
+  .mobile-conversation-uploading strong { color: var(--color-text-secondary); font: 650 10px/1.2 var(--font-family-mono); }
+  .mobile-conversation-uploading small { overflow: hidden; color: var(--color-text-muted); font: 9px/1.3 var(--font-family-sans); text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-conversation-uploading progress { width: 100%; height: 3px; overflow: hidden; border: 0; border-radius: 999px; appearance: none; background: var(--color-border-faint); }
+  .mobile-conversation-uploading progress::-webkit-progress-bar { border-radius: inherit; background: var(--color-border-faint); }
+  .mobile-conversation-uploading progress::-webkit-progress-value { border-radius: inherit; background: var(--color-accent); transition: width var(--duration-fast) var(--ease-out); }
+  .mobile-conversation-uploading progress::-moz-progress-bar { border-radius: inherit; background: var(--color-accent); }
+  .mobile-conversation-uploading[data-state="error"] { padding-right: 34px; border-color: var(--color-status-error); }
+  .mobile-conversation-uploading[data-state="error"] strong { color: var(--color-status-error); }
+  .mobile-conversation-uploading > button { position: absolute; top: 5px; right: 5px; display: grid; width: 26px; height: 26px; place-items: center; padding: 0; border: 0; background: transparent; color: var(--color-text-muted); font: 16px/1 var(--font-family-sans); }
   .mobile-conversation-queue { display: grid; flex: 0 0 auto; max-height: min(30dvh, 240px); gap: 0; margin: 6px max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left)); padding: 4px 10px; overflow-y: auto; border: 1px solid var(--color-border-subtle); border-radius: 22px 22px 0 0; background: var(--color-surface-raised); box-shadow: 0 12px 32px color-mix(in srgb, var(--color-canvas) 34%, transparent); }
   .mobile-conversation-queue[hidden] { display: none; }
   .mobile-conversation[data-interaction="true"] .mobile-conversation-queue { display: none; }

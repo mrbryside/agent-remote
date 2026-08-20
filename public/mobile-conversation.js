@@ -124,6 +124,7 @@ export function createMobileConversationView({
   let interactionMotionKey = '';
   let attachments = [];
   let uploadingAttachments = 0;
+  const attachmentUploads = new Map();
   let suggestionItems = [];
   let suggestionIndex = 0;
   let suggestionRange;
@@ -2193,11 +2194,40 @@ export function createMobileConversationView({
     return item;
   }
 
+  function attachmentUploadNode(upload) {
+    const item = element('div', 'mobile-conversation-uploading');
+    item.dataset.state = upload.status;
+    item.setAttribute('role', upload.status === 'error' ? 'alert' : 'status');
+    item.append(element('strong', '', upload.status === 'error'
+      ? 'Upload failed'
+      : `${Math.round(upload.progress * 100)}%`));
+    item.append(element('small', '', upload.status === 'error'
+      ? `${upload.name}: ${upload.error}`
+      : upload.name));
+    if (upload.status === 'uploading') {
+      const progress = document.createElement('progress');
+      progress.max = 1;
+      progress.value = upload.progress;
+      progress.setAttribute('aria-label', `Uploading ${upload.name}`);
+      item.append(progress);
+    } else {
+      const dismiss = element('button', '', '×');
+      dismiss.type = 'button';
+      dismiss.setAttribute('aria-label', `Dismiss upload error for ${upload.name}`);
+      dismiss.addEventListener('click', () => {
+        attachmentUploads.delete(upload.id);
+        renderAttachmentTray();
+      });
+      item.append(dismiss);
+    }
+    return item;
+  }
+
   function renderAttachmentTray() {
-    attachmentTray.hidden = attachments.length === 0 && uploadingAttachments === 0;
+    attachmentTray.hidden = attachments.length === 0 && attachmentUploads.size === 0;
     const fragment = document.createDocumentFragment();
     for (const attachment of attachments) fragment.append(attachmentNode(attachment, { removable: true }));
-    if (uploadingAttachments) fragment.append(element('div', 'mobile-conversation-uploading', 'Uploading…'));
+    for (const upload of attachmentUploads.values()) fragment.append(attachmentUploadNode(upload));
     attachmentTray.replaceChildren(fragment);
     attachButton.disabled = uploadingAttachments > 0 || attachments.length >= 8;
   }
@@ -2961,11 +2991,22 @@ export function createMobileConversationView({
     renderAttachmentTray();
     autoSizeInput();
     for (const file of files) {
+      const upload = {
+        id: crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        name: file.name || 'Attachment', progress: 0, status: 'uploading', error: '',
+      };
+      attachmentUploads.set(upload.id, upload);
+      renderAttachmentTray();
       try {
-        if (file.size > 20 * 1024 * 1024) throw new Error(`${file.name} is larger than 20 MB`);
-        attachments.push(await uploadAttachment(sessionName, file));
+        attachments.push(await uploadAttachment(sessionName, file, (progress) => {
+          upload.progress = progress;
+          renderAttachmentTray();
+        }));
+        attachmentUploads.delete(upload.id);
       } catch (error) {
-        state.textContent = error.message || 'Upload failed';
+        upload.status = 'error';
+        upload.error = error.message || 'Upload failed';
+        state.textContent = upload.error;
         state.dataset.state = 'error';
       } finally {
         uploadingAttachments -= 1;
@@ -3121,6 +3162,7 @@ export function createMobileConversationView({
       interactionMotionKey = '';
       pendingPlanReviews.clear();
       attachments = [];
+      attachmentUploads.clear();
       mentionedFiles.clear();
       uploadingAttachments = 0;
       renderAttachmentTray();
@@ -3177,6 +3219,7 @@ export function createMobileConversationView({
       interactionMotionKey = '';
       pendingPlanReviews.clear();
       attachments = [];
+      attachmentUploads.clear();
       mentionedFiles.clear();
       uploadingAttachments = 0;
       renderAttachmentTray();

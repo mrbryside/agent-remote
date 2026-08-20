@@ -355,6 +355,40 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     assert.equal(uploaded.name, 'phone.png');
     assert.equal('path' in uploaded, false);
     assert.equal((await fetch(`${url}${uploaded.previewUrl}`)).status, 200);
+    const chunkUploadId = '22222222-2222-4222-8222-222222222222';
+    const chunkHeaders = {
+      'content-type': 'video/quicktime',
+      'x-file-name': encodeURIComponent('recording.mov'),
+      'x-upload-id': chunkUploadId,
+      'x-upload-total': '5',
+    };
+    const firstChunk = await fetch(`${url}/api/conversations/ar-mobile/attachments`, {
+      method: 'POST', headers: { ...chunkHeaders, 'x-upload-offset': '0' }, body: Buffer.from('abc'),
+    });
+    assert.equal(firstChunk.status, 202);
+    assert.deepEqual(await firstChunk.json(), { nextOffset: 3 });
+    const repeatedFirstChunk = await fetch(`${url}/api/conversations/ar-mobile/attachments`, {
+      method: 'POST', headers: { ...chunkHeaders, 'x-upload-offset': '0' }, body: Buffer.from('abc'),
+    });
+    assert.equal(repeatedFirstChunk.status, 409);
+    assert.deepEqual(await repeatedFirstChunk.json(), {
+      error: 'Upload expected offset 3', code: 'ATTACHMENT_UPLOAD_OFFSET', nextOffset: 3,
+    });
+    const finalChunk = await fetch(`${url}/api/conversations/ar-mobile/attachments`, {
+      method: 'POST', headers: { ...chunkHeaders, 'x-upload-offset': '3' }, body: Buffer.from('de'),
+    });
+    assert.equal(finalChunk.status, 201);
+    const chunked = (await finalChunk.json()).attachment;
+    assert.equal(chunked.id, chunkUploadId);
+    assert.equal(chunked.name, 'recording.mov');
+    assert.equal(chunked.mimeType, 'video/quicktime');
+    assert.equal(chunked.size, 5);
+    assert.equal((await fetch(`${url}${chunked.previewUrl}`)).status, 200);
+    const repeatedFinalChunk = await fetch(`${url}/api/conversations/ar-mobile/attachments`, {
+      method: 'POST', headers: { ...chunkHeaders, 'x-upload-offset': '3' }, body: Buffer.from('de'),
+    });
+    assert.equal(repeatedFinalChunk.status, 201);
+    assert.equal((await repeatedFinalChunk.json()).nextOffset, 5);
     const attachmentInput = await fetch(`${url}/api/conversations/ar-mobile/input`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ id: 'mobile-attachment', text: 'inspect this', attachmentIds: [uploaded.id] }),

@@ -151,18 +151,62 @@ const mobileConversation = createMobileConversationView({
     const params = new URLSearchParams({ path });
     return api(`/api/conversations/${encodeURIComponent(sessionName)}/files?${params}`);
   },
-  async uploadAttachment(sessionName, file) {
-    const response = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(sessionName)}/attachments`), {
-      method: 'POST',
-      headers: {
-        'content-type': file.type || 'application/octet-stream',
-        'x-file-name': encodeURIComponent(file.name || 'attachment'),
-      },
-      body: file,
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || `Upload failed (${response.status})`);
-    return payload.attachment;
+  async uploadAttachment(sessionName, file, onProgress = () => {}) {
+    const uploadId = crypto.randomUUID?.() || '10000000-1000-4000-8000-100000000000'.replace(
+      /[018]/g,
+      (digit) => (Number(digit) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(digit) / 4).toString(16),
+    );
+    const chunkBytes = 4 * 1024 * 1024;
+    let offset = 0;
+    let attachment;
+    if (!file.size) throw new Error(`${file.name || 'Attachment'} is empty`);
+    try {
+      while (offset < file.size) {
+        const chunkEnd = Math.min(file.size, offset + chunkBytes);
+        let payload;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          let response;
+          try {
+            response = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(sessionName)}/attachments`), {
+              method: 'POST',
+              headers: {
+                'content-type': file.type || 'application/octet-stream',
+                'x-file-name': encodeURIComponent(file.name || 'attachment'),
+                'x-upload-id': uploadId,
+                'x-upload-offset': String(offset),
+                'x-upload-total': String(file.size),
+              },
+              body: file.slice(offset, chunkEnd),
+            });
+            payload = await response.json().catch(() => ({}));
+          } catch (error) {
+            if (attempt === 2) throw error;
+            await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+            continue;
+          }
+          if (response.ok || (response.status === 409 && Number(payload.nextOffset) > offset)) break;
+          if (response.status >= 500 && attempt < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+            continue;
+          }
+          throw new Error(payload.error || `Upload failed (${response.status})`);
+        }
+        const acknowledged = Number(payload?.nextOffset ?? chunkEnd);
+        if (!Number.isSafeInteger(acknowledged) || acknowledged <= offset || acknowledged > chunkEnd) {
+          throw new Error('Upload server returned an invalid offset');
+        }
+        offset = acknowledged;
+        attachment = payload?.attachment || attachment;
+        onProgress(offset / file.size);
+      }
+      if (!attachment) throw new Error('Upload finished without an attachment');
+      return attachment;
+    } catch (error) {
+      void fetch(apiUrl(`/api/conversations/${encodeURIComponent(sessionName)}/attachments/${uploadId}/upload`), {
+        method: 'DELETE',
+      }).catch(() => {});
+      throw error;
+    }
   },
   async setModel(sessionName, modelId, effortId) {
     return api(`/api/conversations/${encodeURIComponent(sessionName)}/model`, {

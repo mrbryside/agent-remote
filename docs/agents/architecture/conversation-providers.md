@@ -178,8 +178,14 @@ path through `realpath`, rejects traversal and symlink escapes, and appends the
 validated absolute file reference to the prompt.
 
 Mobile uploads go through `src/conversations/attachments.js`. The browser sends
-the selected file bytes and display metadata; it never sends or receives a
-device filesystem path. Each server process owns a private temporary root
+the selected file and display metadata in sequential 4 MiB chunks; there is no
+application-level total file-size cap, and neither the browser nor server holds
+the complete recording in memory. Each chunk carries an opaque upload UUID,
+strict byte offset, and total size, so the server rejects gaps or cross-session
+reuse and the client can show acknowledged progress. A failed upload is aborted
+and removed from the temporary root, while its error remains visibly
+dismissible in the attachment tray instead of relying on hidden header state.
+The protocol never sends or receives a device filesystem path. Each server process owns a private temporary root
 (`/tmp/agent-remote-uploads-*` on macOS), writes opaque mode-0600 files, binds
 their ids to one managed session, and deletes the root on shutdown. The upload
 response exposes only an opaque id and preview URL. Input APIs accept only

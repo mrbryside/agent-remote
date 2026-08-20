@@ -19,7 +19,11 @@ import {
 import { createGrokConversationProvider } from './conversations/grok.js';
 import { createGrokAcpClient } from './conversations/acp-client.js';
 import { createConversationRegistry } from './conversations/registry.js';
-import { createConversationAttachmentStore, maxAttachmentBytes } from './conversations/attachments.js';
+import {
+  createConversationAttachmentStore,
+  maxAttachmentBytes,
+  maxAttachmentChunkBytes,
+} from './conversations/attachments.js';
 import { readProjectFile, resolveProjectFiles, searchProjectFiles } from './conversations/files.js';
 import { createProjectStore } from './projects.js';
 import { createRemoteAuth } from './remote/auth.js';
@@ -1891,14 +1895,62 @@ export function createTerminalServer(options = {}) {
           let fileName;
           try { fileName = decodeURIComponent(encodedName); }
           catch { return json(response, 400, { error: 'x-file-name must be URI encoded' }); }
-          const data = await readBytes(request);
-          const attachment = await conversationAttachments.save(session.name, {
-            name: fileName, mimeType: request.headers['content-type'], data,
-          });
-          return json(response, 201, { attachment: {
-            id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size,
-            previewUrl: `/api/conversations/${encodeURIComponent(session.name)}/attachments/${attachment.id}`,
-          } });
+          const uploadId = request.headers['x-upload-id'];
+          if (uploadId !== undefined) {
+            const offsetValue = request.headers['x-upload-offset'];
+            const totalValue = request.headers['x-upload-total'];
+            if (typeof uploadId !== 'string' || typeof offsetValue !== 'string' ||
+                typeof totalValue !== 'string' || !/^\d+$/.test(offsetValue) || !/^\d+$/.test(totalValue)) {
+              return json(response, 400, { error: 'Chunk upload headers are invalid', code: 'ATTACHMENT_UPLOAD_INVALID' });
+            }
+            const offset = Number(offsetValue);
+            const totalBytes = Number(totalValue);
+            if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(totalBytes)) {
+              return json(response, 400, { error: 'Chunk upload sizes are invalid', code: 'ATTACHMENT_UPLOAD_INVALID' });
+            }
+            try {
+              const data = await readBytes(request, maxAttachmentChunkBytes);
+              const result = await conversationAttachments.appendUploadChunk(session.name, {
+                uploadId, name: fileName, mimeType: request.headers['content-type'],
+                offset, totalBytes, data,
+              });
+              if (!result.complete) return json(response, 202, { nextOffset: result.nextOffset });
+              const attachment = result.attachment;
+              return json(response, 201, { nextOffset: result.nextOffset, attachment: {
+                id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size,
+                previewUrl: `/api/conversations/${encodeURIComponent(session.name)}/attachments/${attachment.id}`,
+              } });
+            } catch (error) {
+              const status = error?.status || (error?.code === 'ATTACHMENT_UPLOAD_OFFSET' ||
+                error?.code === 'ATTACHMENT_UPLOAD_MISMATCH' ? 409 : 400);
+              return json(response, status, {
+                error: error.message, ...(error?.code ? { code: error.code } : {}),
+                ...(Number.isSafeInteger(error?.nextOffset) ? { nextOffset: error.nextOffset } : {}),
+              });
+            }
+          }
+          try {
+            const data = await readBytes(request);
+            const attachment = await conversationAttachments.save(session.name, {
+              name: fileName, mimeType: request.headers['content-type'], data,
+            });
+            return json(response, 201, { attachment: {
+              id: attachment.id, name: attachment.name, mimeType: attachment.mimeType, size: attachment.size,
+              previewUrl: `/api/conversations/${encodeURIComponent(session.name)}/attachments/${attachment.id}`,
+            } });
+          } catch (error) {
+            return json(response, error?.status || 400, {
+              error: error.message, ...(error?.code ? { code: error.code } : {}),
+            });
+          }
+        }
+        const conversationAttachmentAbortMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/attachments\/([0-9a-f-]{36})\/upload$/i);
+        if (request.method === 'DELETE' && conversationAttachmentAbortMatch) {
+          const name = decodeURIComponent(conversationAttachmentAbortMatch[1]);
+          const session = await conversationSession(name);
+          if (!session) return json(response, 404, { error: 'Managed session not found' });
+          const aborted = await conversationAttachments.abortUpload(session.name, conversationAttachmentAbortMatch[2]);
+          return json(response, aborted ? 200 : 404, { aborted });
         }
         const conversationAttachmentViewMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/attachments\/([0-9a-f-]{36})$/i);
         if (request.method === 'GET' && conversationAttachmentViewMatch) {
