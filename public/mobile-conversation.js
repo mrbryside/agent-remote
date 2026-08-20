@@ -151,6 +151,25 @@ export function createMobileConversationView({
   let dismissedPlanRevision = '';
   let expectedConversation = false;
 
+  const conversationCache = new Map();
+  const historyLimits = new Map();
+  const initialHistoryLimit = 80;
+  const maxCachedConversations = 6;
+  let historyPrependAnchor;
+
+  function historyLimit(name = sessionName) {
+    return historyLimits.get(name) || initialHistoryLimit;
+  }
+
+  function rememberConversation(name, conversation) {
+    if (!name || !conversation || conversation.parent) return;
+    conversationCache.delete(name);
+    conversationCache.set(name, conversation);
+    while (conversationCache.size > maxCachedConversations) {
+      conversationCache.delete(conversationCache.keys().next().value);
+    }
+  }
+
   const planDismissalStoragePrefix = 'agent-remote:mobile-plan-dismissed:';
 
   function planDismissalStorageKey(name = sessionName) {
@@ -1142,6 +1161,7 @@ export function createMobileConversationView({
     url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('session', sessionName);
     url.searchParams.set('thread', threadId);
+    url.searchParams.set('historyLimit', String(historyLimit()));
     const socket = new WebSocket(url);
     streamSocket = socket;
     armStreamWatchdog(socket);
@@ -1159,6 +1179,7 @@ export function createMobileConversationView({
             if (payload.conversation) render(payload.conversation, { animate: true, fromStream: true });
             else schedule(0);
           }
+          setBooting(false);
           return;
         }
         if (payload?.type === 'control' && payload.action === 'open-graphics' &&
@@ -2602,6 +2623,7 @@ export function createMobileConversationView({
     }
     if (node.matches('.mobile-question-card')) return `question:${node.dataset.questionId}`;
     if (node.matches('.mobile-conversation-loading')) return 'loading';
+    if (node.matches('.mobile-history-earlier')) return 'history:earlier';
     return undefined;
   }
 
@@ -2709,7 +2731,10 @@ export function createMobileConversationView({
     const initialThreadRender = !previousConversation ||
       previousConversation.thread?.id !== conversation.thread.id;
     const isRoot = !conversation.parent && conversation.thread.id === rootThreadId;
-    if (isRoot) rootConversation = conversation;
+    if (isRoot) {
+      rootConversation = conversation;
+      rememberConversation(sessionName, conversation);
+    }
     const targetMessages = isRoot ? messages : sheetMessages || messages;
     // Follow new output only while the reader is actually at the bottom. A
     // generous "near bottom" threshold makes short mobile histories snap back
@@ -2758,6 +2783,27 @@ export function createMobileConversationView({
 
     const previousItemIds = new Set((previousConversation?.items || []).map((item) => item.id));
     const fragment = document.createDocumentFragment();
+    if (conversation.history?.hasEarlier) {
+      const earlier = element(
+        'button', 'mobile-history-earlier',
+        `Load earlier history · ${metric(conversation.history.hiddenItems)} hidden`,
+      );
+      earlier.type = 'button';
+      earlier.addEventListener('click', () => {
+        const currentLimit = historyLimit();
+        const nextLimit = Math.min(5_000, Math.max(currentLimit + initialHistoryLimit, currentLimit * 2));
+        if (nextLimit === currentLimit) return;
+        historyLimits.set(sessionName, nextLimit);
+        historyPrependAnchor = {
+          sessionName,
+          scrollHeight: targetMessages.scrollHeight,
+          scrollTop: targetMessages.scrollTop,
+        };
+        closeStream();
+        void refresh();
+      });
+      fragment.append(earlier);
+    }
     for (const item of conversation.items) {
       const node = messageNode(item, conversation, { suppressPendingInteractions: isRoot });
       if (node.nodeType === Node.ELEMENT_NODE) {
@@ -2806,7 +2852,11 @@ export function createMobileConversationView({
     if (!fragment.childNodes.length) fragment.append(element('div', 'mobile-conversation-loading', 'No messages yet'));
     reconcileTimeline(targetMessages, [...fragment.childNodes]);
     restoreStreamScroll(targetMessages, streamScroll);
-    if (initialThreadRender || shouldFollowTail || hadPendingMessage) {
+    if (historyPrependAnchor?.sessionName === sessionName) {
+      const anchor = historyPrependAnchor;
+      historyPrependAnchor = undefined;
+      targetMessages.scrollTop = anchor.scrollTop + (targetMessages.scrollHeight - anchor.scrollHeight);
+    } else if (initialThreadRender || shouldFollowTail || hadPendingMessage) {
       targetMessages.scrollTop = targetMessages.scrollHeight;
       // Newly parsed Markdown can change height once layout settles. Commit a
       // second tail position on the next frame so the first streamed chunk
@@ -2825,7 +2875,10 @@ export function createMobileConversationView({
   async function refresh() {
     const currentGeneration = generation;
     if (!media.matches || !sessionName) return setAvailable(false);
-    const query = threadId ? `?thread=${encodeURIComponent(threadId)}` : '';
+    const params = new URLSearchParams();
+    if (threadId) params.set('thread', threadId);
+    params.set('historyLimit', String(historyLimit()));
+    const query = `?${params}`;
     try {
       const payload = await api(`/api/conversations/${encodeURIComponent(sessionName)}${query}`);
       if (currentGeneration !== generation) return;
@@ -3164,6 +3217,7 @@ export function createMobileConversationView({
       providerId = undefined;
       pendingMessage = undefined;
       cancellingTurn = false;
+      historyPrependAnchor = undefined;
       interactionMotionKey = '';
       pendingPlanReviews.clear();
       attachments = [];
@@ -3247,6 +3301,19 @@ export function createMobileConversationView({
       if (!sessionName || !media.matches) {
         setBooting(false);
         return setAvailable(false);
+      }
+      const cached = conversationCache.get(sessionName);
+      if (cached) {
+        conversationCache.delete(sessionName);
+        conversationCache.set(sessionName, cached);
+        providerId = cached.provider?.id;
+        threadId = cached.thread?.id;
+        rootThreadId = cached.rootThreadId || cached.thread?.id;
+        setAvailable(true);
+        setBooting(false);
+        render(cached);
+        startStream();
+        return;
       }
       setBooting(true);
       jumpToLatest.hidden = true;

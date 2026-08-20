@@ -2013,8 +2013,13 @@ export function createTerminalServer(options = {}) {
           const session = await conversationSession(name);
           if (!session) return json(response, 404, { error: 'Managed session not found' });
           const threadId = url.searchParams.get('thread') || undefined;
+          const historyLimitValue = url.searchParams.get('historyLimit');
+          const requestedHistoryLimit = Number(historyLimitValue);
+          const historyLimit = historyLimitValue !== null && Number.isInteger(requestedHistoryLimit)
+            ? Math.max(20, Math.min(5_000, requestedHistoryLimit)) : undefined;
+          const conversationOptions = { threadId, ...(historyLimit ? { historyLimit } : {}) };
           let initial;
-          try { initial = await conversationRegistry.read(session, { threadId }); }
+          try { initial = await conversationRegistry.read(session, conversationOptions); }
           catch (error) { return conversationFailure(response, error); }
           if (!initial) return json(response, 404, {
             error: 'No mobile conversation provider is available for this session',
@@ -2060,7 +2065,7 @@ export function createTerminalServer(options = {}) {
           conversationStreams.add(close);
           response.once('close', () => void close());
           try {
-            stopWatching = await conversationRegistry.watch(session, { threadId }, (event) => {
+            stopWatching = await conversationRegistry.watch(session, conversationOptions, (event) => {
               if (!closed && !response.writableEnded) {
                 let outgoing = event;
                 if (event.stream?.kind === 'agent_message_chunk') {
@@ -2096,8 +2101,13 @@ export function createTerminalServer(options = {}) {
           const session = await conversationSession(name);
           if (!session) return json(response, 404, { error: 'Managed session not found' });
           const threadId = url.searchParams.get('thread') || undefined;
+          const historyLimitValue = url.searchParams.get('historyLimit');
+          const requestedHistoryLimit = Number(historyLimitValue);
+          const historyLimit = historyLimitValue !== null && Number.isInteger(requestedHistoryLimit)
+            ? Math.max(20, Math.min(5_000, requestedHistoryLimit)) : undefined;
+          const conversationOptions = { threadId, ...(historyLimit ? { historyLimit } : {}) };
           let conversation;
-          try { conversation = await conversationRegistry.read(session, { threadId }); }
+          try { conversation = await conversationRegistry.read(session, conversationOptions); }
           catch (error) { return conversationFailure(response, error); }
           return conversation
             ? json(response, 200, { conversation })
@@ -2408,6 +2418,11 @@ export function createTerminalServer(options = {}) {
     const requestUrl = new URL(request.url, 'http://localhost');
     const name = requestUrl.searchParams.get('session');
     const threadId = requestUrl.searchParams.get('thread') || undefined;
+    const historyLimitValue = requestUrl.searchParams.get('historyLimit');
+    const requestedHistoryLimit = Number(historyLimitValue);
+    const historyLimit = historyLimitValue !== null && Number.isInteger(requestedHistoryLimit)
+      ? Math.max(20, Math.min(5_000, requestedHistoryLimit)) : undefined;
+    const conversationOptions = { threadId, ...(historyLimit ? { historyLimit } : {}) };
     if (!name || name.length > 64 || !threadId || threadId.length > 128) {
       socket.close(1008, 'Invalid conversation stream');
       return;
@@ -2457,14 +2472,11 @@ export function createTerminalServer(options = {}) {
         await close();
         return;
       }
-      const initial = await conversationRegistry.read(session, { threadId });
-      if (!initial) {
-        socket.close(1008, 'Conversation unavailable');
-        await close();
-        return;
-      }
-      send({ type: 'conversation', conversation: initial });
-      stopWatching = await conversationRegistry.watch(session, { threadId }, (event) => {
+      // Provider watch publishes an authoritative initial snapshot before it
+      // resolves. Avoid a separate read here: mobile already paints its LRU
+      // snapshot immediately, and an uncached first visit performed the HTTP
+      // readiness read before opening this socket.
+      stopWatching = await conversationRegistry.watch(session, conversationOptions, (event) => {
         let outgoing = event;
         if (event.stream?.kind === 'agent_message_chunk') {
           const message = [...(event.conversation?.items || [])].reverse().find(

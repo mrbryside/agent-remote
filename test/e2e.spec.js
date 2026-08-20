@@ -443,9 +443,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const questionResponses = [];
   const planReviewResponses = [];
   let releaseFirstQuestion;
-  let releaseInitialConversation;
   let releaseHelloInput;
-  let holdNextInitialConversation = false;
   let firstQuestion = true;
   let conversationReads = 0;
   await page.route('**/api/conversations/**', async (route) => {
@@ -546,10 +544,6 @@ test('uses native mobile conversation history, input, and subagent navigation', 
         error: 'Connecting to Grok', code: 'CONVERSATION_INITIALIZING',
       } });
     }
-    if (holdNextInitialConversation && pathname === `/api/conversations/${sessionName}`) {
-      holdNextInitialConversation = false;
-      await new Promise((resolve) => { releaseInitialConversation = resolve; });
-    }
     const selectedThread = new URL(route.request().url()).searchParams.get('thread');
     const child = selectedThread === 'child-thread';
     const secondChild = selectedThread === 'child-thread-2';
@@ -594,29 +588,21 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(project.locator(`.session-row[data-session="${secondSessionName}"]`)).toHaveClass(/active/);
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'collapsed');
   await conversation.locator('#mobile-conversation-menu').click();
-  holdNextInitialConversation = true;
+  const readsBeforeCachedReturn = conversationReads;
   await project.locator(`.session-row[data-session="${sessionName}"] .session-button`).click();
   await expect(project.locator(`.session-row[data-session="${sessionName}"]`)).toHaveClass(/active/);
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'collapsed');
   await expect(page.locator('#terminal')).toBeHidden();
-  await expect.poll(() => Boolean(releaseInitialConversation)).toBe(true);
   const boot = conversation.locator('#mobile-conversation-boot');
-  await expect(boot).toBeVisible();
+  await expect(boot).toBeHidden();
+  await expect(conversation.getByRole('heading', { name: 'Markdown response' })).toBeVisible();
+  await page.waitForTimeout(100);
+  expect(conversationReads).toBe(readsBeforeCachedReturn);
   await expect(conversation.locator('.mobile-conversation-header')).toBeVisible();
   await expect(conversation.locator('#mobile-conversation-composer')).toBeVisible();
   await expect(conversation.locator('#mobile-conversation-title')).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-meta')).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-state')).toBeHidden();
-  await expect(boot).toContainText('Loading chat');
-  await expect.poll(() => conversation.evaluate((root) => {
-    const loading = root.querySelector('#mobile-conversation-boot').getBoundingClientRect();
-    const history = root.querySelector('.mobile-conversation-scroll-shell').getBoundingClientRect();
-    const header = root.querySelector('.mobile-conversation-header').getBoundingClientRect();
-    const composer = root.querySelector('#mobile-conversation-composer').getBoundingClientRect();
-    return loading.top >= history.top && loading.bottom <= history.bottom &&
-      loading.top >= header.bottom && loading.bottom <= composer.top;
-  })).toBe(true);
-  releaseInitialConversation?.();
   await expect(page.locator('#terminal')).toBeHidden();
   await expect.poll(() => page.evaluate(async (name) => {
     const payload = await (await fetch('/api/sessions')).json();

@@ -373,6 +373,42 @@ function groupToolBatches(items) {
   return grouped;
 }
 
+function windowTimeline(items, requestedLimit) {
+  const limit = Number(requestedLimit);
+  if (!Number.isInteger(limit) || limit < 1 || items.length <= limit) {
+    return {
+      items,
+      ...(Number.isInteger(limit) && limit > 0 ? {
+        history: {
+          totalItems: items.length,
+          returnedItems: items.length,
+          hiddenItems: 0,
+          hasEarlier: false,
+          limit,
+        },
+      } : {}),
+    };
+  }
+
+  const tailStart = Math.max(0, items.length - limit);
+  // Interaction state and auxiliary surfaces must remain discoverable even
+  // when their event is older than the visible chat window.
+  const stickyTypes = new Set(['permission', 'question', 'plan_review', 'plan', 'subagent']);
+  const retained = items.slice(0, tailStart).filter((item) => stickyTypes.has(item.type));
+  const visible = [...retained, ...items.slice(tailStart)];
+  const hiddenItems = items.length - visible.length;
+  return {
+    items: visible,
+    history: {
+      totalItems: items.length,
+      returnedItems: visible.length,
+      hiddenItems,
+      hasEarlier: hiddenItems > 0,
+      limit,
+    },
+  };
+}
+
 function updateValue(record) {
   const update = record?.params?.update;
   return update && typeof update === 'object' ? update : undefined;
@@ -1066,6 +1102,27 @@ export function createGrokConversationProvider({
   loadLifecycle = loadGrokLifecycle,
 } = {}) {
   if (!acpClient) throw new Error('Grok ACP client is required');
+  const parsedTimelineCache = new Map();
+
+  function parseThreadTimeline(threadId, snapshot, turnActive) {
+    const events = snapshot.events || [];
+    const first = events[0];
+    const last = events.at(-1);
+    const cached = parsedTimelineCache.get(threadId);
+    if (cached && cached.length === events.length && cached.first === first &&
+        cached.last === last && cached.turnActive === turnActive) {
+      return cached.parsed;
+    }
+    const parsed = timeline(events, { turnActive });
+    parsedTimelineCache.delete(threadId);
+    parsedTimelineCache.set(threadId, {
+      length: events.length, first, last, turnActive, parsed,
+    });
+    while (parsedTimelineCache.size > 100) {
+      parsedTimelineCache.delete(parsedTimelineCache.keys().next().value);
+    }
+    return parsed;
+  }
 
   async function reconcilePersistedTurn(cwd, threadId, loadedSnapshot) {
     const snapshot = loadedSnapshot ?? await acpClient.loadSession({ sessionId: threadId, cwd });
@@ -1085,7 +1142,7 @@ export function createGrokConversationProvider({
     const loaded = await acpClient.loadSession({ sessionId: threadId, cwd });
     const { snapshot, lifecycle: persistedLifecycle } = await reconcilePersistedTurn(cwd, threadId, loaded);
     const authoritativeActive = authoritativeTurn(snapshot, persistedLifecycle);
-    const parsed = timeline(snapshot.events, { turnActive: authoritativeActive });
+    const parsed = parseThreadTimeline(threadId, snapshot, authoritativeActive);
     // The ACP client owns the live turn lifecycle. Tool notifications can be
     // delivered after `turn_completed`, so replaying the timeline is only a
     // fallback for older/test snapshots that do not expose `turn.active`.
@@ -1157,7 +1214,7 @@ export function createGrokConversationProvider({
     return { threads, parents };
   }
 
-  async function readConversation(handle, { threadId = handle.rootThreadId } = {}) {
+  async function readConversation(handle, { threadId = handle.rootThreadId, historyLimit } = {}) {
     const isRoot = threadId === handle.rootThreadId;
     const relationship = isRoot ? undefined : await graph(handle.cwd, handle.rootThreadId);
     const selected = isRoot
@@ -1178,12 +1235,14 @@ export function createGrokConversationProvider({
     // the parent card describes the lifecycle request that created it. Keep
     // the latter intact so concurrent cards do not change identity or copy
     // when descendant metadata loads (or races with the spawn event).
-    const items = selected.items.map((item) => item.type === 'plan_review'
+    const allItems = selected.items.map((item) => item.type === 'plan_review'
       ? { ...item, threadId }
       : item);
+    const windowed = windowTimeline(allItems, historyLimit);
     return {
       thread: selected.thread,
-      items,
+      items: windowed.items,
+      ...(windowed.history ? { history: windowed.history } : {}),
       children,
       recap: selected.recap,
       ...(threadId === handle.rootThreadId && selected.controls ? { controls: selected.controls } : {}),
@@ -1222,6 +1281,10 @@ export function createGrokConversationProvider({
       agentName: child.role,
       status: child.status,
     }));
+    const allItems = parsed.items.map((item) => item.type === 'plan_review'
+      ? { ...item, threadId }
+      : item);
+    const windowed = windowTimeline(allItems, options?.historyLimit);
     return {
       thread: {
         id: threadId,
@@ -1230,7 +1293,8 @@ export function createGrokConversationProvider({
         model: shortText(detail.currentModelId || snapshot.metadata?.models?.currentModelId, '', 80),
         status: active ? 'working' : active === false ? 'idle' : parsed.status,
       },
-      items: parsed.items.map((item) => item.type === 'plan_review' ? { ...item, threadId } : item),
+      items: windowed.items,
+      ...(windowed.history ? { history: windowed.history } : {}),
       children,
       recap: parsed.recap,
       ...(isRoot && controls && Object.keys(controls).length ? { controls } : {}),

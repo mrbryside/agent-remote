@@ -13,6 +13,14 @@ the registry exposes the same thread/items/children contract to
 `public/mobile-conversation.js` and serializes provider-owned input. New
 adapters stay behind this boundary and do not add provider-specific UI branches.
 
+Mobile initially requests the latest 80 timeline items. The provider retains
+older pending interactions, plans, and subagent lifecycle items required by
+auxiliary surfaces, while ordinary older messages remain behind an explicit
+“Load earlier history” control. The browser also keeps the six most recent root
+snapshots in an in-memory LRU: returning to a chat paints the last known state
+immediately, then revalidates it through the conversation WebSocket. This cache
+is presentational only; provider state remains authoritative.
+
 ## Grok ACP ownership
 
 New interactive Grok chats are launched with `--leader`, a preallocated

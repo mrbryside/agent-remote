@@ -223,7 +223,7 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     }],
     managedSessionProcessId: async () => 4321,
   }, async (url) => {
-    const response = await fetch(`${url}/api/conversations/ar-mobile?thread=thread-1`);
+    const response = await fetch(`${url}/api/conversations/ar-mobile?thread=thread-1&historyLimit=80`);
     assert.equal(response.status, 200);
     assert.equal((await response.json()).conversation.thread.title, 'Mobile thread');
     assert.deepEqual(calls, [{
@@ -231,7 +231,7 @@ test('serves a provider-neutral mobile conversation only for a managed session',
         name: 'ar-mobile', label: 'Mobile', cwd: process.cwd(), command: 'fixture', managed: true,
         processId: 4321,
       },
-      options: { threadId: 'thread-1' },
+      options: { threadId: 'thread-1', historyLimit: 80 },
     }]);
     const inputResponse = await fetch(`${url}/api/conversations/ar-mobile/input`, {
       method: 'POST',
@@ -553,6 +553,7 @@ test('streams provider-neutral conversation updates and releases its watcher on 
 
 test('streams conversation updates as websocket messages and releases its watcher on disconnect', async () => {
   let stopped = false;
+  let reads = 0;
   const conversation = {
     provider: { id: 'fixture', label: 'Fixture' },
     thread: { id: 'thread-1', title: 'Streaming', status: 'working' },
@@ -561,7 +562,7 @@ test('streams conversation updates as websocket messages and releases its watche
     capabilities: { send: true, children: false },
   };
   const conversationRegistry = {
-    read: async () => conversation,
+    read: async () => (reads += 1, conversation),
     watch: async (_session, _options, listener) => {
       listener({ conversation, stream: { kind: 'agent_message_chunk', delta: 'live chunk' } });
       conversation.items[0].text += ' two';
@@ -596,6 +597,7 @@ test('streams conversation updates as websocket messages and releases its watche
     assert.match(conversationMessages.find((message) => message.stream?.delta === 'live chunk').conversation.items[0].text, /live chunk/);
     assert.equal(conversationMessages.find((message) => message.stream?.delta === ' two').conversation, undefined);
     assert.equal(conversationMessages.find((message) => message.stream?.delta === ' two').stream.messageId, 'a-1');
+    assert.equal(reads, 0, 'websocket watch owns its initial snapshot without a duplicate read');
 
     const split = await fetch(`${url}/api/control/split`, {
       method: 'POST',

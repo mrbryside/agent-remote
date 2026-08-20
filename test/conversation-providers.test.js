@@ -165,6 +165,49 @@ test('Grok provider maps a managed tmux process to messages and subagents', asyn
   assert.equal(data.prompts[0].text, 'hello from phone');
 });
 
+test('Grok provider returns a bounded recent history window for mobile', async () => {
+  const data = await fixture();
+  const snapshot = data.snapshots.get(data.parentId);
+  snapshot.events = [];
+  for (let index = 0; index < 60; index += 1) {
+    snapshot.events.push(
+      { timestamp: index * 3 + 1, params: { update: {
+        sessionUpdate: 'user_message_chunk', content: { type: 'text', text: `Prompt ${index}` },
+      } } },
+      { timestamp: index * 3 + 2, params: { update: {
+        sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `Reply ${index}` },
+      } } },
+      { timestamp: index * 3 + 3, params: { update: { sessionUpdate: 'turn_completed' } } },
+    );
+  }
+  const registry = createConversationRegistry({
+    providers: [createGrokConversationProvider({ acpClient: data.acpClient })],
+  });
+  const result = await registry.read({
+    name: 'ar-chat', cwd: data.cwd,
+    command: `grok --leader --session-id ${data.parentId}`,
+    conversationThreadId: data.parentId,
+  }, { historyLimit: 10 });
+
+  assert.equal(result.items.length, 10);
+  assert.deepEqual(result.history, {
+    totalItems: 120,
+    returnedItems: 10,
+    hiddenItems: 110,
+    hasEarlier: true,
+    limit: 10,
+  });
+  assert.equal(result.items[0].text, 'Prompt 55');
+  assert.equal(result.items.at(-1).text, 'Reply 59');
+  const repeated = await registry.read({
+    name: 'ar-chat', cwd: data.cwd,
+    command: `grok --leader --session-id ${data.parentId}`,
+    conversationThreadId: data.parentId,
+  }, { historyLimit: 10 });
+  assert.equal(repeated.items[0], result.items[0],
+    'an unchanged ACP snapshot should reuse its parsed timeline');
+});
+
 test('Grok provider keeps a steered user message between assistant markdown segments', async () => {
   const data = await fixture();
   const snapshot = await data.acpClient.loadSession({ sessionId: data.parentId });
