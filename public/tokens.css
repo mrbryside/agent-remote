@@ -9,6 +9,11 @@
   --font-size-project-empty: clamp(13.5px, 1.14vw, 14.5px);
   --font-size-terminal: 14px;
   --line-height-terminal: 1.2;
+  --font-size-interaction-eyebrow: 10px;
+  --font-size-interaction-caption: 12px;
+  --font-size-interaction-body: 14px;
+  --font-size-interaction-title: 16px;
+  --font-size-mobile-input: 16px;
 
   /* Neutral surfaces */
   --color-canvas: #0c0c0d;

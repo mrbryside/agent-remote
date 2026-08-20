@@ -14,6 +14,13 @@
 
 Layout state such as `--sidebar-width` and `--graphics-width` is also declared there, then may be updated at runtime or in responsive media queries.
 
+Mobile Question and Permission surfaces share the interaction type scale:
+`--font-size-interaction-eyebrow`, `--font-size-interaction-caption`,
+`--font-size-interaction-body`, and `--font-size-interaction-title`. Text fields
+use `--font-size-mobile-input` so iOS does not zoom the viewport on focus. Keep
+the two interaction types on this common scale instead of adding per-card font
+sizes.
+
 Scrollbar colors use the semantic `--color-scrollbar-thumb`, `--color-scrollbar-thumb-hover`, and `--color-scrollbar-thumb-active` tokens. `public/styles.css` applies one cross-browser 6px scrollbar contract to every scroll surface: transparent, borderless tracks and corners; rounded low-contrast thumbs; and no arrow buttons. Do not hide a component scrollbar or add a component-specific track frame.
 
 ## Consumption rules

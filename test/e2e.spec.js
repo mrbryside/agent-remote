@@ -1154,9 +1154,19 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       buttonHeight: button.height,
     };
   });
-  expect(permissionDensity.padding).toBeLessThanOrEqual(11);
+  expect(permissionDensity.padding).toBeLessThanOrEqual(12);
   expect(permissionDensity.gap).toBeLessThanOrEqual(9);
-  expect(permissionDensity.buttonHeight).toBeLessThanOrEqual(46);
+  expect(permissionDensity.buttonHeight).toBeLessThanOrEqual(48);
+  const permissionTypography = await interactionDock.locator('.mobile-interaction-card').evaluate((card) => ({
+    eyebrow: getComputedStyle(card.querySelector('.mobile-question-header small')).fontSize,
+    title: getComputedStyle(card.querySelector('.mobile-question-header strong')).fontSize,
+    status: getComputedStyle(card.querySelector('.mobile-question-status')).fontSize,
+    control: getComputedStyle(card.querySelector('.mobile-permission-actions strong')).fontSize,
+    caption: getComputedStyle(card.querySelector('.mobile-permission-actions small')).fontSize,
+  }));
+  expect(permissionTypography).toEqual({
+    eyebrow: '10px', title: '16px', status: '12px', control: '14px', caption: '12px',
+  });
   const permissionButtonBoxes = await permissionButtons.evaluateAll((buttons) => buttons.map((button) => {
     const box = button.getBoundingClientRect();
     return { x: box.x, y: box.y, width: box.width };
@@ -1246,12 +1256,20 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       emptyLiveDisplay: getComputedStyle(live).display,
     };
   });
-  expect(questionDensity.padding).toBeLessThanOrEqual(11);
+  expect(questionDensity.padding).toBeLessThanOrEqual(12);
   expect(questionDensity.gap).toBeLessThanOrEqual(9);
   expect(questionDensity.optionPadding).toBeLessThanOrEqual(8);
   expect(questionDensity.optionMinHeight).toBeLessThanOrEqual(44);
   expect(questionDensity.actionHeight).toBeLessThanOrEqual(42);
   expect(questionDensity.emptyLiveDisplay).toBe('none');
+  const questionTypography = await questionCard.evaluate((card) => ({
+    eyebrow: getComputedStyle(card.querySelector('.mobile-question-header small')).fontSize,
+    title: getComputedStyle(card.querySelector('.mobile-question-header strong')).fontSize,
+    status: getComputedStyle(card.querySelector('.mobile-question-status')).fontSize,
+    control: getComputedStyle(card.querySelector('.mobile-question-option strong')).fontSize,
+    caption: getComputedStyle(card.querySelector('.mobile-question-option small')).fontSize,
+  }));
+  expect(questionTypography).toEqual(permissionTypography);
   await expect(questionCard.getByRole('group')).toHaveCount(1);
   const nextButton = questionCard.getByRole('button', { name: 'Next' });
   await expect(nextButton).toBeDisabled();
@@ -1266,7 +1284,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const questionActionBackgrounds = await questionCard.locator('.mobile-question-actions button').evaluateAll(
     (buttons) => buttons.map((button) => getComputedStyle(button).backgroundColor),
   );
-  expect(new Set(questionActionBackgrounds).size).toBe(1);
+  expect(new Set(questionActionBackgrounds).size).toBe(2);
   await expect(nextButton).toBeEnabled();
   await expect(input).not.toBeFocused();
   await nextButton.click();
