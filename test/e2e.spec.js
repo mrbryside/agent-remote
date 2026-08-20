@@ -751,7 +751,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(suggestions.getByRole('option', { name: /mobile-conversation\.js/ })).toBeVisible();
   await suggestions.getByRole('option', { name: /mobile-conversation\.js/ }).click();
   await expect(input).toHaveValue('Review @public/mobile-conversation.js ');
+  await conversation.locator('#mobile-conversation-messages').evaluate((node) => { node.scrollTop = 0; });
   await conversation.locator('#mobile-conversation-send').click();
+  await expect.poll(() => conversation.locator('#mobile-conversation-messages').evaluate(
+    (node) => Math.max(0, node.scrollHeight - node.scrollTop - node.clientHeight),
+  )).toBeLessThanOrEqual(48);
   await expect.poll(() => mobileInputs).toContainEqual(expect.objectContaining({
     text: 'Review @public/mobile-conversation.js', fileMentions: ['public/mobile-conversation.js'],
   }));
@@ -1094,21 +1098,37 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       '[data-message-id="assistant-live-token"] > .mobile-message-content',
     );
   });
-  for (const delta of [' by', ' token']) {
+  for (const [index, delta] of [' by', ' token'].entries()) {
     const item = rootItems.find((entry) => entry.id === 'assistant-live-token');
     item.text += delta;
-    await page.evaluate(({ nextConversation, delta: nextDelta }) => {
+    await page.evaluate(({ nextConversation, delta: nextDelta, compact }) => {
       window.__conversationStreams.at(-1).emit('conversation', {
-        data: JSON.stringify({ conversation: nextConversation, stream: {
+        data: JSON.stringify({ ...(compact ? {} : { conversation: nextConversation }), stream: {
           kind: 'agent_message_chunk', delta: nextDelta,
+          threadId: 'root-thread', messageId: 'assistant-live-token',
         } }),
       });
-    }, { nextConversation: rootConversation(), delta });
+    }, { nextConversation: rootConversation(), delta, compact: index > 0 });
   }
   await expect(liveTokenMessage.locator('.mobile-message-content')).toHaveText('Token by token');
   expect(await page.evaluate(() => window.__liveTokenContent.isSameNode(document.querySelector(
     '[data-message-id="assistant-live-token"] > .mobile-message-content',
   )))).toBe(true);
+
+  // iOS can retain pointer capture while native scrolling and never deliver a
+  // matching pointerup. Stream/lifecycle snapshots must not wait for that
+  // gesture or the phone stays on Responding until another action flushes it.
+  await liveTokenMessage.dispatchEvent('pointerdown', { pointerType: 'touch', pointerId: 41 });
+  rootItems.find((entry) => entry.id === 'assistant-live-token').text += ' final';
+  await page.evaluate(() => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ stream: {
+        kind: 'agent_message_chunk', delta: ' final', threadId: 'root-thread',
+        messageId: 'assistant-live-token',
+      } }),
+    });
+  });
+  await expect(liveTokenMessage.locator('.mobile-message-content')).toHaveText('Token by token final');
 
   currentActivity = { active: false };
   await page.evaluate((nextConversation) => {
@@ -1117,7 +1137,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     });
   }, rootConversation());
   await expect(liveTokenMessage).not.toHaveAttribute('data-streaming', 'true');
-  await expect(liveTokenMessage.locator('.mobile-markdown')).toHaveText('Token by token');
+  await expect(liveTokenMessage.locator('.mobile-markdown')).toHaveText('Token by token final');
   await expect(conversation.locator('#mobile-conversation-activity')).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-send')).toHaveAttribute('data-action', 'send');
 

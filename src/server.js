@@ -1970,7 +1970,7 @@ export function createTerminalServer(options = {}) {
           });
           response.writeHead(200, {
             'content-type': 'text/event-stream; charset=utf-8',
-            'cache-control': 'no-store',
+            'cache-control': 'no-cache, no-store, no-transform',
             connection: 'keep-alive',
             'x-accel-buffering': 'no',
             'x-content-type-options': 'nosniff',
@@ -1979,6 +1979,7 @@ export function createTerminalServer(options = {}) {
           response.socket?.setNoDelay?.(true);
           let stopWatching = async () => {};
           let closed = false;
+          let streamedMessageId;
           const close = async () => {
             if (closed) return;
             closed = true;
@@ -2002,7 +2003,24 @@ export function createTerminalServer(options = {}) {
           try {
             stopWatching = await conversationRegistry.watch(session, { threadId }, (event) => {
               if (!closed && !response.writableEnded) {
-                response.write(`event: conversation\ndata: ${JSON.stringify(event)}\n\n`);
+                let outgoing = event;
+                if (event.stream?.kind === 'agent_message_chunk') {
+                  const message = [...(event.conversation?.items || [])].reverse().find(
+                    (item) => item.type === 'message' && item.role === 'assistant',
+                  );
+                  const stream = {
+                    ...event.stream,
+                    threadId: event.conversation?.thread?.id,
+                    messageId: message?.id,
+                  };
+                  outgoing = message?.id && streamedMessageId === message.id
+                    ? { stream }
+                    : { ...event, stream };
+                  streamedMessageId = message?.id;
+                } else {
+                  streamedMessageId = undefined;
+                }
+                response.write(`event: conversation\ndata: ${JSON.stringify(outgoing)}\n\n`);
                 response.flush?.();
               }
             });

@@ -126,9 +126,8 @@ export function createMobileConversationView({
   let suggestionTimer;
   let suggestionGeneration = 0;
   const mentionedFiles = new Set();
-  let streamPointerActive = false;
-  let deferredStreamRender;
-  let deferredStreamRenderTimer;
+  let followStreamTail = true;
+  let tailSnapFrame;
   let fileSheet;
   let fileSheetPanel;
   let fileSheetTitle;
@@ -187,6 +186,16 @@ export function createMobileConversationView({
 
   function distanceFromBottom(container = messages) {
     return Math.max(0, container.scrollHeight - container.scrollTop - container.clientHeight);
+  }
+
+  function snapMessagesToLatest() {
+    followStreamTail = true;
+    cancelAnimationFrame(tailSnapFrame);
+    tailSnapFrame = requestAnimationFrame(() => {
+      tailSnapFrame = undefined;
+      messages.scrollTop = messages.scrollHeight;
+      updateJumpToLatest();
+    });
   }
 
   function scrollIdentity(viewport) {
@@ -614,32 +623,42 @@ export function createMobileConversationView({
   }
 
   function applyStreamTextDelta(conversation, stream) {
-    if (stream?.kind !== 'agent_message_chunk' || !lastConversation ||
-        lastConversation.thread?.id !== conversation.thread?.id) return false;
-    const next = streamingAssistant(conversation);
+    if (stream?.kind !== 'agent_message_chunk' || !lastConversation) return false;
+    const compact = !conversation;
+    const currentThreadId = lastConversation.thread?.id;
+    if (compact ? stream.threadId !== currentThreadId : conversation.thread?.id !== currentThreadId) return false;
+    const next = compact
+      ? (lastConversation.items || []).find((item) => item.id === stream.messageId)
+      : streamingAssistant(conversation);
     const previous = (lastConversation.items || []).find((item) => item.id === next?.id);
-    if (!next || !previous || typeof next.text !== 'string' ||
-        typeof previous.text !== 'string' || !next.text.startsWith(previous.text)) return false;
-    const suffix = next.text.slice(previous.text.length);
+    if (!next || !previous || typeof previous.text !== 'string') return false;
+    const previousText = previous.text;
+    const nextText = compact ? `${previousText}${stream.delta || ''}` : next.text;
+    if (typeof nextText !== 'string' || !nextText.startsWith(previousText)) return false;
+    const suffix = nextText.slice(previousText.length);
     if (!suffix) return false;
-    const isRoot = !conversation.parent && conversation.thread.id === rootThreadId;
+    const source = conversation || lastConversation;
+    const isRoot = !source.parent && currentThreadId === rootThreadId;
     const targetMessages = isRoot ? messages : sheetMessages || messages;
     const article = [...targetMessages.querySelectorAll('.mobile-message')]
       .find((node) => node.dataset.messageId === next.id);
     const content = article?.querySelector(':scope > .mobile-message-content[data-streaming="true"]');
-    if (!content || content.__mobileRawText !== previous.text) return false;
+    if (!content || content.__mobileRawText !== previousText) return false;
 
-    const atBottom = distanceFromBottom(targetMessages) <= 1;
-    appendStreamingMarkdown(content, next.text);
-    lastConversation = conversation;
-    if (isRoot) {
+    const atBottom = distanceFromBottom(targetMessages) <= 48;
+    appendStreamingMarkdown(content, nextText);
+    if (compact) previous.text = nextText;
+    else lastConversation = conversation;
+    if (isRoot && conversation) {
       rootConversation = conversation;
       state.textContent = statusLabel(conversation.thread.status);
       state.dataset.state = conversation.thread.status;
       onStatusChange(sessionName, conversation.thread.status);
       updateComposerAction();
     }
-    if (atBottom) targetMessages.scrollTop = targetMessages.scrollHeight;
+    if (atBottom || (isRoot && followStreamTail)) {
+      targetMessages.scrollTop = targetMessages.scrollHeight;
+    }
     if (isRoot) updateJumpToLatest();
     return true;
   }
@@ -1015,10 +1034,12 @@ export function createMobileConversationView({
     eventSource.addEventListener('conversation', (event) => {
       try {
         const payload = JSON.parse(event.data);
-        if (payload.conversation?.thread?.id !== threadId) return;
-        providerId = payload.conversation.provider.id;
+        const payloadThreadId = payload.conversation?.thread?.id || payload.stream?.threadId;
+        if (payloadThreadId !== threadId) return;
+        if (payload.conversation) providerId = payload.conversation.provider.id;
         if (!applyStreamTextDelta(payload.conversation, payload.stream)) {
-          render(payload.conversation, { animate: true, fromStream: true });
+          if (payload.conversation) render(payload.conversation, { animate: true, fromStream: true });
+          else schedule(0);
         }
       } catch {
         schedule();
@@ -2250,10 +2271,10 @@ export function createMobileConversationView({
             sentAt: Date.now(), status: 'accepted', source: 'steer', queueId: entry.id,
           };
           schedulePendingAcceptanceFailure(pendingText);
+          followStreamTail = true;
           renderedSignature = '';
           if (lastConversation) render(lastConversation);
-          messages.scrollTop = messages.scrollHeight;
-          updateJumpToLatest();
+          snapMessagesToLatest();
           void refresh();
         } },
       ));
@@ -2458,15 +2479,6 @@ export function createMobileConversationView({
   }
 
   function render(conversation, { animate = false, fromStream = false } = {}) {
-    if (fromStream && streamPointerActive) {
-      deferredStreamRender = { conversation, animate };
-      return;
-    }
-    if (fromStream) {
-      clearTimeout(deferredStreamRenderTimer);
-      deferredStreamRenderTimer = undefined;
-      deferredStreamRender = undefined;
-    }
     const previousConversation = lastConversation;
     lastConversation = conversation;
     const initialThreadRender = !previousConversation ||
@@ -2477,7 +2489,9 @@ export function createMobileConversationView({
     // Follow new output only while the reader is actually at the bottom. A
     // generous "near bottom" threshold makes short mobile histories snap back
     // down on every streamed update and effectively prevents scrolling.
-    const atBottom = distanceFromBottom(targetMessages) <= 1;
+    const atBottom = distanceFromBottom(targetMessages) <= 48;
+    const shouldFollowTail = isRoot ? followStreamTail : atBottom;
+    const hadPendingMessage = Boolean(pendingMessage);
     const streamScroll = captureStreamScroll(targetMessages);
     const signature = JSON.stringify({
       thread: conversation.thread,
@@ -2563,33 +2577,15 @@ export function createMobileConversationView({
     if (!fragment.childNodes.length) fragment.append(element('div', 'mobile-conversation-loading', 'No messages yet'));
     reconcileTimeline(targetMessages, [...fragment.childNodes]);
     restoreStreamScroll(targetMessages, streamScroll);
-    if (initialThreadRender || atBottom || pendingMessage) targetMessages.scrollTop = targetMessages.scrollHeight;
+    if (initialThreadRender || shouldFollowTail || hadPendingMessage) {
+      targetMessages.scrollTop = targetMessages.scrollHeight;
+    }
     if (isRoot) updateJumpToLatest();
     if (isRoot) updateComposerAction();
     if (isRoot && !sheet?.hidden) {
       if (sheetMode === 'list') renderSubagentList(conversation);
       else if (sheetMode === 'plan') renderPlanSheet(conversation);
     }
-  }
-
-  function beginStreamInteraction(event) {
-    if (!messages.contains(event.target) && !sheetMessages?.contains(event.target)) return;
-    streamPointerActive = true;
-    clearTimeout(deferredStreamRenderTimer);
-  }
-
-  function finishStreamInteraction() {
-    if (!streamPointerActive) return;
-    streamPointerActive = false;
-    clearTimeout(deferredStreamRenderTimer);
-    // Browsers dispatch click after pointerup. Flush in the next task so a
-    // streamed snapshot cannot replace the pressed control between the two.
-    deferredStreamRenderTimer = setTimeout(() => {
-      deferredStreamRenderTimer = undefined;
-      const pending = deferredStreamRender;
-      deferredStreamRender = undefined;
-      if (pending) render(pending.conversation, { animate: pending.animate, fromStream: true });
-    }, 0);
   }
 
   async function refresh() {
@@ -2694,6 +2690,7 @@ export function createMobileConversationView({
       text: pendingText, attachments: sentAttachments, fileMentions: sentFileMentions,
       sentAt: Date.now(), status: 'sending',
     };
+    followStreamTail = true;
     input.value = '';
     attachments = [];
     mentionedFiles.clear();
@@ -2702,6 +2699,7 @@ export function createMobileConversationView({
     autoSizeInput();
     renderedSignature = '';
     if (lastConversation) render(lastConversation);
+    snapMessagesToLatest();
     try {
       const result = await send(
         sessionName, text, sentAttachments.map((attachment) => attachment.id), sentFileMentions,
@@ -2799,9 +2797,6 @@ export function createMobileConversationView({
     if (suggestions.contains(event.target) || input.contains(event.target)) return;
     closeSuggestions();
   });
-  root.addEventListener('pointerdown', beginStreamInteraction, true);
-  window.addEventListener('pointerup', finishStreamInteraction);
-  window.addEventListener('pointercancel', finishStreamInteraction);
   input.addEventListener('keydown', (event) => {
     if (!suggestions.hidden && suggestionItems.length) {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -2831,8 +2826,12 @@ export function createMobileConversationView({
   input.addEventListener('keyup', (event) => {
     if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateSuggestions();
   });
-  messages.addEventListener('scroll', updateJumpToLatest, { passive: true });
+  messages.addEventListener('scroll', () => {
+    followStreamTail = distanceFromBottom(messages) <= 48;
+    updateJumpToLatest();
+  }, { passive: true });
   jumpToLatest.addEventListener('click', () => {
+    followStreamTail = true;
     messages.scrollTo({
       top: messages.scrollHeight,
       behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
@@ -2881,6 +2880,7 @@ export function createMobileConversationView({
       threadId = undefined;
       rootThreadId = undefined;
       rootConversation = undefined;
+      followStreamTail = true;
       browserAvailable = false;
       pillDismissed = false;
       dismissedPlanRevision = loadDismissedPlanRevision(nextSessionName);
@@ -2932,6 +2932,7 @@ export function createMobileConversationView({
       threadId = undefined;
       rootThreadId = undefined;
       rootConversation = undefined;
+      followStreamTail = true;
       browserAvailable = false;
       pillDismissed = false;
       dismissedPlanRevision = loadDismissedPlanRevision(sessionName);
@@ -2991,12 +2992,9 @@ export function createMobileConversationView({
       generation += 1;
       clearTimeout(refreshTimer);
       clearTimeout(pendingAcceptanceTimer);
-      clearTimeout(deferredStreamRenderTimer);
+      cancelAnimationFrame(tailSnapFrame);
       closeStream();
       document.removeEventListener('pointerdown', dismissModelList);
-      root.removeEventListener('pointerdown', beginStreamInteraction, true);
-      window.removeEventListener('pointerup', finishStreamInteraction);
-      window.removeEventListener('pointercancel', finishStreamInteraction);
     },
   };
 }

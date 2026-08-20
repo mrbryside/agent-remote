@@ -466,7 +466,9 @@ test('streams provider-neutral conversation updates and releases its watcher on 
   const conversationRegistry = {
     read: async () => conversation,
     watch: async (_session, _options, listener) => {
-      listener({ conversation });
+      listener({ conversation, stream: { kind: 'agent_message_chunk', delta: 'live chunk' } });
+      conversation.items[0].text += ' two';
+      listener({ conversation, stream: { kind: 'agent_message_chunk', delta: ' two' } });
       return async () => { stopped = true; };
     },
     encodeSessionInput: async (_session, text) => `${text}\r`,
@@ -483,8 +485,16 @@ test('streams provider-neutral conversation updates and releases its watcher on 
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type'), /^text\/event-stream/);
     const reader = response.body.getReader();
-    const { value } = await reader.read();
-    assert.match(Buffer.from(value).toString('utf8'), /"live chunk"/);
+    let streamed = '';
+    while (!streamed.includes('"delta":" two"')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      streamed += Buffer.from(value).toString('utf8');
+    }
+    assert.match(streamed, /"live chunk"/);
+    assert.match(streamed, /"messageId":"a-1"/);
+    assert.equal((streamed.match(/"conversation":/g) || []).length, 1);
+    assert.match(response.headers.get('cache-control'), /no-transform/);
     const split = await fetch(`${url}/api/control/split`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

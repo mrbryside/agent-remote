@@ -68,6 +68,22 @@ cancel state. Treat that notification as the authoritative visible boundary:
 the underlying `session/prompt` JSON-RPC promise may still be settling so the
 queue remains serialized, but the phone must already leave its streaming/Stop
 state when Grok says the turn is complete.
+The mobile renderer never defers provider snapshots behind pointer or scroll
+gestures. Keyed DOM reconciliation preserves an open tool, code scroll
+position, and pressed control without withholding token or lifecycle events;
+this is important on iOS, where native scrolling can retain pointer capture
+without a matching `pointerup`. Send, Steer, and Jump to latest explicitly
+enable tail following. Incoming chunks continue snapping to the end until the
+reader deliberately scrolls more than the near-bottom threshold, after which
+the history remains anchored until Jump to latest is chosen again.
+The SSE connection sends one complete snapshot when an assistant message
+starts, then sends compact `{ threadId, messageId, delta }` frames for
+subsequent text chunks. Tool, interaction, and lifecycle changes still carry a
+complete snapshot. This keeps a long conversation from being serialized,
+transferred, parsed, and traversed again for every token, which otherwise lets
+mobile Safari fall progressively behind the desktop UI. A reconnect starts
+with another complete snapshot so the compact frames never depend on state
+from an earlier connection.
 ACP `session/load` can replay a completed turn without replaying Grok's final
 lifecycle notification. When the replay batch reaches its persisted boundary,
 the client settles the live `turn.active` flag together with the synthesized
