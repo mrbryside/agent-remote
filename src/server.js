@@ -587,6 +587,10 @@ export function createTerminalServer(options = {}) {
       const { stdout } = await execFileAsync(join(agentRemoteBin, 'terminal-browser'), ['ls', '--all', '--json'], {
         encoding: 'utf8',
         maxBuffer: 4 * 1024 * 1024,
+        // This is the renderer owner's global discovery pass. The public shim
+        // normally narrows `ls` to one chat, which would recurse through this
+        // server before renderer.browserKey has been assigned.
+        env: { ...process.env, AGENT_REMOTE_GRAPHICS: '1' },
       });
       const parsed = JSON.parse(stdout);
       return Array.isArray(parsed.browsers) ? parsed.browsers : [];
@@ -636,6 +640,19 @@ export function createTerminalServer(options = {}) {
       tabs: (browser.tabs || []).map(({ id, url, title, active }) => ({ id, url, title, active })),
       devtoolsPath: `/devtools/${renderer.devtoolsAccess}/inspector.html`,
       devtoolsAccess: renderer.devtoolsAccess,
+    };
+  }
+
+  function browserListing(browser) {
+    const tabs = (browser?.tabs || []).map(({ id, url, title, active }) => ({
+      id, url: url || '', title: title || '', active: Boolean(active),
+    }));
+    const active = tabs.find((tab) => tab.active) || tabs[0];
+    return {
+      key: browser?.key,
+      url: active?.url || '',
+      title: active?.title || '',
+      tabs,
     };
   }
 
@@ -1188,7 +1205,11 @@ export function createTerminalServer(options = {}) {
     if (immediate) kill();
     else {
       try { renderer.terminal.write('\x03'); } catch {}
-      const timer = setTimeout(kill, 250);
+      // terminal-browser unregisters its browser and profile on SIGINT. Give
+      // that handshake enough time to finish before forcing the PTY down;
+      // 250ms intermittently killed Electron mid-cleanup and left the next
+      // agent invocation reporting signal 9.
+      const timer = setTimeout(kill, 2_000);
       timer.unref?.();
     }
     return true;
@@ -1546,6 +1567,27 @@ export function createTerminalServer(options = {}) {
             browserKey: renderer.browserKey,
             activeTab: renderer.surface?.tabs?.find((tab) => tab.active)?.id,
           });
+        }
+        if (request.method === 'GET' && pathname === '/api/control/browser-state') {
+          const session = url.searchParams.get('session') || undefined;
+          const cwd = url.searchParams.get('cwd') || undefined;
+          if (session && session.length > 64) {
+            return json(response, 400, { error: 'session must be under 64 characters' });
+          }
+          if (cwd && cwd.length > 4096) return json(response, 400, { error: 'cwd must be under 4096 characters' });
+          const resolved = await resolveControlSession({ session, cwd });
+          if (resolved.error) return json(response, 409, { error: resolved.error });
+          const renderer = rendererForSession(resolved.session);
+          if (!renderer?.browserKey || !renderer.browserSocket) {
+            return json(response, 200, { self: null, browsers: [] });
+          }
+          try {
+            const browser = await controlTerminalBrowser(renderer.browserSocket, { cmd: 'targets' });
+            browser.key ||= renderer.browserKey;
+            return json(response, 200, { self: renderer.browserKey, browsers: [browserListing(browser)] });
+          } catch {
+            return json(response, 200, { self: null, browsers: [] });
+          }
         }
         if (request.method === 'GET' && pathname === '/api/sessions') {
           return json(response, 200, { sessions: await listWorkspaceSessions() });
@@ -2463,7 +2505,7 @@ export function createTerminalServer(options = {}) {
         // SIGINT asks terminal-browser to unregister/close its browser session.
         // Keep the PTY alive briefly for that handshake, then force cleanup.
         try { terminal.write('\x03'); } catch {}
-        const timer = setTimeout(killTerminal, 250);
+        const timer = setTimeout(killTerminal, 2_000);
         timer.unref?.();
       } else {
         killTerminal();

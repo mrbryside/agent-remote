@@ -120,6 +120,7 @@ const terminalRuntimes = new Map();
 const localSessionActivity = new Map();
 const activitySyncTimers = new Map();
 const workingSessionNames = new Set();
+const conversationLifecycleObservedAt = new Map();
 let activeTerminalRuntime;
 let terminalRuntimeGeneration = 0;
 let workspaceHydrated = false;
@@ -215,6 +216,7 @@ const mobileConversation = createMobileConversationView({
   onStatusChange(sessionName, status) {
     // Conversation lifecycle is authoritative. Any settled provider state
     // must clear an optimistic spinner started when the prompt was submitted.
+    conversationLifecycleObservedAt.set(sessionName, performance.now());
     setSessionWorking(sessionName, status === 'working', { authoritative: true });
   },
   onBrowserOpen(sessionName, argv) {
@@ -427,12 +429,19 @@ function markSessionActive(sessionName, submitted = false) {
     });
 }
 
-function syncConversationLifecycleStatuses(sessionItems) {
+function syncConversationLifecycleStatuses(sessionItems, requestStartedAt = -Infinity) {
   const liveNames = new Set(sessionItems.map((session) => session.name));
   for (const name of [...workingSessionNames]) {
-    if (!liveNames.has(name)) workingSessionNames.delete(name);
+    if (!liveNames.has(name)) {
+      workingSessionNames.delete(name);
+      conversationLifecycleObservedAt.delete(name);
+    }
   }
   for (const session of sessionItems) {
+    // A workspace poll can start before an SSE lifecycle update and finish
+    // after it. Never let that older response resurrect a spinner that the
+    // live conversation already settled.
+    if ((conversationLifecycleObservedAt.get(session.name) ?? -Infinity) > requestStartedAt) continue;
     if (session.conversationStatus === 'working' || session.conversationStatus === 'idle') {
       setSessionWorking(session.name, session.conversationStatus === 'working', { authoritative: true });
     }
@@ -1925,12 +1934,13 @@ function showSessionLoading(session, copy = 'Opening the project folder and star
   const project = projects.find((item) => item.id === session?.projectId);
   const nativeGrok = Boolean(session?.nativeConversation || session?.conversationThreadId ||
     agents.find((agent) => agent.id === project?.agentId)?.providerId === 'grok');
-  sessionLoadingKicker.textContent = project?.name || 'Starting chat';
-  // Pending chat promotion and terminal attachment share this same opaque
-  // surface. Stable copy prevents a visible Preparing -> Connecting flash
-  // while the selected Grok UI is still covered.
-  sessionLoadingTitle.textContent = nativeGrok ? 'Opening Grok…' : 'Opening terminal…';
-  sessionLoadingCopy.textContent = copy;
+  sessionLoading.dataset.native = String(nativeGrok);
+  sessionLoadingKicker.textContent = nativeGrok ? '' : project?.name || 'Starting chat';
+  // Grok launches behind one uninterrupted neutral cover. Copy changes were
+  // readable as a Connecting/Opening flash even though the raw terminal never
+  // leaked, so native conversations intentionally show only the spinner.
+  sessionLoadingTitle.textContent = nativeGrok ? '' : 'Opening terminal…';
+  sessionLoadingCopy.textContent = nativeGrok ? '' : copy;
   sessionLoading.hidden = false;
 }
 
@@ -2556,6 +2566,7 @@ function selectSession(name, { expandProject = true } = {}) {
 
 async function refreshWorkspace() {
   const generation = ++refreshGeneration;
+  const requestStartedAt = performance.now();
   const [projectPayload, sessionPayload, agentPayload] = await Promise.all([
     api('/api/projects'), api('/api/sessions'), api('/api/agents'),
   ]);
@@ -2576,7 +2587,7 @@ async function refreshWorkspace() {
         lastActiveAt: Math.max(sessionActivityTime(session), localSessionActivity.get(session.name) || 0),
       })),
   ];
-  syncConversationLifecycleStatuses(sessions);
+  syncConversationLifecycleStatuses(sessions, requestStartedAt);
   if (activeProjectId && !projects.some((project) => project.id === activeProjectId)) {
     activeProjectId = null;
     localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);

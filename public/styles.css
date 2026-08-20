@@ -127,6 +127,8 @@ html[data-restoring-session="true"] .empty-state { visibility: hidden; opacity: 
 .session-loading-spinner { width: 31px; height: 31px; margin-bottom: 20px; border: 2px solid #343438; border-top-color: #a0aaa6; border-radius: 50%; animation: session-spin .8s linear infinite; }
 .session-loading h2 { margin-top: 10px; color: #d0d0d3; font-size: clamp(21px, 2.3vw, 30px); font-weight: 460; letter-spacing: -.025em; }
 .session-loading p { max-width: 470px; margin: 11px 0 0; color: #74747b; font-size: 13px; line-height: 1.6; }
+.session-loading :is(.empty-kicker, h2, p):empty { display: none; }
+.session-loading[data-native="true"] .session-loading-spinner { margin-bottom: 0; }
 .workspace-notice { position: fixed; top: 24px; right: 24px; z-index: 100; max-width: min(420px, calc(100vw - 48px)); padding: 11px 14px; border: 1px solid #594044; border-radius: 10px; background: #241c1e; color: #d0afb4; box-shadow: 0 12px 40px #0008; font-size: 13px; opacity: 0; transform: translateY(-8px); pointer-events: none; transition: opacity .18s ease, transform .22s cubic-bezier(.2, .8, .2, 1); }
 .workspace-notice[data-visible="true"] { opacity: 1; transform: none; }
 .empty-orbit { position: relative; width: 58px; height: 58px; margin-bottom: 20px; border: 1px solid #38383c; border-radius: 50%; opacity: .78; }

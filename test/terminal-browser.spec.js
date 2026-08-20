@@ -16,6 +16,7 @@ function terminalBrowsers() {
   const result = spawnSync(terminalBrowserCommand, ['ls', '--all', '--json'], {
     encoding: 'utf8',
     timeout: 5_000,
+    env: { ...process.env, AGENT_REMOTE_GRAPHICS: '1' },
   });
   if (result.status !== 0) return [];
   try { return JSON.parse(result.stdout).browsers || []; }

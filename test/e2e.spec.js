@@ -678,6 +678,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => mobileInputs).toContainEqual(expect.objectContaining({
     text: 'Review @public/mobile-conversation.js', fileMentions: ['public/mobile-conversation.js'],
   }));
+  // A 202 delivery receipt is not a turn lifecycle. If the replay does not
+  // echo the exact user text, mobile must still keep Send/Ready instead of
+  // inventing an endless Responding + Stop state from its optimistic message.
+  await expect(sendButton).toHaveAttribute('data-action', 'send');
+  await expect(activity).toBeHidden();
   const thoughtCard = conversation.locator('.mobile-event-thought').first();
   await expect(thoughtCard.getByRole('button')).toContainText('Thinking…');
   await expect(thoughtCard.locator('.mobile-thinking-indicator')).toHaveCount(1);
@@ -2139,7 +2144,8 @@ test('keeps one loading cover until Grok conversation readiness succeeds', async
   const terminal = page.locator('#terminal .terminal-instance');
   await expect.poll(() => readinessRequests).toBeGreaterThan(0);
   await expect(loading).toBeVisible();
-  await expect(loading).toContainText('Opening Grok…');
+  await expect(loading).toHaveText('');
+  await expect(loading.locator('.session-loading-spinner')).toBeVisible();
   await expect(loading).not.toContainText('Connecting');
   await expect(terminal).toHaveAttribute('data-launching', 'true');
   await expect(terminal).toHaveCSS('visibility', 'hidden');

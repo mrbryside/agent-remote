@@ -885,6 +885,18 @@ test('keeps a keyed renderer alive across websocket reconnects until explicitly 
   });
 });
 
+test('returns an empty browser registry for a session without its own renderer', async () => {
+  await withServer({
+    listWorkspaceSessions: async () => [{
+      name: 'isolated-chat', label: 'Isolated chat', cwd: process.cwd(), createdAt: Date.now(),
+    }],
+  }, async (url) => {
+    const response = await fetch(`${url}/api/control/browser-state?session=isolated-chat`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { self: null, browsers: [] });
+  });
+});
+
 test('routes backend split controls to the connected terminal websocket', async () => {
   await withServer({}, async (url) => {
     const socket = await connect(url);

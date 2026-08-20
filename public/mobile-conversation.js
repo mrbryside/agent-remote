@@ -2077,7 +2077,9 @@ export function createMobileConversationView({
         (pendingMessage.text ? item.text.includes(pendingMessage.text) :
           pendingMessage.attachments?.every((attachment) => item.text.includes(attachment.name))),
     );
-    if (pendingAlreadyStored) {
+    const completedAfterPendingTurn = pendingMessage?.status === 'accepted' &&
+      previousConversation?.activity?.active === true && conversation.activity?.active !== true;
+    if (pendingAlreadyStored || completedAfterPendingTurn) {
       clearTimeout(pendingAcceptanceTimer);
       pendingMessage = undefined;
       pendingQuestions.clear();
@@ -2177,18 +2179,22 @@ export function createMobileConversationView({
   }
 
   function updateComposerAction() {
-    const pendingActive = pendingMessage && ['sending', 'accepted'].includes(pendingMessage.status);
-    const turnActive = lastConversation?.activity?.active === true || pendingActive;
+    // The provider lifecycle is the only authority for whether a turn can be
+    // stopped. A locally accepted message is only a delivery receipt: treating
+    // it as a running turn leaves the composer on Stop forever when a replay
+    // omits or normalizes the matching user message.
+    const pendingDelivery = pendingMessage?.status === 'sending';
+    const turnActive = lastConversation?.activity?.active === true;
     if (!turnActive) cancellingTurn = false;
     const hasDraft = Boolean(input.value.trim() || attachments.length);
     const stopAction = turnActive && !hasDraft;
     const statusText = cancellingTurn
       ? 'Stopping…'
-      : lastConversation?.activity?.label || (pendingActive ? 'Waiting for response…' : '');
-    activity.hidden = !turnActive;
+      : lastConversation?.activity?.label || (pendingDelivery ? 'Sending…' : '');
+    activity.hidden = !turnActive && !pendingDelivery;
     activity.dataset.phase = cancellingTurn
       ? 'stopping'
-      : lastConversation?.activity?.phase || 'waiting';
+      : lastConversation?.activity?.phase || (pendingDelivery ? 'sending' : 'waiting');
     activityLabel.textContent = statusText;
     sendButton.dataset.action = stopAction ? 'stop' : 'send';
     sendButton.textContent = stopAction ? '■' : '↑';
