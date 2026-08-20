@@ -169,7 +169,10 @@ reports a terminal status.
 On mobile, root history aggregates these items into one persistent bottom pill
 showing the running count. The pill opens a selector; choosing an agent opens
 its realtime conversation in a draggable 70%-viewport bottom sheet that slides
-up from below. Closing the sheet restores the root SSE stream and scroll position. When a child UUID
+up from below. The shared Browser/Subagents dock has an explicit dismiss action;
+while dismissed, a compact header action restores it without covering history or
+the composer. Dismissal lasts for the selected chat and survives streamed dock
+updates. Closing the sheet restores the root SSE stream and scroll position. When a child UUID
 appears, the provider loads that child through the same ACP connection. Its
 replay and live updates use the same translation recursively, so nested
 subagents remain realtime and navigation cannot escape the root's discovered
@@ -211,15 +214,15 @@ containers, while code blocks also receive a client-created Copy control. User
 messages remain plain text. Both browser libraries are packaged into the macOS
 runtime, so Markdown rendering cannot depend on a CDN or network availability.
 
-During initial ACP connection, the
-native mobile surface continues to own the viewport and shows reconnecting
-state; it does not briefly attach xterm and resize the shared tmux pane. A new
-Grok chat reserves that native surface optimistically on the original `+`
-click, before session creation returns, so even the pending frame says
-`Connecting to Grok` rather than rendering the generic terminal loader. Once
-active, the native surface also owns the only mobile header and places project
-navigation there; the terminal topbar is removed from layout instead of being
-stacked above the conversation header.
+During initial ACP connection, the native mobile surface continues to own the
+viewport behind one opaque `Opening chat…` cover; it does not reveal xterm,
+`Connecting`/`Reconnecting` header state, or partially hydrated history. The
+cover is removed only after the first complete conversation snapshot has been
+committed, so the transition into the chat is atomic. A new Grok chat reserves
+that native surface optimistically on the original `+` click, before session
+creation returns. Once active, the native surface also owns the only mobile
+header and places project navigation there; the terminal topbar is removed from
+layout instead of being stacked above the conversation header.
 
 ## Future adapters
 

@@ -351,6 +351,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const questionResponses = [];
   const planReviewResponses = [];
   let releaseFirstQuestion;
+  let releaseInitialConversation;
+  let holdNextInitialConversation = false;
   let firstQuestion = true;
   let conversationReads = 0;
   await page.route('**/api/conversations/**', async (route) => {
@@ -434,6 +436,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
         error: 'Connecting to Grok', code: 'CONVERSATION_INITIALIZING',
       } });
     }
+    if (holdNextInitialConversation && pathname === `/api/conversations/${sessionName}`) {
+      holdNextInitialConversation = false;
+      await new Promise((resolve) => { releaseInitialConversation = resolve; });
+    }
     const selectedThread = new URL(route.request().url()).searchParams.get('thread');
     const child = selectedThread === 'child-thread';
     const secondChild = selectedThread === 'child-thread-2';
@@ -470,18 +476,22 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(project.locator(`.session-row[data-session="${secondSessionName}"]`)).toHaveClass(/active/);
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'collapsed');
   await conversation.locator('#mobile-conversation-menu').click();
+  holdNextInitialConversation = true;
   await project.locator(`.session-row[data-session="${sessionName}"] .session-button`).click();
   await expect(project.locator(`.session-row[data-session="${sessionName}"]`)).toHaveClass(/active/);
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'collapsed');
   await expect(page.locator('#terminal')).toBeHidden();
-  await expect.poll(() => conversationReads).toBeGreaterThan(0);
-  await expect(conversation.locator('#mobile-conversation-state')).toHaveText(/Reconnecting|Ready/);
+  await expect.poll(() => Boolean(releaseInitialConversation)).toBe(true);
+  await expect(conversation.locator('#mobile-conversation-boot')).toBeVisible();
+  await expect(conversation.locator('#mobile-conversation-state')).toBeHidden();
+  releaseInitialConversation?.();
   await expect(page.locator('#terminal')).toBeHidden();
   await expect.poll(() => page.evaluate(async (name) => {
     const payload = await (await fetch('/api/sessions')).json();
     return payload.sessions.find((session) => session.name === name)?.attached;
   }, sessionName)).toBeLessThanOrEqual(1);
   await expect(conversation.locator('#mobile-conversation-state')).toHaveText('Ready', { timeout: 8_000 });
+  await expect(conversation.locator('#mobile-conversation-boot')).toBeHidden();
   await expect(conversation.locator('.mobile-conversation-loading')).toHaveCount(0, { timeout: 8_000 });
   await expect(conversation.locator('.mobile-message')).toHaveCount(18);
   await expect(messages).toHaveCSS('scroll-behavior', 'auto');
@@ -753,7 +763,16 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     });
   });
   await expect(conversation.locator('.mobile-browser-pill')).toBeVisible();
-  await expect(conversation.locator('.mobile-activity-pill-cluster > button')).toHaveCount(2);
+  await expect(conversation.locator('.mobile-activity-pill-cluster > button')).toHaveCount(3);
+  await page.locator('#graphics-sheet-backdrop').click();
+  await expect(page.locator('#graphics-split')).toBeHidden();
+  await conversation.getByRole('button', { name: 'Hide browser and agent activity' }).click();
+  await expect(conversation.locator('.mobile-subagent-pill-host')).toBeHidden();
+  const activityToggle = conversation.getByRole('button', { name: 'Show browser and agent activity' });
+  await expect(activityToggle).toBeVisible();
+  await activityToggle.click();
+  await expect(conversation.locator('.mobile-subagent-pill-host')).toBeVisible();
+  await expect(activityToggle).toBeHidden();
   await page.setViewportSize({ width: 320, height: 568 });
   await expect.poll(() => conversation.evaluate((node) => {
     const jump = node.querySelector('#mobile-conversation-jump').getBoundingClientRect();
@@ -762,6 +781,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       || jump.right <= cluster.left || jump.left >= cluster.right;
   })).toBe(true);
   await page.setViewportSize({ width: 390, height: 844 });
+  await conversation.locator('.mobile-browser-pill').click();
   await expect(page.locator('#graphics-split')).toBeVisible();
   await expect(page.locator('#graphics-mobile-agents')).toBeVisible();
   await page.locator('#graphics-mobile-agents').click();

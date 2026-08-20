@@ -45,6 +45,8 @@ export function createMobileConversationView({
   const title = document.querySelector('#mobile-conversation-title');
   const meta = document.querySelector('#mobile-conversation-meta');
   const state = document.querySelector('#mobile-conversation-state');
+  const boot = document.querySelector('#mobile-conversation-boot');
+  const activityToggle = document.querySelector('#mobile-conversation-activity-toggle');
   const menu = document.querySelector('#mobile-conversation-menu');
   const back = document.querySelector('#mobile-conversation-back');
   const messages = document.querySelector('#mobile-conversation-messages');
@@ -133,6 +135,14 @@ export function createMobileConversationView({
   let fileSheetClose;
   let filePreviewGeneration = 0;
   let browserAvailable = false;
+  let pillDismissed = false;
+
+  function setBooting(next) {
+    const booting = Boolean(next);
+    root.dataset.booting = String(booting);
+    root.toggleAttribute('aria-busy', booting);
+    boot.hidden = !booting;
+  }
 
   function setAvailable(next) {
     if (available === next) return;
@@ -631,9 +641,11 @@ export function createMobileConversationView({
     if (!items.length && !browserAvailable) {
       subagentPillHost.replaceChildren();
       subagentPillHost.hidden = true;
+      activityToggle.hidden = true;
       return;
     }
-    subagentPillHost.hidden = false;
+    subagentPillHost.hidden = pillDismissed;
+    activityToggle.hidden = !pillDismissed;
     const cluster = element('span', 'mobile-activity-pill-cluster');
     if (browserAvailable) {
       const browser = element('button', 'mobile-browser-pill');
@@ -658,6 +670,16 @@ export function createMobileConversationView({
       pill.addEventListener('click', () => openSheet());
       cluster.append(pill);
     }
+    const dismiss = element('button', 'mobile-activity-pill-dismiss', '×');
+    dismiss.type = 'button';
+    dismiss.setAttribute('aria-label', 'Hide browser and agent activity');
+    dismiss.addEventListener('click', () => {
+      pillDismissed = true;
+      subagentPillHost.hidden = true;
+      activityToggle.hidden = false;
+      activityToggle.focus({ preventScroll: true });
+    });
+    cluster.append(dismiss);
     subagentPillHost.replaceChildren(cluster);
   }
 
@@ -665,8 +687,14 @@ export function createMobileConversationView({
     if (!subagentPillHost) return;
     subagentPillHost.replaceChildren();
     subagentPillHost.hidden = true;
+    activityToggle.hidden = true;
     onSubagentAvailabilityChange(false);
   }
+
+  activityToggle.addEventListener('click', () => {
+    pillDismissed = false;
+    renderSubagentPill(rootConversation || { items: [] });
+  });
 
   function openSheet() {
     ensureSheet();
@@ -2118,11 +2146,16 @@ export function createMobileConversationView({
       if (!rootThreadId && !conversation.parent) rootThreadId = conversation.thread.id;
       setAvailable(true);
       render(conversation);
+      // Keep the opaque startup surface in place until the first complete
+      // conversation snapshot has been committed. Removing it afterwards
+      // makes the transition atomic, with no Connecting/Reconnecting frame.
+      setBooting(false);
       startStream();
     } catch (error) {
       if (currentGeneration !== generation) return;
       if (error.code === 'CONVERSATION_UNAVAILABLE') {
         threadId = undefined;
+        setBooting(false);
         setAvailable(false);
       } else if (available) {
         state.textContent = 'Reconnecting';
@@ -2357,10 +2390,14 @@ export function createMobileConversationView({
     threadId = undefined;
     renderedSignature = '';
     if (media.matches && sessionName) {
+      setBooting(true);
       messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Loading conversation…'));
       setAvailable(true);
       void refresh();
-    } else setAvailable(false);
+    } else {
+      setBooting(false);
+      setAvailable(false);
+    }
   });
   autoSizeInput();
 
@@ -2377,6 +2414,7 @@ export function createMobileConversationView({
       rootThreadId = undefined;
       rootConversation = undefined;
       browserAvailable = false;
+      pillDismissed = false;
       clearSubagentPill();
       parentId = undefined;
       providerId = undefined;
@@ -2396,6 +2434,7 @@ export function createMobileConversationView({
       meta.textContent = 'Starting ACP session';
       state.textContent = 'Connecting';
       state.dataset.state = 'working';
+      setBooting(true);
       composer.hidden = true;
       context.hidden = true;
       activity.hidden = true;
@@ -2422,6 +2461,7 @@ export function createMobileConversationView({
       rootThreadId = undefined;
       rootConversation = undefined;
       browserAvailable = false;
+      pillDismissed = false;
       clearSubagentPill();
       parentId = undefined;
       providerId = undefined;
@@ -2449,7 +2489,11 @@ export function createMobileConversationView({
       modeButton.hidden = true;
       queue.hidden = true;
       queue.replaceChildren();
-      if (!sessionName || !media.matches) return setAvailable(false);
+      if (!sessionName || !media.matches) {
+        setBooting(false);
+        return setAvailable(false);
+      }
+      setBooting(true);
       jumpToLatest.hidden = true;
       messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Loading conversation…'));
       // Claim the mobile surface while provider detection is in flight. This
