@@ -754,6 +754,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await thoughtCard.getByRole('button').click();
   await expect(thoughtCard.getByText('Interaction remains available.')).toBeVisible();
   await expect(conversation.locator('.mobile-tool-group')).toContainText('Listed 1 dir, Read 2 files, Searched 1 time, Edited 1 file, Ran 1 command');
+  await expect(conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle > i')).toHaveText('');
   await expect.poll(() => conversation.locator('[data-event-id="tool-group-1"]').evaluate((node) => ({
     groupBorder: getComputedStyle(node).borderTopStyle,
     groupBackground: getComputedStyle(node).backgroundColor,
@@ -794,6 +795,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(activitySheet.locator('.mobile-subagent-sheet-header small')).toHaveText('1 of 2 tasks complete');
   await expect(activitySheet.getByText('Inspect events')).toBeVisible();
   await expect(activitySheet.getByText('Render cards')).toBeVisible();
+  await expect.poll(() => activitySheet.locator('.mobile-subagent-sheet-panel').evaluate((panel) => ({
+    height: Math.round(panel.getBoundingClientRect().height),
+    scrollHeight: panel.scrollHeight,
+  }))).toEqual(expect.objectContaining({ scrollHeight: expect.any(Number) }));
+  expect((await activitySheet.locator('.mobile-subagent-sheet-panel').boundingBox()).height).toBeLessThan(360);
   const streamedPlan = rootItems.find((item) => item.id === 'plan-1');
   streamedPlan.entries[1].status = 'completed';
   streamedPlan.status = 'completed';
@@ -806,6 +812,15 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(activitySheet.locator('.mobile-subagent-sheet-header small')).toHaveText('2 of 2 tasks complete');
   await expect(activitySheet.locator('.mobile-subagent-sheet-state')).toHaveText('Done');
   await activitySheet.getByRole('button', { name: 'Close activity', exact: true }).click();
+  await expect(planPill).toHaveCount(0);
+  streamedPlan.entries.push({ id: 'p3', content: 'Verify update', status: 'working' });
+  streamedPlan.status = 'working';
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(planPill).toContainText('Plan 2 / 3');
   const subagentPill = conversation.locator('.mobile-subagent-pill');
   await expect(subagentPill).toHaveCount(1);
   await expect(subagentPill).toContainText('2 agents running');
@@ -886,6 +901,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(page.locator('#graphics-split')).toBeVisible();
   await page.locator('#close-graphics-split').click();
   await expect(page.locator('#graphics-split')).toBeHidden();
+  await expect(conversation.locator('.mobile-browser-pill')).toHaveCount(0);
+  await page.evaluate(() => {
+    window.__conversationStreams.at(-1).emit('control', {
+      data: JSON.stringify({
+        type: 'control', action: 'open-graphics',
+        argv: ['terminal-browser', 'open', 'https://updated.example.test'],
+      }),
+    });
+  });
+  await expect(conversation.locator('.mobile-browser-pill')).toBeVisible();
+  await page.locator('#close-graphics-split').click();
+  await expect(conversation.locator('.mobile-browser-pill')).toHaveCount(0);
   Object.assign(subagentItem, { threadId: 'child-thread', phase: 'running', status: 'working' });
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', {
@@ -966,6 +993,24 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }, rootConversation());
   await expect.poll(() => streamedCodeViewport.evaluate((node) =>
     node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(1);
+
+  rootItems.push({
+    id: 'tool-single-root', type: 'tool', title: 'Edited standalone.js', kind: 'edit', status: 'completed',
+    diffs: [{ path: 'standalone.js', oldText: 'const state = "old";\n', newText: 'const state = "ready";\n' }],
+  });
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  const standaloneTool = conversation.locator('[data-event-id="tool-single-root"]');
+  await expect.poll(() => standaloneTool.evaluate((node) => ({
+    border: getComputedStyle(node).borderTopStyle,
+    background: getComputedStyle(node).backgroundColor,
+    columns: getComputedStyle(node.querySelector(':scope > .mobile-event-toggle')).gridTemplateColumns.split(' ').length,
+  }))).toEqual({ border: 'none', background: 'rgba(0, 0, 0, 0)', columns: 4 });
+  await standaloneTool.getByRole('button').click();
+  await expect(standaloneTool.locator(':scope > .mobile-event-panel')).toBeVisible();
 
   rootItems.push({
     id: 'tool-group-short', type: 'tool_group', title: 'Read 2 short files', status: 'completed', tools: [

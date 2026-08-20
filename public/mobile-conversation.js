@@ -137,6 +137,7 @@ export function createMobileConversationView({
   let filePreviewGeneration = 0;
   let browserAvailable = false;
   let pillDismissed = false;
+  let dismissedPlanRevision = '';
   let expectedConversation = false;
 
   function setBooting(next) {
@@ -567,6 +568,16 @@ export function createMobileConversationView({
     return (conversation.items || []).filter((item) => item.type === 'plan');
   }
 
+  function planRevision(plan) {
+    if (!plan) return '';
+    return JSON.stringify({ id: plan.id, title: plan.title, status: plan.status, entries: plan.entries || [] });
+  }
+
+  function visiblePlan(conversation) {
+    const plan = plans(conversation).at(-1);
+    return planRevision(plan) === dismissedPlanRevision ? undefined : plan;
+  }
+
   function planProgress(plan) {
     const entries = Array.isArray(plan?.entries) ? plan.entries : [];
     return {
@@ -633,7 +644,7 @@ export function createMobileConversationView({
     sheet.addEventListener('click', (event) => {
       if (event.target === sheet) closeSheet();
     });
-    sheetClose.addEventListener('click', closeSheet);
+    sheetClose.addEventListener('click', () => closeSheet({ dismiss: true }));
     sheetBack.addEventListener('click', showSheetList);
     sheetBrowser.addEventListener('click', () => {
       closeSheet();
@@ -716,7 +727,7 @@ export function createMobileConversationView({
       scrollShell.append(subagentPillHost);
     }
     const items = subagents(conversation);
-    const plan = plans(conversation).at(-1);
+    const plan = visiblePlan(conversation);
     onSubagentAvailabilityChange(items.length > 0);
     if (!items.length && !browserAvailable && !plan) {
       subagentPillHost.replaceChildren();
@@ -792,6 +803,7 @@ export function createMobileConversationView({
     sheetReturnFocus = document.activeElement;
     sheet.hidden = false;
     sheetMode = 'list';
+    sheetPanel.dataset.mode = 'list';
     selectedChildId = undefined;
     selectedPlanId = undefined;
     onHideBrowser(sessionName);
@@ -830,6 +842,7 @@ export function createMobileConversationView({
     sheetReturnFocus = document.activeElement;
     sheet.hidden = false;
     sheetMode = 'plan';
+    sheetPanel.dataset.mode = 'plan';
     selectedChildId = undefined;
     selectedPlanId = planId;
     onHideBrowser(sessionName);
@@ -846,6 +859,7 @@ export function createMobileConversationView({
     selectedPlanId = undefined;
     const lifecycle = subagentForThread(nextThreadId);
     sheetMode = 'child';
+    sheetPanel.dataset.mode = 'child';
     sheetList.hidden = true;
     sheetMessages.hidden = false;
     sheetBack.hidden = false;
@@ -867,6 +881,7 @@ export function createMobileConversationView({
     threadId = rootThreadId;
     selectedChildId = undefined;
     sheetMode = 'list';
+    sheetPanel.dataset.mode = 'list';
     sheetList.hidden = false;
     sheetMessages.hidden = true;
     sheetBack.hidden = true;
@@ -875,9 +890,14 @@ export function createMobileConversationView({
     void refresh();
   }
 
-  function closeSheet() {
+  function closeSheet({ dismiss = false } = {}) {
     if (!sheet || sheet.hidden) return;
     const childWasOpen = sheetMode === 'child';
+    if (dismiss && sheetMode === 'plan') {
+      const plan = plans(rootConversation || {}).find((item) => item.id === selectedPlanId)
+        || plans(rootConversation || {}).at(-1);
+      dismissedPlanRevision = planRevision(plan);
+    }
     if (childWasOpen) closeStream();
     sheet.hidden = true;
     sheetMode = 'list';
@@ -888,6 +908,7 @@ export function createMobileConversationView({
       renderedSignature = '';
       void refresh();
     }
+    if (dismiss) renderSubagentPill(rootConversation || { items: [] });
     sheetReturnFocus?.focus?.({ preventScroll: true });
   }
 
@@ -1785,7 +1806,7 @@ export function createMobileConversationView({
     toggle.type = 'button';
     toggle.setAttribute('aria-expanded', String(expandedItems.has(item.id)));
     toggle.append(
-      element('i', '', '›'),
+      element('i'),
       element('strong', '', item.title || `${item.tools?.length || 0} tools`),
       element('small', '', statusLabel(item.status)),
     );
@@ -2630,6 +2651,7 @@ export function createMobileConversationView({
       rootConversation = undefined;
       browserAvailable = false;
       pillDismissed = false;
+      dismissedPlanRevision = '';
       clearSubagentPill();
       parentId = undefined;
       providerId = undefined;
@@ -2678,6 +2700,7 @@ export function createMobileConversationView({
       rootConversation = undefined;
       browserAvailable = false;
       pillDismissed = false;
+      dismissedPlanRevision = '';
       clearSubagentPill();
       parentId = undefined;
       providerId = undefined;
