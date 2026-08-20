@@ -1132,6 +1132,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   )).toBe(true);
   const permissionButtons = interactionDock.locator('.mobile-permission-actions button');
   await expect(permissionButtons).toHaveCount(3);
+  const permissionDensity = await interactionDock.locator('.mobile-interaction-card').evaluate((card) => {
+    const styles = getComputedStyle(card);
+    const button = card.querySelector('.mobile-permission-actions button').getBoundingClientRect();
+    return {
+      padding: parseFloat(styles.paddingTop),
+      gap: parseFloat(styles.rowGap),
+      buttonHeight: button.height,
+    };
+  });
+  expect(permissionDensity.padding).toBeLessThanOrEqual(11);
+  expect(permissionDensity.gap).toBeLessThanOrEqual(9);
+  expect(permissionDensity.buttonHeight).toBeLessThanOrEqual(46);
   const permissionButtonBoxes = await permissionButtons.evaluateAll((buttons) => buttons.map((button) => {
     const box = button.getBoundingClientRect();
     return { x: box.x, y: box.y, width: box.width };
@@ -1207,6 +1219,26 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('#mobile-conversation-composer')).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-messages [data-question-id="question-99"]')).toHaveCount(0);
   await expect(questionCard.getByText('Question 1 of 2')).toBeVisible();
+  const questionDensity = await questionCard.evaluate((card) => {
+    const styles = getComputedStyle(card);
+    const optionStyles = getComputedStyle(card.querySelector('.mobile-question-option'));
+    const action = card.querySelector('.mobile-question-actions button').getBoundingClientRect();
+    const live = card.querySelector('.mobile-question-live');
+    return {
+      padding: parseFloat(styles.paddingTop),
+      gap: parseFloat(styles.rowGap),
+      optionPadding: parseFloat(optionStyles.paddingTop),
+      optionMinHeight: parseFloat(optionStyles.minHeight),
+      actionHeight: action.height,
+      emptyLiveDisplay: getComputedStyle(live).display,
+    };
+  });
+  expect(questionDensity.padding).toBeLessThanOrEqual(11);
+  expect(questionDensity.gap).toBeLessThanOrEqual(9);
+  expect(questionDensity.optionPadding).toBeLessThanOrEqual(8);
+  expect(questionDensity.optionMinHeight).toBeLessThanOrEqual(44);
+  expect(questionDensity.actionHeight).toBeLessThanOrEqual(42);
+  expect(questionDensity.emptyLiveDisplay).toBe('none');
   await expect(questionCard.getByRole('group')).toHaveCount(1);
   const nextButton = questionCard.getByRole('button', { name: 'Next' });
   await expect(nextButton).toBeDisabled();
