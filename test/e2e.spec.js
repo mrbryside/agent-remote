@@ -229,6 +229,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       '# Markdown response',
       '',
       'This is **bold**, this is `inlineCode()`, and this is a [safe link](https://example.com).',
+      'The type is `class None implements Option<number>`.',
       'Review `public/app.js:1-2` before applying the plan.',
       '',
       '- First item',
@@ -527,6 +528,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(markdownMessage.getByRole('button', { name: 'Copy code' })).toBeVisible();
   await expect(markdownMessage.locator('.mobile-markdown-code .hljs-keyword')).toHaveText('const');
   await expect(markdownMessage.locator('.mobile-markdown-code .hljs-literal')).toHaveText('true');
+  const inlineType = markdownMessage.locator('code.hljs', { hasText: 'class None implements Option' });
+  await expect(inlineType).toBeVisible();
+  await expect(inlineType.locator('.hljs-keyword')).toHaveText(['class', 'implements']);
+  await expect(inlineType.locator('.hljs-title.class_')).toHaveText(['None', 'Option']);
   await expect(markdownMessage.getByRole('link', { name: 'safe link' })).toHaveAttribute('rel', 'noopener noreferrer');
   await expect(markdownMessage.locator('script, [onerror]')).toHaveCount(0);
   await expect(markdownMessage.locator('a', { hasText: 'Unsafe link' })).not.toHaveAttribute('href', /.+/);
@@ -893,6 +898,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(activitySheet.locator('.mobile-subagent-sheet-state')).toHaveText('Done');
   await activitySheet.getByRole('button', { name: 'Close activity', exact: true }).click();
   await expect(planPill).toHaveCount(0);
+  await expect.poll(() => page.evaluate((name) => (
+    localStorage.getItem(`agent-remote:mobile-plan-dismissed:${encodeURIComponent(name)}`)
+  ), sessionName)).toBeTruthy();
   streamedPlan.entries.push({ id: 'p3', content: 'Verify update', status: 'working' });
   streamedPlan.status = 'working';
   await page.evaluate((nextConversation) => {

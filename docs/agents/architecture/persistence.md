@@ -10,7 +10,9 @@ The `projects` table stores display name, working directory, selected `agent_id`
 
 - SQLite is authoritative for project grouping and chat titles.
 - tmux is authoritative for whether a managed process still exists.
-- `localStorage` keeps UI preferences such as selection, expanded project IDs, and pane widths.
+- `localStorage` keeps UI preferences such as selection, expanded project IDs,
+  pane widths, and the per-session revision of a dismissed mobile Plan sheet.
+  A changed plan revision must surface the Plan pill again.
 - `sessionStorage` terminal snapshots are display acceleration only. They may be evicted and must never block a live PTY.
 
 When changing the schema, make migration logic idempotent and extend `test/projects.test.js` with both a fresh-database and an existing-database case.

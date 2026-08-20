@@ -142,6 +142,35 @@ export function createMobileConversationView({
   let dismissedPlanRevision = '';
   let expectedConversation = false;
 
+  const planDismissalStoragePrefix = 'agent-remote:mobile-plan-dismissed:';
+
+  function planDismissalStorageKey(name = sessionName) {
+    return name ? `${planDismissalStoragePrefix}${encodeURIComponent(name)}` : undefined;
+  }
+
+  function loadDismissedPlanRevision(name = sessionName) {
+    const key = planDismissalStorageKey(name);
+    if (!key) return '';
+    try {
+      return localStorage.getItem(key) || '';
+    } catch {
+      return '';
+    }
+  }
+
+  function persistDismissedPlanRevision(revision) {
+    dismissedPlanRevision = revision || '';
+    const key = planDismissalStorageKey();
+    if (!key) return;
+    try {
+      if (dismissedPlanRevision) localStorage.setItem(key, dismissedPlanRevision);
+      else localStorage.removeItem(key);
+    } catch {
+      // Storage can be unavailable in hardened/private browser contexts. The
+      // in-memory dismissal still behaves correctly for the current view.
+    }
+  }
+
   function setBooting(next) {
     const booting = Boolean(next);
     root.dataset.booting = String(booting);
@@ -898,7 +927,7 @@ export function createMobileConversationView({
     if (dismiss && sheetMode === 'plan') {
       const plan = plans(rootConversation || {}).find((item) => item.id === selectedPlanId)
         || plans(rootConversation || {}).at(-1);
-      dismissedPlanRevision = planRevision(plan);
+      persistDismissedPlanRevision(planRevision(plan));
     }
     if (childWasOpen) closeStream();
     sheet.hidden = true;
@@ -2736,7 +2765,7 @@ export function createMobileConversationView({
       rootConversation = undefined;
       browserAvailable = false;
       pillDismissed = false;
-      dismissedPlanRevision = '';
+      dismissedPlanRevision = loadDismissedPlanRevision(nextSessionName);
       clearSubagentPill();
       parentId = undefined;
       providerId = undefined;
@@ -2785,7 +2814,7 @@ export function createMobileConversationView({
       rootConversation = undefined;
       browserAvailable = false;
       pillDismissed = false;
-      dismissedPlanRevision = '';
+      dismissedPlanRevision = loadDismissedPlanRevision(sessionName);
       clearSubagentPill();
       parentId = undefined;
       providerId = undefined;

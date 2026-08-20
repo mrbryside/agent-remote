@@ -31,9 +31,10 @@ Scrollbar colors use the semantic `--color-scrollbar-thumb`, `--color-scrollbar-
 
 Syntax colors use the `--color-syntax-*` tokens. `public/syntax.js` applies the
 same Highlight.js grammar and palette to assistant code fences, file previews,
-edit diffs, and shell commands. Extend language aliases there and keep syntax
-markup separate from diff add/remove backgrounds; do not add per-language raw
-colors in component CSS.
+edit diffs, shell commands, and recognizable inline code. Inline file references
+use the syntax accent even when they become preview buttons. Extend language
+aliases there and keep syntax markup separate from diff add/remove backgrounds;
+do not add per-language raw colors in component CSS.
 
 ## Consumption rules
 

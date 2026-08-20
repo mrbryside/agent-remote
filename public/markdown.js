@@ -91,6 +91,23 @@ function decorateFileReferences(root, onFileReference) {
   }
 }
 
+function inlineLanguage(source) {
+  const value = String(source || '').trim();
+  if (!value) return undefined;
+  if (/^(?:npm|npx|node|git|rtk|cd|ls|grep|rg|curl|mkdir|rm)\b/.test(value)) return 'bash';
+  if (/^(?:true|false|null|undefined|NaN|Infinity)$/.test(value)
+    || /\b(?:class|interface|type|function|const|let|var|implements|extends|return|new|async|await)\b/.test(value)
+    || /=>|<[A-Za-z_$][\w$]*(?:\s*,\s*[A-Za-z_$][\w$]*)?>/.test(value)) return 'typescript';
+  if (/^[{[]/.test(value) && /[:},\]]/.test(value)) return 'json';
+  return undefined;
+}
+
+function decorateInlineCode(root) {
+  for (const code of root.querySelectorAll('code:not(pre code)')) {
+    highlightCodeNode(code, code.textContent, inlineLanguage(code.textContent));
+  }
+}
+
 function copyButton(code) {
   const button = document.createElement('button');
   button.type = 'button';
@@ -155,6 +172,7 @@ export function markdownNode(source, { onFileReference } = {}) {
   decorateImages(root);
   decorateTasks(root);
   decorateFileReferences(root, onFileReference);
+  decorateInlineCode(root);
   decorateCode(root);
   decorateTables(root);
   return root;
