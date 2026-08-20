@@ -825,6 +825,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await page.evaluate(() => window.__setVisualViewport({ height: 844, offsetTop: 0 }));
   await expect(page.locator('html')).toHaveAttribute('data-visual-keyboard', 'false');
   await input.evaluate((element) => element.blur());
+  const idleComposerHeight = await conversation.locator('#mobile-conversation-composer').evaluate(
+    (node) => node.getBoundingClientRect().height,
+  );
+  await expect(activity).toBeHidden();
+  await expect.poll(() => activity.evaluate((node) => node.getBoundingClientRect().height)).toBe(26);
   currentActivity = {
     active: true, phase: 'waiting', label: 'Waiting for response…',
     canCancel: true, cancelRequested: false,
@@ -837,6 +842,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(activity).toBeVisible();
   await expect(activity).toContainText('Waiting for response…');
   await expect(activity.locator('i')).toHaveCount(1);
+  await expect.poll(() => conversation.locator('#mobile-conversation-composer').evaluate(
+    (node) => node.getBoundingClientRect().height,
+  )).toBe(idleComposerHeight);
   await expect(sendButton).toHaveAttribute('data-action', 'stop');
   await expect(sendButton).toHaveAttribute('aria-label', 'Stop response');
   await expect(sidebarSession).toHaveClass(/working/);
