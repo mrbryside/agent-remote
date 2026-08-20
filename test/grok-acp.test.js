@@ -31,10 +31,10 @@ function reply(child, id, result) {
   queueMicrotask(() => child.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`));
 }
 
-function notify(child, sessionId, update, eventId = crypto.randomUUID()) {
+function notify(child, sessionId, update, eventId = crypto.randomUUID(), meta = {}) {
   child.stdout.write(`${JSON.stringify({
     jsonrpc: '2.0', method: 'session/update',
-    params: { sessionId, update, _meta: { eventId, agentTimestampMs: 123 } },
+    params: { sessionId, update, _meta: { eventId, agentTimestampMs: 123, ...meta } },
   })}\n`);
 }
 
@@ -99,6 +99,27 @@ test('ACP client initializes once, replays history, deduplicates events, and pro
   stop();
   await client.close();
   assert.equal(child.killedWith, 'SIGTERM');
+});
+
+test('ACP client settles a replayed turn when session load reaches the persisted boundary', async () => {
+  const fake = harness();
+  const client = createGrokAcpClient({ spawn: fake.spawn });
+  const sessionId = '878167fe-a74b-4c46-986b-d0f1cd0ccf70';
+  const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  const load = await waitForRequest(fake, 'session/load');
+  const child = fake.children[0].child;
+  notify(child, sessionId, { sessionUpdate: 'turn_started' }, 'replay-start', { isReplay: true });
+  notify(child, sessionId, {
+    sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Finished answer' },
+  }, 'replay-answer', { isReplay: true });
+  assert.equal(client.read(sessionId).turn.active, true);
+
+  reply(child, load.id, { _meta: { 'x.ai/sessionDetail': { title: 'Completed chat' } } });
+  const snapshot = await loading;
+  assert.equal(snapshot.events.at(-1).params.update.sessionUpdate, 'turn_completed');
+  assert.equal(snapshot.turn.active, false,
+    'the synthesized persisted boundary must settle the live turn state too');
+  await client.close();
 });
 
 test('ACP client exposes Grok slash commands from live session updates', async () => {

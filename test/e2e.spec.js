@@ -2139,6 +2139,8 @@ test('keeps one loading cover until Grok conversation readiness succeeds', async
   const terminal = page.locator('#terminal .terminal-instance');
   await expect.poll(() => readinessRequests).toBeGreaterThan(0);
   await expect(loading).toBeVisible();
+  await expect(loading).toContainText('Opening Grok…');
+  await expect(loading).not.toContainText('Connecting');
   await expect(terminal).toHaveAttribute('data-launching', 'true');
   await expect(terminal).toHaveCSS('visibility', 'hidden');
   await expect(page.locator('#terminal .xterm-rows')).toContainText('Starting session');

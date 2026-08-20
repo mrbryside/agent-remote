@@ -62,6 +62,12 @@ cancel state. Treat that notification as the authoritative visible boundary:
 the underlying `session/prompt` JSON-RPC promise may still be settling so the
 queue remains serialized, but the phone must already leave its streaming/Stop
 state when Grok says the turn is complete.
+ACP `session/load` can replay a completed turn without replaying Grok's final
+lifecycle notification. When the replay batch reaches its persisted boundary,
+the client settles the live `turn.active` flag together with the synthesized
+timeline boundary. An ACP disconnect also clears the transient active flag
+before reconnecting. This keeps the mobile Responding action and the sidebar
+spinner from surviving a turn that is already complete on disk.
 
 The root snapshot also exposes provider-owned controls. Grok uses
 `session/set_model` and one mutually exclusive mode control: `Normal`, `Plan`,

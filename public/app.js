@@ -1923,8 +1923,13 @@ function selectedSession() {
 
 function showSessionLoading(session, copy = 'Opening the project folder and starting its command.') {
   const project = projects.find((item) => item.id === session?.projectId);
+  const nativeGrok = Boolean(session?.nativeConversation || session?.conversationThreadId ||
+    agents.find((agent) => agent.id === project?.agentId)?.providerId === 'grok');
   sessionLoadingKicker.textContent = project?.name || 'Starting chat';
-  sessionLoadingTitle.textContent = session?.pending ? 'Preparing your terminal…' : 'Connecting to your terminal…';
+  // Pending chat promotion and terminal attachment share this same opaque
+  // surface. Stable copy prevents a visible Preparing -> Connecting flash
+  // while the selected Grok UI is still covered.
+  sessionLoadingTitle.textContent = nativeGrok ? 'Opening Grok…' : 'Opening terminal…';
   sessionLoadingCopy.textContent = copy;
   sessionLoading.hidden = false;
 }

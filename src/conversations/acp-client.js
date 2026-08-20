@@ -435,7 +435,14 @@ export function createGrokAcpClient({
       current.pendingSubagentToolCalls.clear();
       current.questions.clear();
       current.planReviews.clear();
+      // A disconnected observer cannot keep claiming that an external Grok
+      // turn is still running. The next session/load will replay the durable
+      // boundary (or a new live turn) and restore the authoritative state.
+      current.turnActive = false;
       current.cancelRequested = false;
+    }
+    if (!closing) {
+      for (const sessionId of sessions.keys()) publish(sessionId);
     }
     if (!closing && exited) logger(error.message);
   }
@@ -491,6 +498,12 @@ export function createGrokAcpClient({
           timestamp: Date.now(), replay: true,
           params: { update: { sessionUpdate: 'turn_completed', stop_reason: 'loaded' } },
         });
+        // Grok's ACP replay omits the terminal lifecycle notification in some
+        // completed sessions. Keep the live flag aligned with the persisted
+        // boundary we synthesize for the timeline; otherwise mobile stays on
+        // Responding and the sidebar spinner runs forever after reload.
+        current.turnActive = false;
+        current.cancelRequested = false;
       }
       return read(sessionId);
     }).finally(() => {
