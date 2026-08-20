@@ -70,10 +70,10 @@ export function createConversationRegistry({ providers = [] } = {}) {
       return resolved.provider.cancel(resolved.handle);
     },
 
-    async setModel(session, modelId) {
+    async setModel(session, modelId, effortId) {
       const resolved = await resolve(session);
       if (!resolved?.provider.setModel) throw new Error('This session does not support model selection');
-      return resolved.provider.setModel(resolved.handle, modelId);
+      return resolved.provider.setModel(resolved.handle, modelId, effortId);
     },
 
     async setMode(session, modeId) {

@@ -201,7 +201,9 @@ test('serves a provider-neutral mobile conversation only for a managed session',
       }
       planReviews.push({ session, input });
     },
-    setModel: async (session, modelId) => modelChanges.push({ session, modelId }),
+    setModel: async (session, modelId, effortId) => ({
+      accepted: true, modelId, effortId: (modelChanges.push({ session, modelId, effortId }), effortId),
+    }),
     setMode: async (session, modeId) => ({ accepted: true, modeId: (modeChanges.push({ session, modeId }), modeId) }),
     cancel: async (session) => (cancellations.push(session), { accepted: true, active: true }),
     removeQueuedInput: async (session, queueId) => (queueActions.push({ action: 'remove', session, queueId }), { accepted: true }),
@@ -298,12 +300,12 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     }]);
     const modelResponse = await fetch(`${url}/api/conversations/ar-mobile/model`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ modelId: 'grok-4.6' }),
+      body: JSON.stringify({ modelId: 'grok-4.6', effortId: 'low' }),
     });
     assert.equal(modelResponse.status, 202);
-    assert.deepEqual(await modelResponse.json(), { accepted: true, modelId: 'grok-4.6' });
-    assert.deepEqual(modelChanges.map(({ session, modelId }) => ({ name: session.name, modelId })), [{
-      name: 'ar-mobile', modelId: 'grok-4.6',
+    assert.deepEqual(await modelResponse.json(), { accepted: true, modelId: 'grok-4.6', effortId: 'low' });
+    assert.deepEqual(modelChanges.map(({ session, modelId, effortId }) => ({ name: session.name, modelId, effortId })), [{
+      name: 'ar-mobile', modelId: 'grok-4.6', effortId: 'low',
     }]);
     const modeResponse = await fetch(`${url}/api/conversations/ar-mobile/mode`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modeId: 'alwaysApprove' }),

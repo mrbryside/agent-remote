@@ -27,6 +27,36 @@ function rpcError(message, code = 'GROK_ACP_ERROR') {
   return error;
 }
 
+function reasoningEfforts(model) {
+  const values = Array.isArray(model?._meta?.reasoningEfforts) ? model._meta.reasoningEfforts : [];
+  return values.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const id = typeof entry.id === 'string' && entry.id ? entry.id : entry.value;
+    const value = typeof entry.value === 'string' && entry.value ? entry.value : id;
+    return modelIdPattern.test(id || '') && modelIdPattern.test(value || '') ? [{ id, value }] : [];
+  });
+}
+
+function metadataWithModel(metadata, modelId, effortValue) {
+  if (!metadata) return metadata;
+  const detail = metadata._meta?.['x.ai/sessionDetail'];
+  const availableModels = Array.isArray(metadata.models?.availableModels)
+    ? metadata.models.availableModels.map((model) => model?.modelId === modelId && effortValue
+      ? { ...model, _meta: { ...(model._meta || {}), reasoningEffort: effortValue } }
+      : model)
+    : metadata.models?.availableModels;
+  return {
+    ...metadata,
+    models: { ...(metadata.models || {}), currentModelId: modelId, ...(availableModels ? { availableModels } : {}) },
+    ...(detail && typeof detail === 'object' ? {
+      _meta: {
+        ...(metadata._meta || {}),
+        'x.ai/sessionDetail': { ...detail, currentModelId: modelId },
+      },
+    } : {}),
+  };
+}
+
 function eventRecord(params) {
   const update = params?.update;
   if (!params?.sessionId || !update || typeof update !== 'object') return undefined;
@@ -223,6 +253,7 @@ export function createGrokAcpClient({
         turnActive: false,
         cancelRequested: false,
         pendingModelId: undefined,
+        pendingEffortId: undefined,
         pendingModeId: undefined,
         currentMode: 'default',
         permissionMode: permissionModes.has(defaultPermissionMode) ? defaultPermissionMode : 'default',
@@ -594,17 +625,9 @@ export function createGrokAcpClient({
     const current = state(sessionId);
     let metadata = current.metadata;
     if (current.pendingModelId && metadata) {
-      const detail = metadata._meta?.['x.ai/sessionDetail'];
-      metadata = {
-        ...metadata,
-        models: { ...(metadata.models || {}), currentModelId: current.pendingModelId },
-        ...(detail && typeof detail === 'object' ? {
-          _meta: {
-            ...(metadata._meta || {}),
-            'x.ai/sessionDetail': { ...detail, currentModelId: current.pendingModelId },
-          },
-        } : {}),
-      };
+      const model = metadata.models?.availableModels?.find((entry) => entry?.modelId === current.pendingModelId);
+      const effort = reasoningEfforts(model).find((entry) => entry.id === current.pendingEffortId)?.value;
+      metadata = metadataWithModel(metadata, current.pendingModelId, effort);
     }
     return {
       sessionId,
@@ -651,12 +674,13 @@ export function createGrokAcpClient({
     };
   }
 
-  async function applyModel(current, sessionId, modelId) {
-    await request('session/set_model', { sessionId, modelId });
-    current.metadata = current.metadata || {};
-    current.metadata.models = { ...(current.metadata.models || {}), currentModelId: modelId };
-    const detail = current.metadata._meta?.['x.ai/sessionDetail'];
-    if (detail && typeof detail === 'object') detail.currentModelId = modelId;
+  async function applyModel(current, sessionId, modelId, effortId) {
+    const model = current.metadata?.models?.availableModels?.find((entry) => entry?.modelId === modelId);
+    const effort = reasoningEfforts(model).find((entry) => entry.id === effortId);
+    await request('session/set_model', {
+      sessionId, modelId, ...(effort ? { _meta: { reasoningEffort: effort.value } } : {}),
+    });
+    current.metadata = metadataWithModel(current.metadata || {}, modelId, effort?.value);
   }
 
   async function applyMode(current, sessionId, modeId) {
@@ -679,9 +703,13 @@ export function createGrokAcpClient({
     let changed = false;
     while (current.pendingModelId) {
       const modelId = current.pendingModelId;
-      await applyModel(current, sessionId, modelId);
+      const effortId = current.pendingEffortId;
+      await applyModel(current, sessionId, modelId, effortId);
       changed = true;
-      if (current.pendingModelId === modelId) current.pendingModelId = undefined;
+      if (current.pendingModelId === modelId && current.pendingEffortId === effortId) {
+        current.pendingModelId = undefined;
+        current.pendingEffortId = undefined;
+      }
     }
     while (current.pendingModeId) {
       const modeId = current.pendingModeId;
@@ -763,7 +791,7 @@ export function createGrokAcpClient({
     return { accepted: true, queued, queueId: entry.id };
   }
 
-  async function setModel({ sessionId, cwd, modelId }) {
+  async function setModel({ sessionId, cwd, modelId, effortId }) {
     if (typeof modelId !== 'string' || !modelIdPattern.test(modelId)) {
       throw rpcError('Model id is invalid', 'GROK_ACP_MODEL_INVALID');
     }
@@ -771,17 +799,22 @@ export function createGrokAcpClient({
     const current = state(sessionId);
     const models = current.metadata?.models;
     const available = Array.isArray(models?.availableModels) ? models.availableModels : [];
-    if (!available.some((model) => model?.modelId === modelId)) {
+    const model = available.find((entry) => entry?.modelId === modelId);
+    if (!model) {
       throw rpcError('Model is not available for this session', 'GROK_ACP_MODEL_INVALID');
+    }
+    if (effortId !== undefined && !reasoningEfforts(model).some((entry) => entry.id === effortId)) {
+      throw rpcError('Reasoning effort is not available for this model', 'GROK_ACP_MODEL_INVALID');
     }
     if (current.activePrompt || current.turnActive || current.drainingPrompts || current.queuedPrompts.length > 0) {
       current.pendingModelId = modelId;
+      current.pendingEffortId = effortId;
       publish(sessionId);
-      return { accepted: true, modelId, pending: true };
+      return { accepted: true, modelId, ...(effortId ? { effortId } : {}), pending: true };
     }
-    await applyModel(current, sessionId, modelId);
+    await applyModel(current, sessionId, modelId, effortId);
     publish(sessionId);
-    return { accepted: true, modelId };
+    return { accepted: true, modelId, ...(effortId ? { effortId } : {}) };
   }
 
   async function cancel({ sessionId, cwd }) {

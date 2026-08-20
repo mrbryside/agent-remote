@@ -183,7 +183,14 @@ test('ACP client changes only to an advertised model and updates the session sna
       currentModelId: 'qwen-local',
       availableModels: [
         { modelId: 'qwen-local', name: 'Qwen Local' },
-        { modelId: 'grok-4.6', name: 'Grok 4.6' },
+        { modelId: 'grok-4.6', name: 'Grok 4.6', _meta: {
+          supportsReasoningEffort: true,
+          reasoningEffort: 'high',
+          reasoningEfforts: [
+            { id: 'high', value: 'high', label: 'High Effort', default: true },
+            { id: 'low', value: 'low', label: 'Low Effort', default: false },
+          ],
+        } },
       ],
     },
     _meta: { 'x.ai/sessionDetail': { currentModelId: 'qwen-local' } },
@@ -198,11 +205,29 @@ test('ACP client changes only to an advertised model and updates the session sna
   assert.equal(client.read(sessionId).metadata.models.currentModelId, 'grok-4.6');
   assert.equal(client.read(sessionId).metadata._meta['x.ai/sessionDetail'].currentModelId, 'grok-4.6');
 
+  const changingEffort = client.setModel({
+    sessionId, cwd: '/tmp/project', modelId: 'grok-4.6', effortId: 'low',
+  });
+  while (fake.requests.filter((entry) => entry.method === 'session/set_model').length < 2) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const effortRequest = fake.requests.filter((entry) => entry.method === 'session/set_model')[1];
+  assert.deepEqual(effortRequest.params, {
+    sessionId, modelId: 'grok-4.6', _meta: { reasoningEffort: 'low' },
+  });
+  reply(child, effortRequest.id, { _meta: { model: { Ok: 'grok-4.6' } } });
+  assert.deepEqual(await changingEffort, { accepted: true, modelId: 'grok-4.6', effortId: 'low' });
+  assert.equal(client.read(sessionId).metadata.models.availableModels[1]._meta.reasoningEffort, 'low');
+
   await assert.rejects(
     client.setModel({ sessionId, cwd: '/tmp/project', modelId: 'made-up-model' }),
     { code: 'GROK_ACP_MODEL_INVALID' },
   );
-  assert.equal(fake.requests.filter((entry) => entry.method === 'session/set_model').length, 1);
+  await assert.rejects(
+    client.setModel({ sessionId, cwd: '/tmp/project', modelId: 'grok-4.6', effortId: 'max' }),
+    { code: 'GROK_ACP_MODEL_INVALID' },
+  );
+  assert.equal(fake.requests.filter((entry) => entry.method === 'session/set_model').length, 2);
   await client.close();
 });
 

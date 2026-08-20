@@ -1664,13 +1664,18 @@ export function createTerminalServer(options = {}) {
               !/^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,79}$/.test(body.modelId)) {
             return json(response, 400, { error: 'modelId must be a valid model identifier under 80 characters' });
           }
+          if (body.effortId !== undefined && (typeof body.effortId !== 'string' ||
+              !/^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,79}$/.test(body.effortId))) {
+            return json(response, 400, { error: 'effortId must be a valid effort identifier under 80 characters' });
+          }
           const session = await conversationSession(name);
           if (!session) return json(response, 404, { error: 'Managed session not found' });
           try {
-            const result = await conversationRegistry.setModel(session, body.modelId);
+            const result = await conversationRegistry.setModel(session, body.modelId, body.effortId);
             return json(response, 202, {
               accepted: true,
               modelId: result?.modelId || body.modelId,
+              ...((result?.effortId || body.effortId) ? { effortId: result?.effortId || body.effortId } : {}),
               ...(result?.pending === true ? { pending: true } : {}),
             });
           } catch (error) {

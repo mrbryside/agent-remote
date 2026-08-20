@@ -284,6 +284,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   };
   rootItems.push(subagentItem, secondSubagentItem);
   let currentModelId = 'qwen-local';
+  let currentEffortId = 'high';
   let currentModeId = 'normal';
   let currentActivity = { active: false };
   const queuedInputs = [];
@@ -306,7 +307,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       currentId: currentModelId,
       options: [
         { id: 'qwen-local', label: 'Qwen 3.8 27B', description: 'Local model', contextWindowTokens: 190_000 },
-        { id: 'grok-4.6', label: 'Grok 4.6', description: 'Frontier model', contextWindowTokens: 500_000 },
+        { id: 'grok-4.6', label: 'Grok 4.6', description: 'Frontier model', contextWindowTokens: 500_000,
+          currentEffortId, efforts: [
+            { id: 'high', value: 'high', label: 'High Effort', description: 'Deep work', default: true },
+            { id: 'low', value: 'low', label: 'Low Effort', description: 'Quick work', default: false },
+          ] },
       ],
     }, mode: {
       currentId: currentModeId,
@@ -383,7 +388,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       const submitted = route.request().postDataJSON();
       modelChanges.push(submitted);
       currentModelId = submitted.modelId;
-      return route.fulfill({ status: 202, json: { accepted: true, modelId: currentModelId } });
+      if (submitted.effortId) currentEffortId = submitted.effortId;
+      return route.fulfill({ status: 202, json: {
+        accepted: true, modelId: currentModelId, ...(submitted.effortId ? { effortId: submitted.effortId } : {}),
+      } });
     }
     if (pathname.endsWith('/mode')) {
       const submitted = route.request().postDataJSON();
@@ -530,7 +538,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(modelList).toBeVisible();
   await expect(modelList.getByRole('option')).toHaveCount(2);
   await modelList.getByRole('option', { name: /Grok 4\.6/ }).click();
-  await expect.poll(() => modelChanges).toContainEqual({ modelId: 'grok-4.6' });
+  await expect(modelList).toContainText('Choose effort');
+  await expect(modelList.getByRole('option')).toHaveCount(2);
+  await modelList.getByRole('option', { name: /Low Effort/ }).click();
+  await expect.poll(() => modelChanges).toContainEqual({ modelId: 'grok-4.6', effortId: 'low' });
   await expect(modelButton).toContainText('Grok 4.6');
   await expect(conversation.locator('#mobile-conversation-context')).toContainText('6K / 500K');
   await conversation.locator('#mobile-conversation-mode').click();

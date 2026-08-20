@@ -217,16 +217,17 @@ export function createMobileConversationView({
     closeSuggestions();
   }
 
-  async function chooseModel(modelId) {
+  async function chooseModel(modelId, effortId) {
     const control = lastConversation?.controls?.model;
     const option = control?.options?.find((model) => model.id === modelId);
     closeModelList();
-    if (!option || control.currentId === modelId || !sessionName || modelBusy) return;
+    const unchanged = control.currentId === modelId && (!effortId || option?.currentEffortId === effortId);
+    if (!option || unchanged || !sessionName || modelBusy) return;
     modelBusy = true;
     modelButton.disabled = true;
     modelLabel.textContent = 'Switching…';
     try {
-      await setModel(sessionName, modelId);
+      await setModel(sessionName, modelId, effortId);
       renderedSignature = '';
       await refresh();
     } catch (error) {
@@ -236,6 +237,64 @@ export function createMobileConversationView({
       modelBusy = false;
       if (lastConversation) renderModelControls(lastConversation);
     }
+  }
+
+  function paintModelOptions(control) {
+    const fragment = document.createDocumentFragment();
+    for (const option of control.options) {
+      const button = element('button', 'mobile-conversation-model-option');
+      button.type = 'button';
+      button.setAttribute('role', 'option');
+      button.setAttribute('aria-selected', String(option.id === control.currentId));
+      button.dataset.modelId = option.id;
+      button.append(
+        element('strong', '', option.label),
+        element('small', '', [option.description,
+          option.contextWindowTokens ? `${compactMetric(option.contextWindowTokens)} context` : '',
+          option.efforts?.length ? 'Choose effort next' : '']
+          .filter(Boolean).join(' · ')),
+      );
+      button.addEventListener('click', () => {
+        if (!option.efforts?.length) return void chooseModel(option.id);
+        paintEffortOptions(option);
+        modelList.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+      });
+      fragment.append(button);
+    }
+    modelList.setAttribute('aria-label', 'Choose model');
+    modelList.replaceChildren(fragment);
+  }
+
+  function paintEffortOptions(option) {
+    const fragment = document.createDocumentFragment();
+    const header = element('div', 'mobile-conversation-model-step');
+    const backButton = element('button', '', '‹');
+    backButton.type = 'button';
+    backButton.setAttribute('aria-label', 'Back to models');
+    backButton.addEventListener('click', () => {
+      const control = lastConversation?.controls?.model;
+      if (!control) return;
+      paintModelOptions(control);
+      modelList.querySelector(`[data-model-id="${CSS.escape(option.id)}"]`)?.focus({ preventScroll: true });
+    });
+    const copy = element('span');
+    copy.append(element('small', '', 'Choose effort'), element('strong', '', option.label));
+    header.append(backButton, copy);
+    fragment.append(header);
+    for (const effort of option.efforts) {
+      const button = element('button', 'mobile-conversation-model-option');
+      button.type = 'button';
+      button.setAttribute('role', 'option');
+      button.setAttribute('aria-selected', String(
+        option.id === lastConversation?.controls?.model?.currentId && effort.id === option.currentEffortId,
+      ));
+      button.dataset.effortId = effort.id;
+      button.append(element('strong', '', effort.label), element('small', '', effort.description || ''));
+      button.addEventListener('click', () => void chooseModel(option.id, effort.id));
+      fragment.append(button);
+    }
+    modelList.setAttribute('aria-label', `Choose effort for ${option.label}`);
+    modelList.replaceChildren(fragment);
   }
 
   function renderModelControls(conversation) {
@@ -252,29 +311,15 @@ export function createMobileConversationView({
     // Grok applies a selection made during an active turn immediately before
     // the next queued prompt. Keep the control usable while text streams.
     modelButton.disabled = modelBusy;
-    if (!modelBusy) modelLabel.textContent = current.label;
-    modelButton.setAttribute('aria-label', `Choose model, ${current.label}`);
+    const currentEffort = current.efforts?.find((effort) => effort.id === current.currentEffortId);
+    const currentLabel = [current.label, currentEffort?.label?.replace(/ Effort$/i, '')].filter(Boolean).join(' · ');
+    if (!modelBusy) modelLabel.textContent = currentLabel;
+    modelButton.setAttribute('aria-label', `Choose model, ${currentLabel}`);
 
     const nextSignature = JSON.stringify({ currentId: control.currentId, options });
     if (nextSignature !== modelOptionsSignature) {
       modelOptionsSignature = nextSignature;
-      const fragment = document.createDocumentFragment();
-      for (const option of options) {
-        const button = element('button', 'mobile-conversation-model-option');
-        button.type = 'button';
-        button.setAttribute('role', 'option');
-        button.setAttribute('aria-selected', String(option.id === control.currentId));
-        button.dataset.modelId = option.id;
-        button.append(
-          element('strong', '', option.label),
-          element('small', '', [option.description,
-            option.contextWindowTokens ? `${compactMetric(option.contextWindowTokens)} context` : '']
-            .filter(Boolean).join(' · ')),
-        );
-        button.addEventListener('click', () => void chooseModel(option.id));
-        fragment.append(button);
-      }
-      modelList.replaceChildren(fragment);
+      paintModelOptions(control);
     }
 
     const usage = conversation.context;
@@ -2336,6 +2381,7 @@ export function createMobileConversationView({
     const opening = modelList.hidden;
     closeAuxiliaryLists();
     closeSuggestions();
+    if (opening && lastConversation?.controls?.model) paintModelOptions(lastConversation.controls.model);
     modelList.hidden = !opening;
     modelButton.setAttribute('aria-expanded', String(opening));
     if (opening) modelList.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });

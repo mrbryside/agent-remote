@@ -164,9 +164,9 @@ const mobileConversation = createMobileConversationView({
     if (!response.ok) throw new Error(payload.error || `Upload failed (${response.status})`);
     return payload.attachment;
   },
-  async setModel(sessionName, modelId) {
+  async setModel(sessionName, modelId, effortId) {
     return api(`/api/conversations/${encodeURIComponent(sessionName)}/model`, {
-      method: 'POST', body: JSON.stringify({ modelId }),
+      method: 'POST', body: JSON.stringify({ modelId, ...(effortId ? { effortId } : {}) }),
     });
   },
   async setMode(sessionName, modeId) {

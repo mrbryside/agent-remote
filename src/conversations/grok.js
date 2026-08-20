@@ -96,12 +96,27 @@ function modelControls(metadata) {
   const models = metadata?.models;
   const detail = metadata?._meta?.['x.ai/sessionDetail'] || {};
   const options = (Array.isArray(models?.availableModels) ? models.availableModels : [])
-    .map((model) => ({
-      id: shortText(model?.modelId, '', 80),
-      label: shortText(model?.name, shortText(model?.modelId, 'Model', 80), 120),
-      description: shortText(model?.description, '', 300),
-      contextWindowTokens: finiteTokenCount(model?._meta?.totalContextTokens ?? model?._meta?.contextLimit),
-    }))
+    .map((model) => {
+      const efforts = (Array.isArray(model?._meta?.reasoningEfforts) ? model._meta.reasoningEfforts : [])
+        .map((effort) => ({
+          id: shortText(effort?.id || effort?.value, '', 80),
+          value: shortText(effort?.value || effort?.id, '', 80),
+          label: shortText(effort?.label, shortText(effort?.id || effort?.value, 'Effort', 80), 120),
+          description: shortText(effort?.description, '', 300),
+          default: effort?.default === true,
+        }))
+        .filter((effort) => effort.id && effort.value);
+      const selectedEffort = shortText(model?._meta?.reasoningEffort, '', 80);
+      const currentEffort = efforts.find((effort) => effort.value === selectedEffort || effort.id === selectedEffort)
+        ?? efforts.find((effort) => effort.default);
+      return {
+        id: shortText(model?.modelId, '', 80),
+        label: shortText(model?.name, shortText(model?.modelId, 'Model', 80), 120),
+        description: shortText(model?.description, '', 300),
+        contextWindowTokens: finiteTokenCount(model?._meta?.totalContextTokens ?? model?._meta?.contextLimit),
+        ...(efforts.length ? { currentEffortId: currentEffort?.id, efforts } : {}),
+      };
+    })
     .filter((model) => model.id);
   const currentId = shortText(models?.currentModelId || detail.currentModelId, '', 80);
   if (!currentId || !options.some((model) => model.id === currentId)) return undefined;
@@ -1217,11 +1232,11 @@ export function createGrokConversationProvider({
     async cancel(handle) {
       return acpClient.cancel({ sessionId: handle.rootThreadId, cwd: handle.cwd });
     },
-    async setModel(handle, modelId) {
+    async setModel(handle, modelId, effortId) {
       return acpClient.setModel({
         sessionId: handle.rootThreadId,
         cwd: handle.cwd,
-        modelId,
+        modelId, ...(effortId ? { effortId } : {}),
       });
     },
     async setMode(handle, modeId) {

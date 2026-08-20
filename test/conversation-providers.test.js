@@ -1045,7 +1045,13 @@ test('Grok provider exposes advertised models, context usage, and changes the ro
     currentModelId: 'qwen-local',
     availableModels: [
       { modelId: 'qwen-local', name: 'Qwen 3.8 27B', _meta: { totalContextTokens: 190_000 } },
-      { modelId: 'grok-4.6', name: 'Grok 4.6', description: 'Frontier model', _meta: { totalContextTokens: 500_000 } },
+      { modelId: 'grok-4.6', name: 'Grok 4.6', description: 'Frontier model', _meta: {
+        totalContextTokens: 500_000, supportsReasoningEffort: true, reasoningEffort: 'high',
+        reasoningEfforts: [
+          { id: 'high', value: 'high', label: 'High Effort', description: 'Deep work', default: true },
+          { id: 'low', value: 'low', label: 'Low Effort', description: 'Quick work', default: false },
+        ],
+      } },
     ],
   };
   const provider = createGrokConversationProvider({
@@ -1063,7 +1069,11 @@ test('Grok provider exposes advertised models, context usage, and changes the ro
     currentId: 'qwen-local',
     options: [
       { id: 'qwen-local', label: 'Qwen 3.8 27B', description: '', contextWindowTokens: 190_000 },
-      { id: 'grok-4.6', label: 'Grok 4.6', description: 'Frontier model', contextWindowTokens: 500_000 },
+      { id: 'grok-4.6', label: 'Grok 4.6', description: 'Frontier model', contextWindowTokens: 500_000,
+        currentEffortId: 'high', efforts: [
+          { id: 'high', value: 'high', label: 'High Effort', description: 'Deep work', default: true },
+          { id: 'low', value: 'low', label: 'Low Effort', description: 'Quick work', default: false },
+        ] },
     ],
   });
   assert.deepEqual(result.context, { usedTokens: 5_979, windowTokens: 190_000, usagePercent: 3 });
