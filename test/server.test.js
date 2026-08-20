@@ -19,6 +19,7 @@ async function withServer(options, run) {
     tmuxSession: '',
     tmuxShell: false,
     databaseFile: join(stateRoot, 'agent-remote.db'),
+    reapBrowserAutomationSessions: async () => [],
     ...options,
   });
   const addresses = await app.listen();
@@ -103,6 +104,15 @@ function waitForMessage(socket, predicate) {
     };
     socket.on('message', listener);
   });
+}
+
+async function waitForCondition(predicate, message, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.fail(message);
 }
 
 test('serves the frontend and health status', async () => {
@@ -882,6 +892,29 @@ test('keeps a keyed renderer alive across websocket reconnects until explicitly 
     await new Promise((resolve) => second.once('close', resolve));
     const closed = await (await fetch(`${url}/api/renderers`)).json();
     assert.deepEqual(closed.renderers, []);
+  });
+});
+
+test('closes the browser automation daemon owned by a renderer', async () => {
+  const closed = [];
+  let listing = 0;
+  await withServer({
+    listTerminalBrowsers: async () => {
+      listing += 1;
+      if (listing < 3) return [];
+      return [{
+        key: 'fixture-1', socket: '/tmp/missing-terminal-browser.sock', cdpPort: null, tabs: [],
+      }];
+    },
+    closeBrowserAutomationSession: async (browserKey) => closed.push(browserKey),
+  }, async (url) => {
+    const socket = await connect(url, '/ws?mode=graphics&purpose=renderer&renderer=builtin%3Agraphics');
+    socket.send(JSON.stringify({ type: 'launch', argv: ['terminal-browser', '--version'] }));
+    await waitForCondition(() => listing >= 3, 'renderer browser ownership was not discovered');
+    socket.send(JSON.stringify({ type: 'close' }));
+    await new Promise((resolve) => socket.once('close', resolve));
+    await waitForCondition(() => closed.length === 1, 'browser automation daemon was not closed');
+    assert.deepEqual(closed, ['fixture-1']);
   });
 });
 

@@ -12,6 +12,10 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { loadConfig } from './config.js';
 import { browseDirectories, resolveAllowedDirectory } from './directories.js';
 import { createAgentCatalog } from './agents.js';
+import {
+  closeTerminalBrowserAgentSession,
+  reapStaleTerminalBrowserAgentSessions,
+} from './browser-automation.js';
 import { createGrokConversationProvider } from './conversations/grok.js';
 import { createGrokAcpClient } from './conversations/acp-client.js';
 import { createConversationRegistry } from './conversations/registry.js';
@@ -394,6 +398,11 @@ export function createTerminalServer(options = {}) {
   const conversationInputRequests = new Map();
   const clientContexts = new Map();
   const renderers = new Map();
+  const browserAgentCleanups = new Set();
+  const closeBrowserAutomationSession = options.closeBrowserAutomationSession
+    ?? closeTerminalBrowserAgentSession;
+  const reapBrowserAutomationSessions = options.reapBrowserAutomationSessions
+    ?? reapStaleTerminalBrowserAgentSessions;
   const projectStore = createProjectStore(config.databaseFile);
   let localControlUrl = '';
   const grokAcpClient = options.grokAcpClient ?? createGrokAcpClient({
@@ -582,7 +591,7 @@ export function createTerminalServer(options = {}) {
     return `'${value.replaceAll("'", `'"'"'`)}'`;
   }
 
-  async function listTerminalBrowsers() {
+  async function readTerminalBrowsers() {
     try {
       const { stdout } = await execFileAsync(join(agentRemoteBin, 'terminal-browser'), ['ls', '--all', '--json'], {
         encoding: 'utf8',
@@ -597,6 +606,16 @@ export function createTerminalServer(options = {}) {
     } catch {
       return [];
     }
+  }
+  const listTerminalBrowsers = options.listTerminalBrowsers ?? readTerminalBrowsers;
+
+  function cleanUpRendererBrowserAgent(renderer) {
+    if (renderer.agentCleanupStarted || !renderer.browserKey) return;
+    renderer.agentCleanupStarted = true;
+    const task = Promise.resolve(closeBrowserAutomationSession(renderer.browserKey))
+      .catch(() => {})
+      .finally(() => browserAgentCleanups.delete(task));
+    browserAgentCleanups.add(task);
   }
 
   function controlTerminalBrowser(socketPath, request) {
@@ -1132,6 +1151,7 @@ export function createTerminalServer(options = {}) {
       exit: undefined,
       terminalClient: undefined,
       browserKey: undefined,
+      agentCleanupStarted: false,
       browserSocket: undefined,
       cdp: undefined,
       cdpSequence: 0,
@@ -1168,6 +1188,7 @@ export function createTerminalServer(options = {}) {
     });
     renderer.exit = terminal.onExit(({ exitCode, signal }) => {
       if (renderers.get(key) === renderer) renderers.delete(key);
+      cleanUpRendererBrowserAgent(renderer);
       renderer.output?.dispose();
       renderer.exit?.dispose();
       clearInterval(renderer.tabPoll);
@@ -1188,6 +1209,7 @@ export function createTerminalServer(options = {}) {
     if (!renderer || renderer.closing || (expectedRenderer && renderer !== expectedRenderer)) return false;
     renderers.delete(key);
     renderer.closing = true;
+    cleanUpRendererBrowserAgent(renderer);
     clearInterval(renderer.tabPoll);
     clearTimeout(renderer.cursorProbeTimer);
     if (renderer.cdp && renderer.cdp.readyState < WebSocket.CLOSING) renderer.cdp.close();
@@ -2547,6 +2569,8 @@ export function createTerminalServer(options = {}) {
       const localUrl = `http://${config.host}:${localAddress.port}`;
       localControlUrl = localUrl;
       const remoteUrl = `http://${config.remoteHost}:${remoteAddress.port}`;
+      const activeBrowserKeys = new Set((await listTerminalBrowsers()).map((browser) => browser.key).filter(Boolean));
+      await reapBrowserAutomationSessions(activeBrowserKeys).catch(() => {});
       // Reconnect only an explicitly desired named tunnel. Do not delay local
       // readiness (or fail it) if Keychain or Cloudflare is unavailable.
       remoteRestore = restoreNamedTunnel().catch(() => {});
@@ -2554,6 +2578,7 @@ export function createTerminalServer(options = {}) {
     },
     async close() {
       for (const key of [...renderers.keys()]) closeRenderer(key, 'Server stopping', true);
+      await Promise.allSettled([...browserAgentCleanups]);
       // A browser that has gone to sleep (common on phones) may never answer a
       // WebSocket close handshake. Terminate server-owned sockets during full
       // shutdown so both loopback listeners release their ports deterministically.
