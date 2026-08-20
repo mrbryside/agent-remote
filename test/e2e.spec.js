@@ -540,7 +540,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('.mobile-event-card')).toHaveCount(10);
   await expect(conversation.locator('#mobile-conversation-context')).toContainText('6K / 190K');
   const modelButton = conversation.locator('#mobile-conversation-model');
+  const modeButton = conversation.locator('#mobile-conversation-mode');
   await expect(modelButton).toContainText('Qwen 3.8 27B');
+  const normalModeWidth = (await modeButton.boundingBox()).width;
+  expect((await modelButton.boundingBox()).width).toBeGreaterThanOrEqual(112);
   await modelButton.click();
   const modelList = conversation.locator('#mobile-conversation-model-list');
   await expect(modelList).toBeVisible();
@@ -554,15 +557,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => modelChanges).toContainEqual({ modelId: 'grok-4.6', effortId: 'low' });
   await expect(modelButton).toContainText('Grok 4.6');
   await expect(conversation.locator('#mobile-conversation-context')).toContainText('6K / 500K');
-  await conversation.locator('#mobile-conversation-mode').click();
+  await modeButton.click();
   await conversation.locator('#mobile-conversation-mode-list').getByRole('option', { name: /Plan/ }).click();
   await expect.poll(() => modeChanges).toContainEqual({ modeId: 'plan' });
-  await expect(conversation.locator('#mobile-conversation-mode')).toContainText('Plan');
-  await conversation.locator('#mobile-conversation-mode').click();
+  await expect(modeButton).toContainText('Plan');
+  await modeButton.click();
   await conversation.locator('#mobile-conversation-mode-list')
     .getByRole('option', { name: /Always approve/ }).click();
   await expect.poll(() => modeChanges).toContainEqual({ modeId: 'alwaysApprove' });
-  await expect(conversation.locator('#mobile-conversation-mode')).toContainText('Always approve');
+  await expect(modeButton).toContainText('Always approve');
+  expect((await modeButton.boundingBox()).width).toBeGreaterThan(normalModeWidth);
+  await expect.poll(() => modeButton.evaluate((button) => button.querySelector('span').scrollWidth <=
+    button.querySelector('span').clientWidth)).toBe(true);
   await expect(conversation.locator('#mobile-conversation-permission-mode')).toHaveCount(0);
   const input = conversation.locator('#mobile-conversation-input');
   const activity = conversation.locator('#mobile-conversation-activity');

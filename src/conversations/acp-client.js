@@ -764,11 +764,11 @@ export function createGrokAcpClient({
     const conversationMode = modeId === 'plan' ? 'plan' : 'default';
     const permissionMode = modeId === 'auto' ? 'auto'
       : modeId === 'alwaysApprove' ? 'bypassPermissions' : 'default';
-    // Grok accepts ACP session/set_mode but currently treats it as display
-    // state: it does not activate the agent's plan workflow. Mobile owns its
-    // mode choice instead. Plan is carried in the next prompt so Grok enters
-    // its real enter_plan_mode/exit_plan_mode flow; permission modes use the
-    // vendor notification consumed by the Grok leader.
+    // Keep Grok's terminal UI and the mobile control on the same advertised
+    // conversation mode. Grok currently treats this RPC as display state, so
+    // Plan is still carried in the next prompt to enter the real workflow;
+    // permission modes additionally use the vendor leader notification.
+    await request('session/set_mode', { sessionId, modeId: conversationMode });
     notify('x.ai/yolo_mode_changed', {
       sessionId,
       auto_mode: permissionMode === 'auto',

@@ -47,6 +47,20 @@ async function waitForRequest(harnessValue, method) {
   return harnessValue.requests.findLast((request) => request.method === method);
 }
 
+async function invokeAndReply(harnessValue, child, method, invoke, expectedParams) {
+  const previousCount = harnessValue.requests.filter((request) => request.method === method).length;
+  const operation = invoke();
+  const deadline = Date.now() + 1_000;
+  while (harnessValue.requests.filter((request) => request.method === method).length <= previousCount) {
+    if (Date.now() > deadline) assert.fail(`Timed out waiting for ${method}`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const request = harnessValue.requests.filter((entry) => entry.method === method)[previousCount];
+  if (expectedParams) assert.deepEqual(request.params, expectedParams);
+  reply(child, request.id, {});
+  return operation;
+}
+
 test('ACP client initializes once, replays history, deduplicates events, and prompts', async () => {
   const fake = harness();
   const client = createGrokAcpClient({
@@ -326,11 +340,16 @@ test('ACP client defers active-turn model and mode choices until before the next
   assert.deepEqual(modelRequest.params, { sessionId, modelId: 'grok-4.6' });
   assert.equal(fake.requests.some((entry) => entry.method === 'session/prompt'), false);
   reply(child, modelRequest.id, {});
+  const modeRequest = await waitForRequest(fake, 'session/set_mode');
+  assert.deepEqual(modeRequest.params, { sessionId, modeId: 'plan' });
+  assert.equal(fake.requests.some((entry) => entry.method === 'session/prompt'), false);
+  reply(child, modeRequest.id, {});
   const prompt = await waitForRequest(fake, 'session/prompt');
   const modeNotice = fake.requests.findLast((entry) => entry.method === 'x.ai/yolo_mode_changed');
   assert.deepEqual(modeNotice.params, { sessionId, auto_mode: false, ask: true });
   assert.match(prompt.params.prompt[0].text, /<user_query>\nnext turn\n<\/user_query>/);
   assert.ok(fake.requests.indexOf(modelRequest) < fake.requests.indexOf(modeNotice));
+  assert.ok(fake.requests.indexOf(modeRequest) < fake.requests.indexOf(modeNotice));
   assert.ok(fake.requests.indexOf(modeNotice) < fake.requests.indexOf(prompt));
   reply(child, prompt.id, { stopReason: 'end_turn' });
   await new Promise((resolve) => setTimeout(resolve, 0));
@@ -486,23 +505,31 @@ test('ACP client drains queued follow-ups in order and updates real session cont
   reply(child, second.id, { stopReason: 'end_turn' });
   await new Promise((resolve) => setTimeout(resolve, 5));
 
-  await client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'plan' });
+  await invokeAndReply(fake, child, 'session/set_mode',
+    () => client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'plan' }),
+    { sessionId, modeId: 'plan' });
   let permissionNotice = fake.requests.findLast((entry) => entry.method === 'x.ai/yolo_mode_changed');
   assert.deepEqual(permissionNotice.params, { sessionId, auto_mode: false, ask: true });
   assert.equal(client.read(sessionId).controls.mode.currentId, 'plan');
   assert.equal('permission' in client.read(sessionId).controls, false);
 
-  await client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'auto' });
+  await invokeAndReply(fake, child, 'session/set_mode',
+    () => client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'auto' }),
+    { sessionId, modeId: 'default' });
   permissionNotice = fake.requests.findLast((entry) => entry.method === 'x.ai/yolo_mode_changed');
   assert.deepEqual(permissionNotice.params, { sessionId, auto_mode: true, ask: false });
   assert.equal(client.read(sessionId).controls.mode.currentId, 'auto');
 
-  await client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'alwaysApprove' });
+  await invokeAndReply(fake, child, 'session/set_mode',
+    () => client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'alwaysApprove' }),
+    { sessionId, modeId: 'default' });
   permissionNotice = fake.requests.findLast((entry) => entry.method === 'x.ai/yolo_mode_changed');
   assert.deepEqual(permissionNotice.params, { sessionId, auto_mode: false, ask: false });
   assert.equal(client.read(sessionId).controls.mode.currentId, 'alwaysApprove');
 
-  await client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'normal' });
+  await invokeAndReply(fake, child, 'session/set_mode',
+    () => client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'normal' }),
+    { sessionId, modeId: 'default' });
   permissionNotice = fake.requests.findLast((entry) => entry.method === 'x.ai/yolo_mode_changed');
   assert.deepEqual(permissionNotice.params, { sessionId, auto_mode: false, ask: true });
   assert.equal(client.read(sessionId).controls.mode.currentId, 'normal');
@@ -523,7 +550,9 @@ test('ACP client makes selected plan mode part of the next agent prompt without 
   reply(child, load.id, {});
   await loading;
 
-  await client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'plan' });
+  await invokeAndReply(fake, child, 'session/set_mode',
+    () => client.setMode({ sessionId, cwd: '/tmp/project', modeId: 'plan' }),
+    { sessionId, modeId: 'plan' });
 
   const prompting = client.prompt({
     sessionId, cwd: '/tmp/project', id: 'plan-message', text: 'Inspect this project and propose a change.',
