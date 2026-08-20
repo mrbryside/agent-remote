@@ -580,7 +580,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   })).toEqual({
     rootTop: 24,
     rootHeight: 510,
-    composerBottom: 534,
+    composerBottom: expect.any(Number),
     composerTop: expect.any(Number),
     messagesHeight: expect.any(Number),
   });
@@ -588,8 +588,12 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     const root = document.querySelector('#mobile-conversation').getBoundingClientRect();
     const composer = document.querySelector('#mobile-conversation-composer').getBoundingClientRect();
     const messages = document.querySelector('#mobile-conversation-messages').getBoundingClientRect();
-    return { composerTop: composer.top, messagesHeight: messages.height, rootTop: root.top };
+    return {
+      composerTop: composer.top, composerBottom: composer.bottom,
+      messagesHeight: messages.height, rootTop: root.top, rootBottom: root.bottom,
+    };
   });
+  expect(keyboardLayout.rootBottom - keyboardLayout.composerBottom).toBeLessThanOrEqual(12);
   expect(keyboardLayout.composerTop).toBeGreaterThan(keyboardLayout.rootTop + 160);
   expect(keyboardLayout.messagesHeight).toBeGreaterThan(120);
   await page.evaluate(() => window.__setVisualViewport({ height: 844, offsetTop: 0 }));
@@ -1021,7 +1025,28 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const queuedRows = conversation.locator('.mobile-conversation-queue-item');
   await expect(queuedRows).toHaveCount(2);
   await expect(conversation.locator('.mobile-conversation-queue-title')).toHaveCount(0);
-  expect((await queuedRows.first().boundingBox()).height).toBeLessThanOrEqual(64);
+  expect((await queuedRows.first().boundingBox()).height).toBeLessThanOrEqual(52);
+  const compactQueueChrome = await conversation.locator('#mobile-conversation-queue').evaluate((panel) => {
+    const first = panel.querySelector('.mobile-conversation-queue-item');
+    const second = first?.nextElementSibling;
+    const composer = document.querySelector('#mobile-conversation-composer');
+    const textarea = composer.querySelector('textarea');
+    return {
+      panelRadius: parseFloat(getComputedStyle(panel).borderTopLeftRadius),
+      firstBorder: getComputedStyle(first).borderTopWidth,
+      secondDivider: getComputedStyle(second).borderTopWidth,
+      textareaBorder: getComputedStyle(textarea).borderTopWidth,
+      composerRadius: parseFloat(getComputedStyle(composer).borderTopLeftRadius),
+      composerHeight: composer.getBoundingClientRect().height,
+    };
+  });
+  expect(compactQueueChrome).toEqual({
+    panelRadius: expect.any(Number), firstBorder: '0px', secondDivider: '1px',
+    textareaBorder: '0px', composerRadius: expect.any(Number), composerHeight: expect.any(Number),
+  });
+  expect(compactQueueChrome.panelRadius).toBeGreaterThanOrEqual(14);
+  expect(compactQueueChrome.composerRadius).toBeGreaterThanOrEqual(16);
+  expect(compactQueueChrome.composerHeight).toBeLessThanOrEqual(116);
   const firstQueuedRow = queuedRows.filter({ hasText: 'queued follow up' });
   await firstQueuedRow.evaluate((row) => { row.dataset.renderIdentity = 'preserved'; });
   currentActivity = { ...currentActivity, label: 'Streaming while a message is queued' };
