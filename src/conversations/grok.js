@@ -437,9 +437,10 @@ function subagentTaskId(update) {
   return sessionIdPattern.test(id || '') ? id : undefined;
 }
 
-function timeline(updates) {
+function timeline(updates, { turnActive } = {}) {
   const items = [];
   const tools = new Map();
+  const settledTools = new Set();
   const children = new Map();
   const subagentsByTool = new Map();
   const pendingSubagents = [];
@@ -482,6 +483,14 @@ function timeline(updates) {
     if (index >= 0) items.splice(index, 1);
   };
 
+  const settleOpenTools = () => {
+    for (const [toolCallId, tool] of tools) {
+      if (['completed', 'failed', 'cancelled'].includes(tool.status)) continue;
+      tool.status = 'completed';
+      settledTools.add(toolCallId);
+    }
+  };
+
   const resolvePermissionFromGrok = (permission) => {
     if (!permission || permission.status !== 'pending') return;
     permission.status = 'completed';
@@ -518,7 +527,14 @@ function timeline(updates) {
         activeThought.status === 'working') {
       activeThought.status = 'completed';
     }
+    if (kind === 'turn_started') {
+      settleOpenTools();
+      status = 'working';
+      activity = { phase: 'waiting', label: 'Waiting for response…' };
+      return;
+    }
     if (kind === 'user_message_chunk') {
+      settleOpenTools();
       status = 'working';
       activity = { phase: 'waiting', label: 'Waiting for response…' };
       appendMessage('user', userMessageContent(update.content), index, record.timestamp);
@@ -714,7 +730,13 @@ function timeline(updates) {
       if (file) item.file = file;
       const matches = toolMatches(update);
       if (matches.length) item.matches = matches;
-      if (typeof update.status === 'string') item.status = normalizedStatus(update.status, item.status);
+      if (typeof update.status === 'string') {
+        const nextStatus = normalizedStatus(update.status, item.status);
+        if (!settledTools.has(id) || ['completed', 'failed', 'cancelled'].includes(nextStatus)) {
+          item.status = nextStatus;
+        }
+        if (['completed', 'failed', 'cancelled'].includes(item.status)) settledTools.add(id);
+      }
       status = 'working';
       return;
     }
@@ -1018,6 +1040,7 @@ function timeline(updates) {
       return;
     }
     if (kind === 'turn_completed') {
+      settleOpenTools();
       status = 'idle';
       activity = undefined;
       return;
@@ -1025,6 +1048,7 @@ function timeline(updates) {
     // Unknown protocol notifications are intentionally ignored. New event
     // types must be mapped deliberately before they become user-facing.
   });
+  if (turnActive === false) settleOpenTools();
   return { items: groupToolBatches(items), children: [...children.values()].filter((child) => child.threadId), status, activity, recap };
 }
 
@@ -1056,13 +1080,14 @@ export function createGrokConversationProvider({
   async function readThread(cwd, threadId, { includeControls = false } = {}) {
     const loaded = await acpClient.loadSession({ sessionId: threadId, cwd });
     const { snapshot, lifecycle: persistedLifecycle } = await reconcilePersistedTurn(cwd, threadId, loaded);
-    const parsed = timeline(snapshot.events);
+    const authoritativeActive = authoritativeTurn(snapshot, persistedLifecycle);
+    const parsed = timeline(snapshot.events, { turnActive: authoritativeActive });
     // The ACP client owns the live turn lifecycle. Tool notifications can be
     // delivered after `turn_completed`, so replaying the timeline is only a
     // fallback for older/test snapshots that do not expose `turn.active`.
     // Otherwise a late tool update can incorrectly resurrect the sidebar
     // spinner after Grok has already finished the turn.
-    const active = authoritativeTurn(snapshot, persistedLifecycle) ?? parsed.status === 'working';
+    const active = authoritativeActive ?? parsed.status === 'working';
     const cancelRequested = snapshot.turn?.cancelRequested === true;
     const activity = active ? {
       active: true,

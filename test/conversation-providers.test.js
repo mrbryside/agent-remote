@@ -268,6 +268,54 @@ test('Grok provider groups adjacent mixed tools across resolved permissions and 
   assert.ok(!result.items.some((item) => item.type === 'permission'));
 });
 
+test('Grok provider settles orphaned generic tools at user and turn boundaries', async () => {
+  const data = await fixture();
+  const snapshot = await data.acpClient.loadSession({ sessionId: data.parentId });
+  snapshot.events = [
+    { timestamp: 1, params: { update: {
+      sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Run the test' },
+    } } },
+    { timestamp: 2, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'stale-shell', title: 'Run test', status: 'running',
+      rawInput: { variant: 'Bash', command: 'node --test' },
+      _meta: { 'x.ai/tool': { name: 'run_command', kind: 'execute', label: 'Shell' } },
+    } } },
+    { timestamp: 3, params: { update: { sessionUpdate: 'turn_completed' } } },
+    { timestamp: 3.1, params: { update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'stale-shell', status: 'running',
+    } } },
+    { timestamp: 4, params: { update: {
+      sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Run it again' },
+    } } },
+    { timestamp: 5, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'current-shell', title: 'Run test again', status: 'running',
+      rawInput: { variant: 'Bash', command: 'node --test' },
+      _meta: { 'x.ai/tool': { name: 'run_command', kind: 'execute', label: 'Shell' } },
+    } } },
+  ];
+  snapshot.turn = { active: true, changedAt: 5 };
+  const registry = createConversationRegistry({
+    providers: [createGrokConversationProvider({ acpClient: data.acpClient })],
+  });
+  const session = {
+    cwd: data.cwd, command: `grok --leader --session-id ${data.parentId}`,
+    conversationThreadId: data.parentId,
+  };
+
+  const active = await registry.read(session);
+  const activeTools = active.items.flatMap((item) => item.type === 'tool_group' ? item.tools : [item])
+    .filter((item) => item.type === 'tool');
+  assert.equal(activeTools.find((item) => item.toolCallId === 'stale-shell').status, 'completed');
+  assert.equal(activeTools.find((item) => item.toolCallId === 'current-shell').status, 'working');
+
+  snapshot.events.push({ timestamp: 6, params: { update: { sessionUpdate: 'turn_completed' } } });
+  snapshot.turn = { active: false, changedAt: 6 };
+  const completed = await registry.read(session);
+  const completedTools = completed.items.flatMap((item) => item.type === 'tool_group' ? item.tools : [item])
+    .filter((item) => item.type === 'tool');
+  assert.ok(completedTools.every((item) => item.status !== 'working' && item.status !== 'running'));
+});
+
 test('Grok provider preserves native file, search, and diff locations without plan protocol noise', async () => {
   const data = await fixture();
   const snapshot = await data.acpClient.loadSession({ sessionId: data.parentId });
