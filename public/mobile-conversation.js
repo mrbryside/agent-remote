@@ -2197,8 +2197,7 @@ export function createMobileConversationView({
     }
     if (item.type === 'tool_group') return toolGroupNode(item);
     if (suppressPendingInteractions && pendingInteraction(item)) return document.createDocumentFragment();
-    if (item.type === 'question') return questionNode(item);
-    if (item.type === 'plan_review') return document.createDocumentFragment();
+    if (['question', 'permission', 'plan_review'].includes(item.type)) return document.createDocumentFragment();
     if (item.type === 'plan') return document.createDocumentFragment();
     if (item.type === 'turn' || item.type === 'recap') return document.createDocumentFragment();
     if (item.type === 'subagent') return document.createDocumentFragment();

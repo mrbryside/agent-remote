@@ -1510,7 +1510,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     });
   }, rootConversation());
   await expect(conversation.getByRole('button', { name: 'Allow once' })).toHaveCount(0);
-  await expect(conversation.locator('.mobile-permission-result')).toHaveText('Approved in Grok');
+  await expect(conversation.locator('#mobile-conversation-messages [data-permission-id="77"]')).toHaveCount(0);
+  await expect(conversation.locator('.mobile-permission-result')).toHaveCount(0);
   await expect(interactionDock).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-composer')).toBeVisible();
 
@@ -1649,6 +1650,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     });
   }, rootConversation());
   await expect(interactionDock).toBeHidden();
+  await expect(conversation.locator('#mobile-conversation-messages [data-question-id="question-99"]')).toHaveCount(0);
   await expect(conversation.locator('#mobile-conversation-composer')).toBeVisible();
 
   const skipQuestionItem = {
@@ -1682,6 +1684,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     });
   }, rootConversation());
   await expect(interactionDock).toBeHidden();
+  await expect(conversation.locator('#mobile-conversation-messages [data-question-id="question-skip"]')).toHaveCount(0);
   await expect(conversation.locator('#mobile-conversation-composer')).toBeVisible();
 
   const planReviewItem = {
