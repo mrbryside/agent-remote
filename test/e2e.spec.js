@@ -1044,22 +1044,43 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     const second = first?.nextElementSibling;
     const composer = document.querySelector('#mobile-conversation-composer');
     const textarea = composer.querySelector('textarea');
+    const mode = composer.querySelector('#mobile-conversation-mode');
+    const model = composer.querySelector('#mobile-conversation-model');
+    const panelRect = panel.getBoundingClientRect();
+    const composerRect = composer.getBoundingClientRect();
     return {
       panelRadius: parseFloat(getComputedStyle(panel).borderTopLeftRadius),
       firstBorder: getComputedStyle(first).borderTopWidth,
       secondDivider: getComputedStyle(second).borderTopWidth,
       textareaBorder: getComputedStyle(textarea).borderTopWidth,
-      composerRadius: parseFloat(getComputedStyle(composer).borderTopLeftRadius),
-      composerHeight: composer.getBoundingClientRect().height,
+      textareaMinHeight: parseFloat(getComputedStyle(textarea).minHeight),
+      composerTopRadius: parseFloat(getComputedStyle(composer).borderTopLeftRadius),
+      composerBottomRadius: parseFloat(getComputedStyle(composer).borderBottomLeftRadius),
+      composerHeight: composerRect.height,
+      joinedGap: composerRect.top - panelRect.bottom,
+      leftAlignment: composerRect.left - panelRect.left,
+      rightAlignment: composerRect.right - panelRect.right,
+      modeLeftBorder: getComputedStyle(mode).borderLeftWidth,
+      modeTopBorder: getComputedStyle(mode).borderTopWidth,
+      modelBackground: getComputedStyle(model).backgroundColor,
     };
   });
-  expect(compactQueueChrome).toEqual({
-    panelRadius: expect.any(Number), firstBorder: '0px', secondDivider: '1px',
-    textareaBorder: '0px', composerRadius: expect.any(Number), composerHeight: expect.any(Number),
-  });
-  expect(compactQueueChrome.panelRadius).toBeGreaterThanOrEqual(14);
-  expect(compactQueueChrome.composerRadius).toBeGreaterThanOrEqual(16);
-  expect(compactQueueChrome.composerHeight).toBeLessThanOrEqual(116);
+  expect(compactQueueChrome.firstBorder).toBe('0px');
+  expect(compactQueueChrome.secondDivider).toBe('1px');
+  expect(compactQueueChrome.textareaBorder).toBe('0px');
+  expect(compactQueueChrome.panelRadius).toBeGreaterThanOrEqual(20);
+  expect(compactQueueChrome.composerTopRadius).toBe(0);
+  expect(compactQueueChrome.composerBottomRadius).toBeGreaterThanOrEqual(20);
+  expect(compactQueueChrome.composerHeight).toBeGreaterThanOrEqual(110);
+  expect(compactQueueChrome.composerHeight).toBeLessThanOrEqual(150);
+  expect(compactQueueChrome.textareaMinHeight).toBeGreaterThanOrEqual(36);
+  expect(compactQueueChrome.textareaMinHeight).toBeLessThanOrEqual(40);
+  expect(Math.abs(compactQueueChrome.joinedGap)).toBeLessThanOrEqual(1);
+  expect(Math.abs(compactQueueChrome.leftAlignment)).toBeLessThanOrEqual(1);
+  expect(Math.abs(compactQueueChrome.rightAlignment)).toBeLessThanOrEqual(1);
+  expect(compactQueueChrome.modeLeftBorder).toBe('1px');
+  expect(compactQueueChrome.modeTopBorder).toBe('0px');
+  expect(compactQueueChrome.modelBackground).toBe('rgba(0, 0, 0, 0)');
   const firstQueuedRow = queuedRows.filter({ hasText: 'queued follow up' });
   await firstQueuedRow.evaluate((row) => { row.dataset.renderIdentity = 'preserved'; });
   currentActivity = { ...currentActivity, label: 'Streaming while a message is queued' };
