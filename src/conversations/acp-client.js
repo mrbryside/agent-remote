@@ -38,6 +38,36 @@ function eventRecord(params) {
   };
 }
 
+function agentStreamStart(params) {
+  const value = Number(params?._meta?.streamStartMs);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function updateText(update) {
+  return update?.content?.type === 'text' && typeof update.content.text === 'string'
+    ? update.content.text : '';
+}
+
+function matchesInterjectionEcho(update, entry) {
+  if (update?.sessionUpdate !== 'user_message_chunk') return false;
+  const text = updateText(update);
+  if (text === entry.text) return true;
+  return text.includes(`<user_query>\n${entry.text}\n</user_query>`);
+}
+
+function steerBoundary(entry, timestamp = Date.now()) {
+  return {
+    id: `agent-remote-steer:${entry.id}`,
+    timestamp,
+    params: { update: {
+      sessionUpdate: 'user_message_chunk',
+      content: { type: 'text', text: entry.displayText },
+      source: 'steer',
+      queueId: entry.id,
+    } },
+  };
+}
+
 function boundedString(value, maximum) {
   return typeof value === 'string' && value.length > 0 && value.length <= maximum;
 }
@@ -187,6 +217,8 @@ export function createGrokAcpClient({
         loadedGeneration: 0, loading: undefined, metadata: undefined, cwd: undefined,
         activePrompt: undefined,
         queuedPrompts: [],
+        pendingSteers: [],
+        lastAgentStreamStart: undefined,
         drainingPrompts: undefined,
         turnActive: false,
         cancelRequested: false,
@@ -217,13 +249,49 @@ export function createGrokAcpClient({
 
   function acceptNotification(message) {
     if (!['session/update', '_x.ai/session/update'].includes(message.method)) return;
-    const record = eventRecord(message.params);
+    let record = eventRecord(message.params);
     if (!record) return;
     const current = state(message.params.sessionId);
     if (record.id && current.eventIds.has(record.id)) return;
     if (record.id) current.eventIds.add(record.id);
+    let update = record.params.update;
+    const pendingSteer = current.pendingSteers[0];
+    const streamStart = agentStreamStart(message.params);
+    if (pendingSteer && matchesInterjectionEcho(update, pendingSteer)) {
+      update = {
+        ...update,
+        content: { type: 'text', text: pendingSteer.displayText },
+        source: 'steer',
+        queueId: pendingSteer.id,
+      };
+      record = { ...record, params: { update } };
+      pendingSteer.boundaryRecord = record;
+      current.pendingSteers.shift();
+    } else if (pendingSteer && update.sessionUpdate === 'agent_message_chunk' && streamStart !== undefined &&
+        pendingSteer.baselineStreamStart !== undefined && streamStart !== pendingSteer.baselineStreamStart) {
+      const boundary = steerBoundary(pendingSteer, record.timestamp);
+      pendingSteer.boundaryRecord = boundary;
+      current.events.push(boundary);
+      current.pendingSteers.shift();
+    } else if (pendingSteer && update.sessionUpdate === 'turn_completed') {
+      // A successful interjection normally starts another model stream inside
+      // the same turn. If Grok ends without exposing that stream identity,
+      // retain the user message at the final safe boundary instead of placing
+      // it in the middle of the interrupted Markdown response.
+      const boundary = steerBoundary(pendingSteer, record.timestamp);
+      pendingSteer.boundaryRecord = boundary;
+      current.events.push(boundary);
+      current.pendingSteers.shift();
+    }
     current.events.push(record);
-    const update = record.params.update;
+    if (update.sessionUpdate === 'turn_started' ||
+        (update.sessionUpdate === 'user_message_chunk' && update.source !== 'steer')) {
+      current.lastAgentStreamStart = undefined;
+    } else if (update.sessionUpdate === 'agent_message_chunk' && streamStart !== undefined) {
+      current.lastAgentStreamStart = streamStart;
+    } else if (update.sessionUpdate === 'turn_completed') {
+      current.lastAgentStreamStart = undefined;
+    }
     if (update.sessionUpdate === 'available_commands_update' && Array.isArray(update.availableCommands)) {
       current.commands = update.availableCommands.slice(0, 500).flatMap((command) => {
         if (!command || typeof command.name !== 'string' || !/^[A-Za-z0-9:_-]{1,120}$/.test(command.name)) return [];
@@ -760,26 +828,24 @@ export function createGrokAcpClient({
       throw rpcError('There is no active turn to steer', 'GROK_ACP_SESSION_IDLE');
     }
     const [entry] = current.queuedPrompts.splice(index, 1);
-    // Grok's interject RPC does not echo the steered text back as a
-    // user_message_chunk. Keep an explicit user boundary in the local event
-    // stream so the next assistant chunks cannot merge into the preceding
-    // response (especially an open Markdown code fence).
-    const userBoundary = {
-      id: `agent-remote-steer:${entry.id}`,
-      timestamp: Date.now(),
-      params: { update: {
-        sessionUpdate: 'user_message_chunk',
-        content: { type: 'text', text: entry.displayText },
-        source: 'steer',
-        queueId: entry.id,
-      } },
+    // `_x.ai/interject` can acknowledge before the interrupted model stream
+    // has flushed its final chunks. Inserting the user message here would cut
+    // an open Markdown block in half. Wait for Grok's interjection echo or the
+    // next model-stream identity, then insert the boundary immediately before
+    // the steered response.
+    const pendingSteer = {
+      ...entry,
+      baselineStreamStart: current.lastAgentStreamStart,
+      boundaryRecord: undefined,
     };
-    current.events.push(userBoundary);
+    current.pendingSteers.push(pendingSteer);
     publish(sessionId);
     try {
       await request('_x.ai/interject', { sessionId, text: entry.text });
     } catch (error) {
-      const boundaryIndex = current.events.indexOf(userBoundary);
+      const pendingIndex = current.pendingSteers.indexOf(pendingSteer);
+      if (pendingIndex >= 0) current.pendingSteers.splice(pendingIndex, 1);
+      const boundaryIndex = current.events.indexOf(pendingSteer.boundaryRecord);
       if (boundaryIndex >= 0) current.events.splice(boundaryIndex, 1);
       current.queuedPrompts.splice(Math.min(index, current.queuedPrompts.length), 0, entry);
       publish(sessionId);

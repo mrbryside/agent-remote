@@ -275,6 +275,9 @@ test('ACP client keeps follow-ups local until the active turn completes and can 
   notify(child, sessionId, {
     sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'external turn' },
   });
+  notify(child, sessionId, {
+    sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '```go\npackage main' },
+  }, 'old-stream-start', { streamStartMs: 1_000, chunkId: 10 });
   const queued = await client.prompt({ sessionId, cwd: '/tmp/project', id: 'queue-1', text: 'follow up' });
   assert.deepEqual(queued, { accepted: true, queued: true, queueId: 'queue-1' });
   assert.equal(fake.requests.some((entry) => entry.method === 'session/prompt'), false);
@@ -286,12 +289,28 @@ test('ACP client keeps follow-ups local until the active turn completes and can 
   reply(child, interject.id, {});
   await steering;
   assert.deepEqual(client.read(sessionId).queue, []);
-  assert.deepEqual(client.read(sessionId).events.at(-1).params.update, {
+  assert.equal(client.read(sessionId).events.some((record) =>
+    record.params.update.source === 'steer'), false,
+  'the user boundary must wait until Grok switches away from the interrupted stream');
+
+  notify(child, sessionId, {
+    sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '\nfunc main() {}\n```' },
+  }, 'old-stream-finish', { streamStartMs: 1_000, chunkId: 11 });
+  assert.equal(client.read(sessionId).events.some((record) =>
+    record.params.update.source === 'steer'), false,
+  'late chunks from the original answer must stay before the user boundary');
+
+  notify(child, sessionId, {
+    sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Steered response' },
+  }, 'new-stream-start', { streamStartMs: 2_000, chunkId: 1 });
+  const steeredEvents = client.read(sessionId).events.slice(-4).map((record) => record.params.update);
+  assert.deepEqual(steeredEvents[2], {
     sessionUpdate: 'user_message_chunk',
     content: { type: 'text', text: 'follow up' },
     source: 'steer',
     queueId: 'queue-1',
   });
+  assert.equal(steeredEvents[3].content.text, 'Steered response');
 
   await client.prompt({ sessionId, cwd: '/tmp/project', id: 'queue-2', text: 'keep this queued' });
   const failedSteer = client.steerQueuedPrompt({ sessionId, queueId: 'queue-2' });

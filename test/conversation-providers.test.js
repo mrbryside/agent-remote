@@ -169,8 +169,8 @@ test('Grok provider keeps a steered user message between assistant markdown segm
       content: { type: 'text', text: '```go\npackage main\n```' },
     } } },
     { timestamp: 2, params: { update: {
-      sessionUpdate: 'user_message_chunk', source: 'steer', queueId: 'queue-1',
-      content: { type: 'text', text: 'Explain the result' },
+      sessionUpdate: 'user_message_chunk',
+      content: { type: 'text', text: 'The user sent a message while you were working:\n<user_query>\nExplain the result\n</user_query>\nMake sure to complete any unfinished tasks from previous turns.' },
     } } },
     { timestamp: 3, params: { update: {
       sessionUpdate: 'agent_message_chunk',

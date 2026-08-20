@@ -80,6 +80,12 @@ function textContent(content) {
   return '';
 }
 
+function userMessageContent(content) {
+  const text = textContent(content);
+  const match = text.match(/^The user sent a message while you were working:\n<user_query>\n([\s\S]*?)\n<\/user_query>\nMake sure to complete any unfinished tasks from previous turns\.?$/);
+  return match ? match[1] : text;
+}
+
 function shortText(value, fallback, length = 160) {
   if (typeof value !== 'string') return fallback;
   const normalized = value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -482,7 +488,7 @@ function timeline(updates) {
     if (kind === 'user_message_chunk') {
       status = 'working';
       activity = { phase: 'waiting', label: 'Waiting for response…' };
-      appendMessage('user', textContent(update.content), index, record.timestamp);
+      appendMessage('user', userMessageContent(update.content), index, record.timestamp);
       return;
     }
     if (kind === 'agent_message_chunk') {
