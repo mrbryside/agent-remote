@@ -179,6 +179,12 @@ it as `abandoned` without feedback. The interjection must be written before
 the review response but not awaited, because Grok drains it only after the
 blocked exit request is released. The provider validates descendant thread
 ownership before any response and maps a stale review to an HTTP conflict.
+Approval from the desktop Grok TUI is authoritative too: the ACP client matches
+the completed `exit_plan_mode` `PlanReady` update by `toolCallId`, resolves any
+mirrored mobile request as `approved`, and closes the mobile interaction. It
+remembers that completion briefly enough to handle replay ordering where the
+tool result arrives before the mirrored review request, so changing viewport
+cannot resurrect an already answered review.
 Writes to Grok's session-owned `.grok/sessions/.../plan.md` artifact and the
 enter/exit-plan tool calls are protocol detail: they update activity but never
 appear in the visible tool timeline or tool groups.

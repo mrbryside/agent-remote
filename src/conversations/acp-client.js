@@ -125,6 +125,20 @@ function toolExecutionStarted(update) {
     .includes(status) || update.rawOutput !== undefined;
 }
 
+function externallyApprovedPlanReview(update) {
+  if (!['tool_call', 'tool_call_update'].includes(update?.sessionUpdate) ||
+      typeof update.toolCallId !== 'string' || !update.toolCallId) return undefined;
+  const status = String(update.status ?? '').trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
+  if (!['completed', 'complete', 'succeeded'].includes(status)) return undefined;
+  const rawInput = update.rawInput ?? update.input;
+  const rawOutput = update.rawOutput ?? update.output;
+  const toolName = update._meta?.['x.ai/tool']?.name;
+  const isExitPlanMode = toolName === 'exit_plan_mode' || rawInput?.variant === 'ExitPlanMode' ||
+    rawOutput?.type === 'ExitPlanMode';
+  if (!isExitPlanMode || !rawOutput?.PlanReady || typeof rawOutput.PlanReady !== 'object') return undefined;
+  return { reviewId: update.toolCallId, outcome: 'approved' };
+}
+
 function allowOption(options) {
   const normalized = (option) => String(option?.kind || option?.optionId || '')
     .trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
@@ -279,6 +293,7 @@ export function createGrokAcpClient({
         pendingSubagentToolCalls: new Map(),
         questions: new Map(),
         planReviews: new Map(),
+        externallyResolvedPlanReviews: new Map(),
         turnSource: 'idle',
         turnChangedAt: 0,
       };
@@ -399,6 +414,15 @@ export function createGrokAcpClient({
       if (queue && queue.length === 0) current.pendingSubagentToolCalls.delete(signature);
       if (toolCallId) markToolExecuted(current, toolCallId);
     }
+    const planResolution = externallyApprovedPlanReview(update);
+    if (planResolution) {
+      current.externallyResolvedPlanReviews.set(planResolution.reviewId, planResolution.outcome);
+      while (current.externallyResolvedPlanReviews.size > 100) {
+        current.externallyResolvedPlanReviews.delete(current.externallyResolvedPlanReviews.keys().next().value);
+      }
+      const review = current.planReviews.get(planResolution.reviewId);
+      if (review) settlePlanReviewFromGrok(current, planResolution.reviewId, review, planResolution.outcome);
+    }
     publish(message.params.sessionId);
     if (update.sessionUpdate === 'turn_completed') void drainPrompts(message.params.sessionId);
   }
@@ -429,6 +453,24 @@ export function createGrokAcpClient({
       params: { update: {
         sessionUpdate: 'permission_resolved', permissionId: String(permissionId),
         optionId: selected.optionId, label: 'Approved in Grok', resolvedBy: 'grok',
+      } },
+    });
+    return true;
+  }
+
+  function settlePlanReviewFromGrok(current, reviewId, review, outcome) {
+    try {
+      send({ jsonrpc: '2.0', id: review.rpcId, result: { outcome } });
+    } catch {
+      return false;
+    }
+    current.planReviews.delete(String(reviewId));
+    current.externallyResolvedPlanReviews.delete(String(reviewId));
+    current.events.push({
+      timestamp: Date.now(),
+      params: { update: {
+        sessionUpdate: 'plan_review_resolved', reviewId: String(reviewId),
+        outcome, resolvedBy: 'grok',
       } },
     });
     return true;
@@ -519,6 +561,10 @@ export function createGrokAcpClient({
             planContent: review.planContent,
           } },
         });
+        const externalOutcome = current.externallyResolvedPlanReviews.get(reviewId);
+        if (externalOutcome) {
+          settlePlanReviewFromGrok(current, reviewId, current.planReviews.get(reviewId), externalOutcome);
+        }
         publish(review.sessionId);
       } else if (message.method === 'session/request_permission' && message.params?.sessionId) {
         const current = state(message.params.sessionId);
@@ -570,6 +616,7 @@ export function createGrokAcpClient({
       current.pendingSubagentToolCalls.clear();
       current.questions.clear();
       current.planReviews.clear();
+      current.externallyResolvedPlanReviews.clear();
       // A disconnected observer cannot keep claiming that an external Grok
       // turn is still running. The next session/load will replay the durable
       // boundary (or a new live turn) and restore the authoritative state.
@@ -1042,6 +1089,8 @@ export function createGrokAcpClient({
       current.queuedSubagentToolCallIds.clear();
       current.pendingSubagentToolCalls.clear();
       current.questions.clear();
+      current.planReviews.clear();
+      current.externallyResolvedPlanReviews.clear();
     }
   }
 

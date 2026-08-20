@@ -833,3 +833,74 @@ test('ACP client exposes Grok plan review and sends feedback before resolving it
   );
   await client.close();
 });
+
+test('ACP client resolves mobile plan review when it was approved in Grok', async () => {
+  const fake = harness();
+  const client = createGrokAcpClient({ spawn: fake.spawn });
+  const sessionId = '01a015a9-61df-7052-a5d0-17de77a201fa';
+  const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  const load = await waitForRequest(fake, 'session/load');
+  reply(fake.children[0].child, load.id, {});
+  await loading;
+
+  const approveInGrok = (toolCallId, eventId) => {
+    fake.children[0].child.stdout.write(`${JSON.stringify({
+      jsonrpc: '2.0', method: 'session/update',
+      params: {
+        sessionId,
+        _meta: { eventId },
+        update: {
+          sessionUpdate: 'tool_call_update', toolCallId, status: 'completed',
+          title: 'Plan mode exited',
+          rawInput: { variant: 'ExitPlanMode' },
+          rawOutput: {
+            type: 'ExitPlanMode',
+            PlanReady: { message: 'Your plan has been approved. You can now start coding.' },
+          },
+          _meta: { 'x.ai/tool': { name: 'exit_plan_mode' } },
+        },
+      },
+    })}\n`);
+  };
+  const requestReview = (rpcId, toolCallId) => {
+    fake.children[0].child.stdout.write(`${JSON.stringify({
+      jsonrpc: '2.0', id: rpcId, method: '_x.ai/exit_plan_mode',
+      params: { sessionId, toolCallId, planContent: '# Plan' },
+    })}\n`);
+  };
+
+  // The normal ordering: mobile has the review open, then the desktop TUI
+  // approves the same exit_plan_mode call.
+  requestReview(792, 'exit-plan-desktop-first');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  approveInGrok('exit-plan-desktop-first', 'plan-approved-1');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(fake.requests.find((request) => request.id === 792 && request.result).result, {
+    outcome: 'approved',
+  });
+  assert.deepEqual(client.read(sessionId).events.at(-1).params.update, {
+    sessionUpdate: 'plan_review_resolved', reviewId: 'exit-plan-desktop-first',
+    outcome: 'approved', resolvedBy: 'grok',
+  });
+  await assert.rejects(
+    client.respondPlanReview({ sessionId, reviewId: 'exit-plan-desktop-first', outcome: 'approved' }),
+    { code: 'GROK_ACP_PLAN_EXPIRED' },
+  );
+
+  // Replay can invert the ordering while switching desktop/mobile surfaces.
+  // Remember the durable completion and settle the request as soon as it arrives.
+  approveInGrok('exit-plan-event-first', 'plan-approved-2');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  requestReview(793, 'exit-plan-event-first');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepEqual(fake.requests.find((request) => request.id === 793 && request.result).result, {
+    outcome: 'approved',
+  });
+  assert.deepEqual(client.read(sessionId).events.at(-1).params.update, {
+    sessionUpdate: 'plan_review_resolved', reviewId: 'exit-plan-event-first',
+    outcome: 'approved', resolvedBy: 'grok',
+  });
+  await client.close();
+});
