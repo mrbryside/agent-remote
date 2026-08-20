@@ -575,7 +575,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(boot).toBeVisible();
   await expect(conversation.locator('.mobile-conversation-header')).toBeVisible();
   await expect(conversation.locator('#mobile-conversation-composer')).toBeVisible();
-  await expect(conversation.locator('#mobile-conversation-title')).toBeVisible();
+  await expect(conversation.locator('#mobile-conversation-title')).toBeHidden();
+  await expect(conversation.locator('#mobile-conversation-meta')).toBeHidden();
+  await expect(conversation.locator('#mobile-conversation-state')).toBeHidden();
   await expect(boot).toContainText('Loading chat');
   await expect.poll(() => conversation.evaluate((root) => {
     const loading = root.querySelector('#mobile-conversation-boot').getBoundingClientRect();
@@ -2381,9 +2383,8 @@ test('organizes chats by project, titles the first prompt, and clears projects i
   expect(terminalTokens.declaredBackground).toBe('#141416');
   expect(terminalTokens.renderedBackground).toBe('rgb(20, 20, 22)');
   expect(terminalTokens.renderedFontSize).toBe('14px');
-  const activeTitleBox = await page.locator('#terminal-title').boundingBox();
-  const activeTopbarBox = await page.locator('.topbar').boundingBox();
-  expect(activeTitleBox.x - activeTopbarBox.x).toBeLessThan(25);
+  await expect(page.locator('#terminal-title')).toBeHidden();
+  await expect(page.locator('#status')).toBeHidden();
 
   // The startup cover intentionally keeps xterm unfocusable until the shell
   // has finished its initial paint and resize cycle.
@@ -2392,7 +2393,7 @@ test('organizes chats by project, titles the first prompt, and clears projects i
   await page.keyboard.type('Build a polished project dashboard');
   await page.keyboard.press('Enter');
   await expect(fallbackProject.locator('.session-name')).toHaveText('Build a polished project dashboard');
-  await expect(page.locator('#terminal-title')).toHaveText('Build a polished project dashboard');
+  await expect(page.locator('#terminal-title')).toBeHidden();
 
   const secondProject = await createProject(page, { name: 'Second project', marker: '__SECOND_PROJECT__' });
   await expect(secondProject.locator('.project-name')).toHaveText('Second project');

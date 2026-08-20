@@ -105,6 +105,9 @@ h2 { margin: 0; }
 .sidebar-open[hidden] { display: none; }
 .title { justify-self: start; max-width: min(58vw, 760px); overflow: hidden; color: #9b9ba1; font-size: clamp(10.5px, .9vw, 11.5px); text-overflow: ellipsis; white-space: nowrap; }
 .status { justify-self: end; display: flex; align-items: center; gap: 7px; padding-right: 3px; color: #76767d; font-size: clamp(9px, .8vw, 10px); }
+/* Reserve the top bar for upcoming controls without exposing transient chat
+   metadata or connection state in either terminal layout. */
+#terminal-title, #status { visibility: hidden; pointer-events: none; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: #777077; }
 .status[data-state="connected"] .status-dot { background: var(--color-status-online); box-shadow: 0 0 8px color-mix(in srgb, var(--color-status-online) 42%, transparent); }
 .status[data-state="disconnected"] .status-dot { background: var(--color-status-error); }
@@ -371,6 +374,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-conversation-header strong { color: var(--color-text-strong); font-size: 13px; font-weight: 620; }
   .mobile-conversation-header small { color: var(--color-text-tertiary); font: 10px/1.3 var(--font-family-mono); }
   .mobile-conversation-header > span { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; color: var(--color-text-tertiary); font: 10px/1 var(--font-family-mono); }
+  #mobile-conversation-title, #mobile-conversation-meta, #mobile-conversation-state { visibility: hidden; pointer-events: none; }
   .mobile-conversation-header > span::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--color-status-online); }
   .mobile-conversation-header > span[data-state="working"]::before { background: var(--color-status-connecting); animation: orbit-pulse 1.4s ease-in-out infinite; }
   .mobile-conversation-scroll-shell { position: relative; display: flex; flex: 1 1 auto; min-height: 0; }
