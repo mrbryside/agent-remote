@@ -615,8 +615,8 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-tool-group:has([data-kind="edit"]) .mobile-tool-group-toggle > i::before, .mobile-tool-group:not(:has([data-kind="edit"])):has([data-kind="execute"]) .mobile-tool-group-toggle > i::before { display: grid; width: 16px; height: 20px; place-items: center; border: 0; transform: none; }
   .mobile-tool-group:has([data-kind="edit"]) .mobile-tool-group-toggle > i::before { content: "✎"; }
   .mobile-tool-group:not(:has([data-kind="edit"])):has([data-kind="execute"]) .mobile-tool-group-toggle > i::before { content: "$"; }
-  .mobile-tool-group-toggle::after { width: 6px; height: 6px; border-right: 1.5px solid currentcolor; border-bottom: 1.5px solid currentcolor; content: ""; transform: rotate(45deg); transition: transform var(--duration-fast) var(--ease-standard); }
-  .mobile-tool-group-toggle[aria-expanded="true"]::after { transform: rotate(225deg); }
+  .mobile-tool-group-toggle::after { display: grid; width: 14px; height: 20px; place-items: center; color: var(--color-text-muted); content: "›"; font: normal 17px/1 var(--font-family-sans); transform: none; transition: transform var(--duration-fast) var(--ease-standard); }
+  .mobile-tool-group-toggle[aria-expanded="true"]::after { transform: rotate(90deg); }
   .mobile-tool-group-toggle strong { overflow: hidden; color: var(--color-text-muted); font: 500 13px/1.4 var(--font-family-sans); text-overflow: ellipsis; white-space: nowrap; }
   .mobile-tool-group-toggle small { color: var(--color-text-muted); font: 9px/1 var(--font-family-mono); }
   .mobile-tool-group[data-state="completed"] .mobile-tool-group-toggle small { width: 0; overflow: hidden; visibility: hidden; }
