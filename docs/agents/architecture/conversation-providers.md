@@ -203,15 +203,18 @@ closes it; completed thoughts no longer remain falsely marked `Running`.
 is retained as metadata instead of becoming a chat message. Unknown future
 events remain visible as generic expandable cards.
 
-On mobile, a collapsed tool group is a borderless activity row. Expanding it
-reveals a borderless transcript of tool rows; only a tool whose details are open
-gets one containing frame, avoiding nested cards. The group owns a bounded,
-max-height vertical scroll viewport. A Shell tool places `$ command` above its
-output inside that single frame, preserving whitespace and two-axis scrolling
-without separate Shell, location, and output sections. Edit results similarly
-render only the compact unified diff—with line numbers, green additions, red
-removals, colored add/remove counts, bounded context, and independent two-axis
-scrolling.
+On mobile, both a collapsed tool group and an ungrouped tool use the same
+borderless activity row. Each row owns one semantic leading icon and one
+trailing disclosure chevron; do not add a second text glyph for the same
+collapse action. Expanding a group reveals a borderless transcript of tool
+rows, while expanding a standalone tool opens the same single containing frame.
+Only a tool whose details are open gets that frame, avoiding nested cards. The
+group owns a bounded, max-height vertical scroll viewport. A Shell tool places
+`$ command` above its output inside that single frame, preserving whitespace
+and two-axis scrolling without separate Shell, location, and output sections.
+Edit results similarly render only the compact unified diff—with line numbers,
+green additions, red removals, colored add/remove counts, bounded context, and
+independent two-axis scrolling.
 
 Spawn calls, permission-first embedded tool calls, `subagent_spawned`,
 completion, and output polling collapse into one stable lifecycle item:
@@ -223,12 +226,17 @@ reports a terminal status.
 On mobile, root history aggregates these items into one persistent bottom pill
 showing the running count. Grok `plan` updates also stay out of the chat timeline:
 the shared Browser/Plan/Subagents dock shows completed/total plan progress, and
-its Plan action opens the same activity sheet with the live task states. Choosing
-an agent opens its realtime conversation in the draggable 80%-viewport sheet
-that slides up from below. The dock has an explicit dismiss action; while
-dismissed, a compact header action restores it without covering history or the
-composer. Dismissal lasts for the selected chat and survives streamed dock
-updates. Closing the sheet restores the root SSE stream and scroll position. When a child UUID
+its Plan action opens a content-height activity sheet with the live task states,
+bounded to the viewport instead of stretching a short plan to the 80% sheet
+height. Choosing an agent opens its realtime conversation in the draggable
+80%-viewport sheet that slides up from below. The dock has an explicit dismiss
+action; while dismissed, a compact header action restores it without covering
+history or the composer. Dismissal lasts for the selected chat and survives
+streamed dock updates. The Plan sheet's X dismisses that plan revision from the
+dock until its status or tasks change; the Browser sheet's X closes its renderer
+and removes Browser from the dock until a new browser control event arrives.
+Closing a Subagent sheet never dismisses its lifecycle item. Closing any sheet
+restores the root SSE stream and scroll position. When a child UUID
 appears, the provider loads that child through the same ACP connection. Its
 replay and live updates use the same translation recursively, so nested
 subagents remain realtime and navigation cannot escape the root's discovered
