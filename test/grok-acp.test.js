@@ -167,6 +167,76 @@ test('ACP client starts a fresh prompt after turn completion even while the prev
   await client.close();
 });
 
+test('ACP client reconciles a newer persisted completion before queue, steer, and cancel decisions', async () => {
+  const fake = harness();
+  const client = createGrokAcpClient({ spawn: fake.spawn });
+  const sessionId = '01a015a9-61df-7052-a5d0-17de77a201fc';
+  const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  const load = await waitForRequest(fake, 'session/load');
+  const child = fake.children[0].child;
+  reply(child, load.id, {});
+  await loading;
+
+  notify(child, sessionId, {
+    sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'desktop turn' },
+  });
+  assert.equal(client.read(sessionId).turn.active, true);
+  assert.deepEqual(client.synchronizeTurn({ sessionId, active: false, changedAt: 200 }), {
+    applied: true, active: false,
+  });
+  assert.equal(client.read(sessionId).turn.active, false);
+  let duplicatePublishes = 0;
+  const stopWatching = client.watch(sessionId, () => { duplicatePublishes += 1; });
+  assert.deepEqual(client.synchronizeTurn({ sessionId, active: false, changedAt: 200 }), {
+    applied: true, active: false,
+  });
+  assert.equal(duplicatePublishes, 0, 'reading the same durable boundary must not create a watch loop');
+  stopWatching();
+  assert.deepEqual(await client.cancel({ sessionId, cwd: '/tmp/project' }), {
+    accepted: false, active: false,
+  });
+
+  const nextResult = await client.prompt({ sessionId, cwd: '/tmp/project', id: 'fresh', text: 'fresh turn' });
+  assert.deepEqual(nextResult, { accepted: true, queued: false, queueId: 'fresh' });
+  const nextPrompt = await waitForRequest(fake, 'session/prompt');
+  assert.equal(nextPrompt.params.prompt[0].text, 'fresh turn');
+  assert.deepEqual(client.synchronizeTurn({ sessionId, active: false, changedAt: 150 }), {
+    applied: false, active: true,
+  }, 'an older disk boundary must not stop the newer live prompt');
+  assert.equal(client.read(sessionId).turn.active, true);
+
+  assert.deepEqual(await client.prompt({ sessionId, cwd: '/tmp/project', id: 'queued', text: 'queued turn' }), {
+    accepted: true, queued: true, queueId: 'queued',
+  });
+  assert.deepEqual(client.read(sessionId).queue.map((entry) => entry.id), ['queued']);
+  assert.deepEqual(await client.cancel({ sessionId, cwd: '/tmp/project' }), {
+    accepted: true, active: true,
+  });
+  const liveBoundary = client.read(sessionId).turn.changedAt;
+  client.synchronizeTurn({ sessionId, active: true, changedAt: liveBoundary });
+  assert.equal(client.read(sessionId).turn.cancelRequested, true,
+    'rereading the same active boundary must preserve an in-flight Stop request');
+  assert.deepEqual(fake.requests.findLast((entry) => entry.method === 'session/cancel'), {
+    jsonrpc: '2.0', method: 'session/cancel', params: { sessionId },
+  });
+  notify(child, sessionId, { sessionUpdate: 'turn_completed', stop_reason: 'cancelled' }, 'fresh-cancelled', {
+    agentTimestampMs: 300,
+  });
+  reply(child, nextPrompt.id, { stopReason: 'cancelled' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(client.read(sessionId).turn.active, true,
+    'the queued turn should start only after the genuinely active stream is cancelled');
+  const queuedPrompt = fake.requests.filter((entry) => entry.method === 'session/prompt').at(-1);
+  assert.equal(queuedPrompt.params.prompt[0].text, 'queued turn');
+  notify(child, sessionId, { sessionUpdate: 'turn_completed', stop_reason: 'end_turn' }, 'queued-completed', {
+    agentTimestampMs: 400,
+  });
+  reply(child, queuedPrompt.id, { stopReason: 'end_turn' });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(client.read(sessionId).turn.active, false);
+  await client.close();
+});
+
 test('ACP client settles a replayed turn when session load reaches the persisted boundary', async () => {
   const fake = harness();
   const client = createGrokAcpClient({ spawn: fake.spawn });

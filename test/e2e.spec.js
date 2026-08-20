@@ -378,9 +378,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     if (pathname.endsWith('/input')) {
       const submitted = route.request().postDataJSON();
       mobileInputs.push(submitted);
-      if (submitted.text === 'queued follow up') {
-        queuedInputs.push({ id: 'queue-mobile-1', text: submitted.text, createdAt: Date.now(), attachments: [] });
-        return route.fulfill({ status: 202, json: { accepted: true, queued: true, queueId: 'queue-mobile-1' } });
+      if (currentActivity.active) {
+        const queueId = submitted.text === 'queued follow up' ? 'queue-mobile-1' : `queue-mobile-${queuedInputs.length + 1}`;
+        queuedInputs.push({ id: queueId, text: submitted.text, createdAt: Date.now(), attachments: [] });
+        return route.fulfill({ status: 202, json: { accepted: true, queued: true, queueId } });
       }
       return route.fulfill({ status: 202, json: { accepted: true, queued: false } });
     }
@@ -1166,6 +1167,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       expect.objectContaining({ text: 'hello from phone' }),
     ]),
   );
+  expect(queuedInputs).toHaveLength(0);
 
   await input.fill('accepted without terminal focus');
   await conversation.locator('#mobile-conversation-send').click();
@@ -1175,6 +1177,14 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     expect.objectContaining({ text: 'accepted without terminal focus' }),
   ]));
 
+  currentActivity = {
+    active: true, phase: 'writing', label: 'Writing response…',
+    canCancel: true, cancelRequested: false,
+  };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', { data: JSON.stringify({ conversation: nextConversation }) });
+  }, rootConversation());
+  await expect(sendButton).toHaveAttribute('data-action', 'stop');
   await input.fill('queued follow up');
   await conversation.locator('#mobile-conversation-send').click();
   queuedInputs.push({ id: 'queue-mobile-2', text: 'second queued message', createdAt: Date.now(), attachments: [] });
@@ -1257,6 +1267,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
 
   await firstQueuedRow.getByRole('button', { name: /Steer/ }).click();
   await expect.poll(() => queueActions.some((entry) => entry.action === 'steer')).toBe(true);
+  await expect(activity).not.toContainText('Stopping…');
+  await expect(sendButton).toHaveAttribute('data-action', 'stop');
+  await sendButton.click();
+  await expect.poll(() => cancellations).toHaveLength(2);
+  await expect(activity).toContainText('Stopping…');
+
+  currentActivity = { active: false };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', { data: JSON.stringify({ conversation: nextConversation }) });
+  }, rootConversation());
+  await expect(activity).toBeHidden();
+  await expect(sendButton).toHaveAttribute('data-action', 'send');
 
   await conversation.locator('#mobile-conversation-file').setInputFiles({
     name: 'phone.png', mimeType: 'image/png', buffer: Buffer.from('fake-image'),

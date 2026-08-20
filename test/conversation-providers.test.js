@@ -64,6 +64,7 @@ async function fixture() {
   const planReviewResponses = [];
   const modelChanges = [];
   const cancellations = [];
+  const lifecycleSyncs = [];
   const acpClient = {
     loadSession: async ({ sessionId }) => snapshots.get(sessionId) ?? (() => { throw new Error('unknown session'); })(),
     read: (sessionId) => snapshots.get(sessionId),
@@ -82,6 +83,7 @@ async function fixture() {
       return { accepted: true, modelId: input.modelId };
     },
     async cancel(input) { cancellations.push(input); return { accepted: true, active: true }; },
+    synchronizeTurn(input) { lifecycleSyncs.push(input); return { applied: true, active: input.active }; },
     async respondQuestion(input) { questionResponses.push(input); },
     async respondPlanReview(input) { planReviewResponses.push(input); },
     append(sessionId, record) {
@@ -92,7 +94,7 @@ async function fixture() {
   };
   return {
     cwd, parentId, childId, acpClient, prompts, questionResponses, planReviewResponses,
-    modelChanges, cancellations, snapshots,
+    modelChanges, cancellations, lifecycleSyncs, snapshots,
   };
 }
 
@@ -1006,6 +1008,14 @@ test('Grok provider settles a desktop-originated turn from Grok persisted lifecy
   const settled = await registry.read(session);
   assert.equal(settled.thread.status, 'idle');
   assert.deepEqual(settled.activity, { active: false });
+  assert.deepEqual(data.lifecycleSyncs.at(-1), {
+    sessionId: data.parentId, active: false, changedAt: 9_000,
+  });
+  await registry.sendSessionInput(session, 'fresh after desktop completion');
+  assert.equal(data.prompts.at(-1).text, 'fresh after desktop completion');
+  assert.deepEqual(data.lifecycleSyncs.at(-1), {
+    sessionId: data.parentId, active: false, changedAt: 9_000,
+  }, 'the action path must reconcile the same persisted boundary before prompting');
   assert.equal(await registry.status(session), 'idle');
 
   lifecycle = { active: false, changedAt: 7_000 };

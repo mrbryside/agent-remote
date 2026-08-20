@@ -1039,15 +1039,29 @@ export function createGrokConversationProvider({
 } = {}) {
   if (!acpClient) throw new Error('Grok ACP client is required');
 
+  async function reconcilePersistedTurn(cwd, threadId, loadedSnapshot) {
+    const snapshot = loadedSnapshot ?? await acpClient.loadSession({ sessionId: threadId, cwd });
+    const lifecycle = await loadLifecycle({ cwd, sessionId: threadId });
+    if (lifecycle && typeof acpClient.synchronizeTurn === 'function') {
+      acpClient.synchronizeTurn({
+        sessionId: threadId,
+        active: lifecycle.active,
+        changedAt: lifecycle.changedAt,
+      });
+      return { snapshot: acpClient.read?.(threadId) ?? snapshot, lifecycle };
+    }
+    return { snapshot, lifecycle };
+  }
+
   async function readThread(cwd, threadId, { includeControls = false } = {}) {
-    const snapshot = await acpClient.loadSession({ sessionId: threadId, cwd });
+    const loaded = await acpClient.loadSession({ sessionId: threadId, cwd });
+    const { snapshot, lifecycle: persistedLifecycle } = await reconcilePersistedTurn(cwd, threadId, loaded);
     const parsed = timeline(snapshot.events);
     // The ACP client owns the live turn lifecycle. Tool notifications can be
     // delivered after `turn_completed`, so replaying the timeline is only a
     // fallback for older/test snapshots that do not expose `turn.active`.
     // Otherwise a late tool update can incorrectly resurrect the sidebar
     // spinner after Grok has already finished the turn.
-    const persistedLifecycle = await loadLifecycle({ cwd, sessionId: threadId });
     const active = authoritativeTurn(snapshot, persistedLifecycle) ?? parsed.status === 'working';
     const cancelRequested = snapshot.turn?.cancelRequested === true;
     const activity = active ? {
@@ -1084,8 +1098,8 @@ export function createGrokConversationProvider({
   }
 
   async function readStatus(handle) {
-    const snapshot = await acpClient.loadSession({ sessionId: handle.rootThreadId, cwd: handle.cwd });
-    const lifecycle = await loadLifecycle({ cwd: handle.cwd, sessionId: handle.rootThreadId });
+    const loaded = await acpClient.loadSession({ sessionId: handle.rootThreadId, cwd: handle.cwd });
+    const { snapshot, lifecycle } = await reconcilePersistedTurn(handle.cwd, handle.rootThreadId, loaded);
     const active = authoritativeTurn(snapshot, lifecycle);
     if (active === true) return 'working';
     if (active === false) return 'idle';
@@ -1241,6 +1255,7 @@ export function createGrokConversationProvider({
     status: readStatus,
     watch: watchConversation,
     async sendInput(handle, text, options = {}) {
+      await reconcilePersistedTurn(handle.cwd, handle.rootThreadId);
       return acpClient.prompt({
         sessionId: handle.rootThreadId,
         cwd: handle.cwd,
@@ -1248,9 +1263,11 @@ export function createGrokConversationProvider({
       });
     },
     async cancel(handle) {
+      await reconcilePersistedTurn(handle.cwd, handle.rootThreadId);
       return acpClient.cancel({ sessionId: handle.rootThreadId, cwd: handle.cwd });
     },
     async setModel(handle, modelId, effortId) {
+      await reconcilePersistedTurn(handle.cwd, handle.rootThreadId);
       return acpClient.setModel({
         sessionId: handle.rootThreadId,
         cwd: handle.cwd,
@@ -1258,12 +1275,14 @@ export function createGrokConversationProvider({
       });
     },
     async setMode(handle, modeId) {
+      await reconcilePersistedTurn(handle.cwd, handle.rootThreadId);
       return acpClient.setMode({ sessionId: handle.rootThreadId, cwd: handle.cwd, modeId });
     },
     async removeQueuedInput(handle, queueId) {
       return acpClient.removeQueuedPrompt({ sessionId: handle.rootThreadId, queueId });
     },
     async steerQueuedInput(handle, queueId) {
+      await reconcilePersistedTurn(handle.cwd, handle.rootThreadId);
       return acpClient.steerQueuedPrompt({ sessionId: handle.rootThreadId, queueId });
     },
     async reorderQueuedInputs(handle, queueIds) {

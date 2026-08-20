@@ -308,6 +308,50 @@ export function createGrokAcpClient({
     for (const listener of [...current.listeners]) listener(snapshot);
   }
 
+  function synchronizeTurn({ sessionId, active, changedAt }) {
+    const current = state(sessionId);
+    const boundary = Number(changedAt);
+    if (!Number.isFinite(boundary) || boundary < 0) {
+      throw rpcError('Turn lifecycle timestamp is invalid', 'GROK_ACP_TURN_INVALID');
+    }
+    // A persisted boundary may be read after a newer local prompt has already
+    // started. Never let that older disk snapshot stop or resurrect the newer
+    // turn.
+    if (boundary < current.turnChangedAt) {
+      return { applied: false, active: current.turnActive };
+    }
+
+    let changed = false;
+    if (active) {
+      const newTurn = !current.turnActive || boundary > current.turnChangedAt;
+      changed = newTurn || current.turnSource !== 'persisted' || current.turnChangedAt !== boundary;
+      current.turnActive = true;
+      current.turnSource = 'persisted';
+      current.turnChangedAt = boundary;
+      if (newTurn) current.cancelRequested = false;
+    } else {
+      // Grok's terminal UI and the ACP observer do not always receive the same
+      // lifecycle notification. A durable completion is authoritative: free
+      // the stale RPC slot so the next message is sent as a new turn.
+      changed = Boolean(current.activePrompt || current.drainingPrompts || current.pendingSteers.length ||
+        current.lastAgentStreamStart !== undefined || current.turnActive || current.cancelRequested ||
+        current.turnChangedAt !== boundary || current.turnSource !== 'idle');
+      for (const pendingSteer of current.pendingSteers.splice(0)) {
+        current.events.push(steerBoundary(pendingSteer, boundary));
+      }
+      current.activePrompt = undefined;
+      current.drainingPrompts = undefined;
+      current.lastAgentStreamStart = undefined;
+      current.turnActive = false;
+      current.turnSource = 'idle';
+      current.turnChangedAt = boundary;
+      current.cancelRequested = false;
+    }
+    if (changed) publish(sessionId);
+    if (!active && current.queuedPrompts.length > 0) void drainPrompts(sessionId);
+    return { applied: true, active: Boolean(active) };
+  }
+
   function acceptNotification(message) {
     if (!['session/update', '_x.ai/session/update'].includes(message.method)) return;
     let record = eventRecord(message.params);
@@ -1096,6 +1140,7 @@ export function createGrokAcpClient({
 
   return {
     loadSession, prompt, cancel, setModel, setMode,
+    synchronizeTurn,
     removeQueuedPrompt, steerQueuedPrompt, reorderQueuedPrompts,
     read, watch, respondPermission, respondQuestion, respondPlanReview, close,
   };
