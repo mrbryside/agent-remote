@@ -306,8 +306,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     controls: { model: {
       currentId: currentModelId,
       options: [
-        { id: 'qwen-local', label: 'Qwen 3.8 27B', description: 'Local model', contextWindowTokens: 190_000 },
-        { id: 'grok-4.6', label: 'Grok 4.6', description: 'Frontier model', contextWindowTokens: 500_000,
+        { id: 'qwen-local', label: 'Qwen 3.8 27B', provider: { id: 'local', label: 'Local' }, description: 'Local model', contextWindowTokens: 190_000 },
+        { id: 'grok-4.6', label: 'Grok 4.6', provider: { id: 'xai', label: 'xAI' }, description: 'Frontier model', contextWindowTokens: 500_000,
           currentEffortId, efforts: [
             { id: 'high', value: 'high', label: 'High Effort', description: 'Deep work', default: true },
             { id: 'low', value: 'low', label: 'Low Effort', description: 'Quick work', default: false },
@@ -536,6 +536,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await modelButton.click();
   const modelList = conversation.locator('#mobile-conversation-model-list');
   await expect(modelList).toBeVisible();
+  await expect(modelList.getByRole('group', { name: 'Local' })).toContainText('Qwen 3.8 27B');
+  await expect(modelList.getByRole('group', { name: 'xAI' })).toContainText('Grok 4.6');
   await expect(modelList.getByRole('option')).toHaveCount(2);
   await modelList.getByRole('option', { name: /Grok 4\.6/ }).click();
   await expect(modelList).toContainText('Choose effort');

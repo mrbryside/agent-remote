@@ -1045,7 +1045,7 @@ test('Grok provider exposes advertised models, context usage, and changes the ro
     currentModelId: 'qwen-local',
     availableModels: [
       { modelId: 'qwen-local', name: 'Qwen 3.8 27B', _meta: { totalContextTokens: 190_000 } },
-      { modelId: 'grok-4.6', name: 'Grok 4.6', description: 'Frontier model', _meta: {
+      { modelId: 'grok-4.6', name: 'Grok 4.6', provider: { id: 'xai', label: 'xAI' }, description: 'Frontier model', _meta: {
         totalContextTokens: 500_000, supportsReasoningEffort: true, reasoningEffort: 'high',
         reasoningEfforts: [
           { id: 'high', value: 'high', label: 'High Effort', description: 'Deep work', default: true },
@@ -1068,8 +1068,9 @@ test('Grok provider exposes advertised models, context usage, and changes the ro
   assert.deepEqual(result.controls.model, {
     currentId: 'qwen-local',
     options: [
-      { id: 'qwen-local', label: 'Qwen 3.8 27B', description: '', contextWindowTokens: 190_000 },
+      { id: 'qwen-local', label: 'Qwen 3.8 27B', provider: { id: 'local', label: 'Local' }, description: '', contextWindowTokens: 190_000 },
       { id: 'grok-4.6', label: 'Grok 4.6', description: 'Frontier model', contextWindowTokens: 500_000,
+        provider: { id: 'xai', label: 'xAI' },
         currentEffortId: 'high', efforts: [
           { id: 'high', value: 'high', label: 'High Effort', description: 'Deep work', default: true },
           { id: 'low', value: 'low', label: 'Low Effort', description: 'Quick work', default: false },

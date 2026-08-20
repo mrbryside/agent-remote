@@ -659,6 +659,9 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-conversation-model-step > span { display: grid; min-width: 0; gap: 2px; }
   .mobile-conversation-model-step small { color: var(--color-text-muted); font: 8px/1.2 var(--font-family-mono); text-transform: uppercase; letter-spacing: .08em; }
   .mobile-conversation-model-step strong { overflow: hidden; color: var(--color-text-strong); font: 650 12px/1.25 var(--font-family-sans); text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-conversation-model-group { display: grid; gap: 2px; }
+  .mobile-conversation-model-group + .mobile-conversation-model-group { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--color-border-faint); }
+  .mobile-conversation-model-provider { padding: 5px 10px 2px; color: var(--color-text-muted); font: 650 8px/1.2 var(--font-family-mono); text-transform: uppercase; letter-spacing: .1em; }
   .mobile-conversation-interaction { display: grid; flex: 0 0 auto; min-height: 0; max-height: min(78dvh, 760px); box-sizing: border-box; width: 100%; align-items: stretch; padding: 6px max(8px, env(safe-area-inset-right)) calc(6px + var(--safe-area-bottom)) max(8px, env(safe-area-inset-left)); overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--color-border-subtle); background: var(--color-surface-raised); }
   .mobile-conversation-interaction[hidden] { display: none; }
   .mobile-conversation-interaction .mobile-question-card, .mobile-interaction-card { box-sizing: border-box; width: 100%; max-height: none; margin: 0; overflow: visible; border-radius: 12px; box-shadow: none; }

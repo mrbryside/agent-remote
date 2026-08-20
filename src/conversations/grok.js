@@ -92,6 +92,23 @@ function shortText(value, fallback, length = 160) {
   return normalized.slice(0, length) || fallback;
 }
 
+function modelProvider(model) {
+  const supplied = model?.provider ?? model?._meta?.provider ?? model?._meta?.providerId;
+  if (supplied && typeof supplied === 'object') {
+    const label = shortText(supplied.label || supplied.name || supplied.id, '', 80);
+    const id = shortText(supplied.id || supplied.providerId || supplied.name, '', 80).toLowerCase();
+    if (id && label) return { id, label };
+  }
+  if (typeof supplied === 'string') {
+    const label = shortText(supplied, '', 80);
+    if (label) return { id: label.toLowerCase(), label };
+  }
+  const modelId = shortText(model?.modelId, '', 80).toLowerCase();
+  if (modelId.startsWith('grok')) return { id: 'xai', label: 'xAI' };
+  if (modelId === 'qwen-local' || modelId.endsWith('-local')) return { id: 'local', label: 'Local' };
+  return { id: 'other', label: 'Other' };
+}
+
 function modelControls(metadata) {
   const models = metadata?.models;
   const detail = metadata?._meta?.['x.ai/sessionDetail'] || {};
@@ -112,6 +129,7 @@ function modelControls(metadata) {
       return {
         id: shortText(model?.modelId, '', 80),
         label: shortText(model?.name, shortText(model?.modelId, 'Model', 80), 120),
+        provider: modelProvider(model),
         description: shortText(model?.description, '', 300),
         contextWindowTokens: finiteTokenCount(model?._meta?.totalContextTokens ?? model?._meta?.contextLimit),
         ...(efforts.length ? { currentEffortId: currentEffort?.id, efforts } : {}),

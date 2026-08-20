@@ -241,25 +241,43 @@ export function createMobileConversationView({
 
   function paintModelOptions(control) {
     const fragment = document.createDocumentFragment();
+    const groups = new Map();
     for (const option of control.options) {
-      const button = element('button', 'mobile-conversation-model-option');
-      button.type = 'button';
-      button.setAttribute('role', 'option');
-      button.setAttribute('aria-selected', String(option.id === control.currentId));
-      button.dataset.modelId = option.id;
-      button.append(
-        element('strong', '', option.label),
-        element('small', '', [option.description,
-          option.contextWindowTokens ? `${compactMetric(option.contextWindowTokens)} context` : '',
-          option.efforts?.length ? 'Choose effort next' : '']
-          .filter(Boolean).join(' · ')),
-      );
-      button.addEventListener('click', () => {
-        if (!option.efforts?.length) return void chooseModel(option.id);
-        paintEffortOptions(option);
-        modelList.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
-      });
-      fragment.append(button);
+      const modelId = String(option.id || '').toLowerCase();
+      const provider = option.provider
+        || (modelId.startsWith('grok') ? { id: 'xai', label: 'xAI' } : undefined)
+        || (modelId === 'qwen-local' || modelId.endsWith('-local') ? { id: 'local', label: 'Local' } : undefined)
+        || { id: 'other', label: 'Other' };
+      const groupId = provider.id || provider.label || 'other';
+      if (!groups.has(groupId)) groups.set(groupId, { provider, options: [] });
+      groups.get(groupId).options.push(option);
+    }
+    for (const { provider, options } of groups.values()) {
+      const group = element('section', 'mobile-conversation-model-group');
+      group.setAttribute('role', 'group');
+      group.setAttribute('aria-label', provider.label || 'Other');
+      group.append(element('div', 'mobile-conversation-model-provider', provider.label || 'Other'));
+      for (const option of options) {
+        const button = element('button', 'mobile-conversation-model-option');
+        button.type = 'button';
+        button.setAttribute('role', 'option');
+        button.setAttribute('aria-selected', String(option.id === control.currentId));
+        button.dataset.modelId = option.id;
+        button.append(
+          element('strong', '', option.label),
+          element('small', '', [option.description,
+            option.contextWindowTokens ? `${compactMetric(option.contextWindowTokens)} context` : '',
+            option.efforts?.length ? 'Choose effort next' : '']
+            .filter(Boolean).join(' · ')),
+        );
+        button.addEventListener('click', () => {
+          if (!option.efforts?.length) return void chooseModel(option.id);
+          paintEffortOptions(option);
+          modelList.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+        });
+        group.append(button);
+      }
+      fragment.append(group);
     }
     modelList.setAttribute('aria-label', 'Choose model');
     modelList.replaceChildren(fragment);
