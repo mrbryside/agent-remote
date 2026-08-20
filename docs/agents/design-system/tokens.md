@@ -27,6 +27,14 @@ surfaces on the shared content-height animation contract and retain the global
 reduced-motion override; do not add component-specific durations or replay an
 entry animation on every streamed snapshot.
 
+The compact conversation is a fixed compositor surface sized and translated
+from the live Visual Viewport variables in `public/app.js`. Its composer takes
+focus during the initiating touch with `preventScroll`, so iOS Safari cannot
+first pan the layout viewport and expose the page behind the chat before the
+keyboard resize event arrives. Keep the document non-scrollable at compact
+widths and preserve this focus path when changing the composer or viewport
+layout.
+
 Scrollbar colors use the semantic `--color-scrollbar-thumb`, `--color-scrollbar-thumb-hover`, and `--color-scrollbar-thumb-active` tokens. `public/styles.css` applies one cross-browser 6px scrollbar contract to every scroll surface: transparent, borderless tracks and corners; rounded low-contrast thumbs; and no arrow buttons. Do not hide a component scrollbar or add a component-specific track frame.
 
 Syntax colors use the `--color-syntax-*` tokens. `public/syntax.js` applies the

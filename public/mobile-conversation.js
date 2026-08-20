@@ -2750,6 +2750,16 @@ export function createMobileConversationView({
       input.focus({ preventScroll: true });
     }
   });
+  const focusComposerWithoutViewportScroll = () => {
+    if (document.activeElement === input) return;
+    // Safari otherwise performs its own layout-viewport scroll before the
+    // keyboard's visualViewport resize arrives, producing a large blank jump.
+    // Focusing during the initiating gesture keeps the keyboard user-activated
+    // while preventScroll makes the first painted frame use our viewport root.
+    input.focus({ preventScroll: true });
+  };
+  input.addEventListener('pointerdown', focusComposerWithoutViewportScroll, { capture: true });
+  input.addEventListener('touchstart', focusComposerWithoutViewportScroll, { capture: true, passive: true });
   input.addEventListener('input', () => {
     autoSizeInput();
     updateSuggestions();

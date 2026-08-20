@@ -192,6 +192,14 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       visualViewport.dispatchEvent(new Event('scroll'));
     };
     Object.defineProperty(window, 'visualViewport', { configurable: true, value: visualViewport });
+    window.__mobileComposerFocusOptions = [];
+    const nativeFocus = HTMLElement.prototype.focus;
+    HTMLElement.prototype.focus = function focus(options) {
+      if (this.id === 'mobile-conversation-input') {
+        window.__mobileComposerFocusOptions.push(options || null);
+      }
+      return nativeFocus.call(this, options);
+    };
     const nativeScrollTo = Element.prototype.scrollTo;
     Element.prototype.scrollTo = function scrollTo(...args) {
       if (this.id === 'mobile-conversation-messages') {
@@ -636,7 +644,14 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     expect(style.trackBorder).toBe('0px');
     expect(style.trackBackground).toBe('rgba(0, 0, 0, 0)');
   }
-  await input.focus();
+  await input.evaluate((element) => element.blur());
+  await page.evaluate(() => { window.__mobileComposerFocusOptions.length = 0; });
+  await input.click();
+  await expect.poll(() => page.evaluate(() => window.__mobileComposerFocusOptions)).toContainEqual({ preventScroll: true });
+  await expect.poll(() => conversation.evaluate((node) => ({
+    position: getComputedStyle(node).position,
+    documentScrollTop: document.scrollingElement.scrollTop,
+  }))).toEqual({ position: 'fixed', documentScrollTop: 0 });
   await page.evaluate(() => window.__setVisualViewport({ height: 510, offsetTop: 24 }));
   await expect(page.locator('html')).toHaveAttribute('data-visual-keyboard', 'true');
   await expect.poll(() => page.evaluate(() => {

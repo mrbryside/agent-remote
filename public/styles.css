@@ -317,7 +317,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .browser-tool { padding-inline: 5px; }
 }
 @media (max-width: 760px) {
-  html, body { height: 100%; }
+  html, body { height: 100%; overscroll-behavior: none; }
   html[data-visual-keyboard="true"] { --safe-area-bottom: 0px; }
   :root { --project-label-offset: 40px; }
   body { padding: 0; }
@@ -348,7 +348,11 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .graphics-mobile-reopen[hidden] { display: none; }
   .graphics-resizer { display: none; }
   .dialog-actions { flex-wrap: wrap; }
-  .mobile-conversation { position: absolute; z-index: 25; top: var(--visual-viewport-offset-top, 0px); left: var(--visual-viewport-offset-left, 0px); display: flex; width: var(--visual-viewport-width, 100vw); height: var(--visual-viewport-height, 100dvh); flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--color-canvas); }
+  /* Keep the native chat out of Safari's layout-scroll path. On first focus,
+     iOS can pan the layout viewport before it reports the smaller visual
+     viewport. A fixed compositor surface plus the live viewport transform
+     prevents that intermediate pan from exposing the page behind the chat. */
+  .mobile-conversation { position: fixed; z-index: 25; top: 0; left: 0; display: flex; width: var(--visual-viewport-width, 100vw); height: var(--visual-viewport-height, 100dvh); flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; transform: translate3d(var(--visual-viewport-offset-left, 0px), var(--visual-viewport-offset-top, 0px), 0); background: var(--color-canvas); }
   .mobile-conversation:has(.mobile-subagent-sheet:not([hidden])) { z-index: 36; }
   .mobile-conversation[hidden] { display: none; }
   .mobile-conversation[data-booting="true"] > :not(.mobile-conversation-boot) { visibility: hidden; }
