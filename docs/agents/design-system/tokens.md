@@ -21,6 +21,11 @@ use `--font-size-mobile-input` so iOS does not zoom the viewport on focus. Keep
 the two interaction types on this common scale instead of adding per-card font
 sizes.
 
+Mobile assistant prose uses the shared `--line-height-chat` rhythm. Keep it
+tight enough that Thai line breaking on narrow Safari viewports reads as a
+wrapped sentence rather than as separate paragraphs; inline file references
+must inherit the same rhythm so they do not disturb the line box.
+
 The compact interaction dock is the single visual boundary for Question and
 Permission flows. Do not nest another card frame inside it: choices and
 permission actions are flat rows separated by subtle dividers, permission

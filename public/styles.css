@@ -388,7 +388,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-conversation-jump:active { transform: scale(.95); }
   .mobile-message { display: grid; gap: 6px; margin-bottom: 20px; }
   .mobile-message-author { color: var(--color-text-muted); font: 600 9px/1.2 var(--font-family-mono); letter-spacing: .07em; text-transform: uppercase; }
-  .mobile-message-content { color: var(--color-text); font: 14px/1.58 var(--font-family-sans); overflow-wrap: anywhere; white-space: pre-wrap; }
+  .mobile-message-content { color: var(--color-text); font: 14px/var(--line-height-chat) var(--font-family-sans); overflow-wrap: anywhere; white-space: pre-wrap; }
   .mobile-message-user { justify-items: end; }
   .mobile-message-user .mobile-message-content { max-width: 88%; padding: 10px 13px; border: 1px solid var(--color-border-strong); border-radius: 15px 15px 4px 15px; background: var(--color-surface-selected); color: var(--color-text-strong); }
   .mobile-message[data-pending="true"] .mobile-message-author { color: var(--color-status-connecting); }
@@ -413,7 +413,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-markdown a:hover { text-decoration-color: currentColor; }
   .mobile-markdown code { font-family: var(--font-family-mono); }
   .mobile-markdown :not(pre) > code { padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--color-syntax-built-in); font-size: .88em; overflow-wrap: anywhere; }
-  .mobile-file-reference { display: inline; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--color-syntax-built-in); font: .88em/1.58 var(--font-family-mono); overflow-wrap: anywhere; cursor: pointer; }
+  .mobile-file-reference { display: inline; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--color-syntax-built-in); font: .88em/var(--line-height-chat) var(--font-family-mono); overflow-wrap: anywhere; cursor: pointer; }
   .mobile-file-reference:hover, .mobile-file-reference:focus-visible { outline: 0; text-decoration: underline; text-underline-offset: 3px; }
   .mobile-markdown-code { min-width: 0; margin: 14px 0; overflow: hidden; border: 1px solid var(--color-border-strong); border-radius: 12px; background: var(--color-terminal-background); }
   .mobile-markdown-code-toolbar { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--color-border); color: var(--color-text-muted); font: 9px/1 var(--font-family-mono); text-transform: uppercase; }

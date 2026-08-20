@@ -682,6 +682,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const softBreakHistory = conversation.locator('[data-message-id="assistant-2"] .mobile-markdown');
   await expect(softBreakHistory).toHaveText('พิมพ์ มาแบบนั้นอีกแล้ว....');
   await expect(softBreakHistory.locator('br')).toHaveCount(0);
+  // Narrow iPhone layouts legitimately wrap Thai prose, but wrapped lines
+  // should read as one sentence rather than looking like separate paragraphs.
+  await expect(softBreakHistory).toHaveCSS('line-height', '20.3px');
   const fileReference = markdownMessage.getByRole('button', { name: 'Open public/app.js at line 1' });
   await expect(fileReference).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(fileReference).toHaveCSS('color', 'rgb(100, 190, 172)');

@@ -6,6 +6,7 @@
   --font-family-mono: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
   --font-size-project: clamp(14.5px, 1.25vw, 16px);
   --font-size-chat: clamp(13px, 1.14vw, 14.5px);
+  --line-height-chat: 1.45;
   --font-size-project-empty: clamp(13.5px, 1.14vw, 14.5px);
   --font-size-terminal: 14px;
   --line-height-terminal: 1.2;
