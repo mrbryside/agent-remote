@@ -1,6 +1,11 @@
 import { WebSocket } from 'ws';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import {
+  parseRequestUrl,
+  rejectInvalidRequestTarget,
+  rejectInvalidUpgrade,
+} from '../server/request-target.js';
 
 const maxJsonBytes = 64 * 1024;
 const authHeaders = Object.freeze({
@@ -198,7 +203,7 @@ export function createRemoteGateway({
   }
 
   async function handleAuthRequest(request, response, origin) {
-    const pathname = new URL(request.url, 'http://localhost').pathname;
+    const pathname = parseRequestUrl(request).pathname;
     try {
       if (request.method === 'GET' && pathname === '/remote-auth/status') {
         const session = authenticate(request);
@@ -287,7 +292,9 @@ export function createRemoteGateway({
 
   return {
     async handleRequest(request, response, handleWorkspaceRequest) {
-      const pathname = new URL(request.url, 'http://localhost').pathname;
+      const requestUrl = parseRequestUrl(request);
+      if (!requestUrl) return rejectInvalidRequestTarget(response);
+      const { pathname } = requestUrl;
       if (pathname.startsWith('/api/remote/')) return sendJson(response, 404, { error: 'Not found' });
       const origin = expectedOrigin();
       if (!hostAllowed(request, origin)) return sendJson(response, 403, { error: 'Host is not allowed' });
@@ -314,7 +321,9 @@ export function createRemoteGateway({
     },
 
     handleUpgrade(request, socket, head, handleWorkspaceUpgrade) {
-      const pathname = new URL(request.url, 'http://localhost').pathname;
+      const requestUrl = parseRequestUrl(request);
+      if (!requestUrl) return rejectInvalidUpgrade(socket);
+      const { pathname } = requestUrl;
       if (pathname.startsWith('/api/remote/') || pathname.startsWith('/remote-auth/')) return rejectUpgrade(socket, 404, 'Not Found');
       const origin = expectedOrigin();
       if (!hostAllowed(request, origin) || !originAllowed(request, origin, true)) {

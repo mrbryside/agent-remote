@@ -57,3 +57,11 @@ test('limits long titles without splitting a Unicode grapheme', () => {
 test('returns an empty title for a prompt with no meaningful text', () => {
   assert.equal(derivePromptTitle('\x1b[31m>\x1b[0m   '), '');
 });
+
+test('does not use slash commands as automatic chat titles', () => {
+  assert.equal(derivePromptTitle('/plan improve the account settings'), '');
+  assert.equal(derivePromptTitle('/always-approve'), '');
+  assert.equal(derivePromptTitle('\x1b[32m❯\x1b[0m /goal ship the release'), '');
+  assert.equal(derivePromptTitle('Use /plan when you are ready'), 'Use /plan');
+  assert.equal(derivePromptTitle('/Users/sirawat/project needs cleanup'), '/Users/sirawat/project needs cleanup');
+});

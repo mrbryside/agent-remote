@@ -1,5 +1,12 @@
 import { markdownNode } from './markdown.js';
-import { highlightCodeNode, languageForPath } from './syntax.js';
+import { createMobileActivityStore, hasActivityAfterDismissal as activityChanged } from './mobile-activity-state.js';
+import { composerCompletion as detectComposerCompletion, rankedCommands } from './mobile-composer-model.js';
+import { createTimelineReconciler } from './mobile-timeline-reconciler.js';
+import {
+  createMobileFileSurface,
+} from './mobile-file-surface.js';
+import { createMobileEventRenderer } from './mobile-event-renderer.js';
+import { createMobileInteractionRenderer } from './mobile-interaction-renderer.js';
 import { createIcon, createIconButton } from './ui-components.js';
 
 function element(tag, className, text) {
@@ -173,20 +180,56 @@ export function createMobileConversationView({
   let mainScrollGeometryFrame;
   let readerScrollGesture = false;
   let readerScrollGestureTimer;
-  let fileSheet;
-  let fileSheetPanel;
-  let fileSheetTitle;
-  let fileSheetMeta;
-  let fileSheetBody;
-  let fileSheetClose;
-  let fileSheetPointer;
-  let fileSheetCloseGeneration = 0;
-  let filePreviewGeneration = 0;
   let browserAvailable = false;
   let pillDismissed = false;
   let dismissedActivitySnapshot;
   let dismissedPlanRevision = '';
   let expectedConversation = false;
+
+  const fileSurface = createMobileFileSurface({
+    root,
+    element,
+    readFile,
+    getSessionName: () => sessionName,
+    getConversation: () => lastConversation,
+    animateContent: animateSheetContent,
+    metric,
+  });
+  const {
+    close: closeFileSheet,
+    open: openFileReference,
+  } = fileSurface;
+  const {
+    eventNode,
+    permissionDockNode,
+    toolGroupNode,
+  } = createMobileEventRenderer({
+    fileSurface,
+    expandedItems,
+    autoExpandedItems,
+    initializeDisclosure,
+    animateDisclosure,
+    getSessionName: () => sessionName,
+    respondPermission,
+    refresh,
+  });
+  const {
+    planReviewNode,
+    questionNode,
+  } = createMobileInteractionRenderer({
+    pendingQuestions,
+    pendingPlanReviews,
+    onQuestionStateChange: () => { questionStateVersion += 1; },
+    rerender: () => {
+      renderedSignature = '';
+      if (lastConversation) render(lastConversation);
+    },
+    getSessionName: () => sessionName,
+    getThreadId: () => threadId,
+    respondQuestion,
+    respondPlanReview,
+    refresh,
+  });
 
   const conversationCache = new Map();
   const historyLimits = new Map();
@@ -207,50 +250,19 @@ export function createMobileConversationView({
     }
   }
 
-  const planDismissalStoragePrefix = 'agent-remote:mobile-plan-dismissed:';
-  const activityDismissalStoragePrefix = 'agent-remote:mobile-activity-dismissed:';
-
-  function planDismissalStorageKey(name = sessionName) {
-    return name ? `${planDismissalStoragePrefix}${encodeURIComponent(name)}` : undefined;
-  }
+  const activityStore = createMobileActivityStore(localStorage);
 
   function loadDismissedPlanRevision(name = sessionName) {
-    const key = planDismissalStorageKey(name);
-    if (!key) return '';
-    try {
-      return localStorage.getItem(key) || '';
-    } catch {
-      return '';
-    }
+    return activityStore.loadPlan(name);
   }
 
   function persistDismissedPlanRevision(revision) {
     dismissedPlanRevision = revision || '';
-    const key = planDismissalStorageKey();
-    if (!key) return;
-    try {
-      if (dismissedPlanRevision) localStorage.setItem(key, dismissedPlanRevision);
-      else localStorage.removeItem(key);
-    } catch {
-      // Storage can be unavailable in hardened/private browser contexts. The
-      // in-memory dismissal still behaves correctly for the current view.
-    }
-  }
-
-  function activityDismissalStorageKey(name = sessionName) {
-    return name ? `${activityDismissalStoragePrefix}${encodeURIComponent(name)}` : undefined;
+    activityStore.savePlan(sessionName, dismissedPlanRevision);
   }
 
   function loadDismissedActivitySnapshot(name = sessionName) {
-    const key = activityDismissalStorageKey(name);
-    if (!key) return undefined;
-    try {
-      const snapshot = JSON.parse(localStorage.getItem(key) || 'null');
-      if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.subagents)) return undefined;
-      return snapshot;
-    } catch {
-      return undefined;
-    }
+    return activityStore.loadActivity(name);
   }
 
   function currentActivitySnapshot(conversation = rootConversation || { items: [] }) {
@@ -272,35 +284,22 @@ export function createMobileConversationView({
   function persistActivityDismissal() {
     dismissedActivitySnapshot = currentActivitySnapshot();
     pillDismissed = true;
-    const key = activityDismissalStorageKey();
-    if (!key) return;
-    try {
-      localStorage.setItem(key, JSON.stringify(dismissedActivitySnapshot));
-    } catch {
-      // Keep the dismissal in memory when persistent storage is unavailable.
-    }
+    activityStore.saveActivity(sessionName, dismissedActivitySnapshot);
   }
 
   function clearActivityDismissal() {
     dismissedActivitySnapshot = undefined;
     pillDismissed = false;
-    const key = activityDismissalStorageKey();
-    if (!key) return;
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      // The in-memory state is still authoritative for this view.
-    }
+    activityStore.clearActivity(sessionName);
   }
 
   function hasActivityAfterDismissal(snapshot) {
-    if (!dismissedActivitySnapshot) return false;
-    if (snapshot.browser && !dismissedActivitySnapshot.browser) return true;
-    if (snapshot.plan && snapshot.plan !== dismissedActivitySnapshot.plan) return true;
-    const dismissedSubagents = new Set(dismissedActivitySnapshot.subagents);
-    return subagents(rootConversation || { items: [] }).some((item) => {
-      const aliases = [item.id, item.toolCallId, item.threadId].filter(Boolean);
-      return aliases.length > 0 && !aliases.some((id) => dismissedSubagents.has(id));
+    const subagentAliases = subagents(rootConversation || { items: [] })
+      .map((item) => [item.id, item.toolCallId, item.threadId].filter(Boolean));
+    return activityChanged({
+      dismissed: dismissedActivitySnapshot,
+      current: snapshot,
+      subagentAliases,
     });
   }
 
@@ -687,37 +686,6 @@ export function createMobileConversationView({
     renderChoiceControl(conversation, 'mode', modeButton, modeLabel, modeList, setMode);
   }
 
-  function commandSubsequenceScore(name, query) {
-    let cursor = 0;
-    let gaps = 0;
-    for (const character of query) {
-      const next = name.indexOf(character, cursor);
-      if (next < 0) return Number.POSITIVE_INFINITY;
-      gaps += next - cursor;
-      cursor = next + 1;
-    }
-    return gaps + name.length / 1_000;
-  }
-
-  function rankedCommands(commands, query) {
-    const needle = query.trim().toLowerCase();
-    const entries = commands.map((command, index) => ({
-      command, index, name: String(command.name || '').toLowerCase(),
-    }));
-    if (!needle) return entries.map(({ command }) => command);
-    const sorted = (matches, score) => matches.sort((left, right) =>
-      score(left) - score(right) || left.name.length - right.name.length || left.index - right.index)
-      .map(({ command }) => command);
-    const exact = entries.filter(({ name }) => name === needle);
-    if (exact.length) return exact.map(({ command }) => command);
-    const prefixes = entries.filter(({ name }) => name.startsWith(needle));
-    if (prefixes.length) return sorted(prefixes, () => 0);
-    const contained = entries.filter(({ name }) => name.includes(needle));
-    if (contained.length) return sorted(contained, ({ name }) => name.indexOf(needle));
-    return sorted(entries.filter(({ name }) => Number.isFinite(commandSubsequenceScore(name, needle))),
-      ({ name }) => commandSubsequenceScore(name, needle));
-  }
-
   function closeSuggestions() {
     clearTimeout(suggestionTimer);
     suggestions.hidden = true;
@@ -764,16 +732,7 @@ export function createMobileConversationView({
 
   function composerCompletion() {
     const caret = input.selectionStart ?? input.value.length;
-    const before = input.value.slice(0, caret);
-    const slash = before.match(/(?:^|\n)(\s*)\/([^\s]*)$/);
-    if (slash) return {
-      kind: 'command', query: slash[2], start: caret - slash[2].length - 1, end: caret,
-    };
-    const file = before.match(/(?:^|\s)@([^\s]*)$/);
-    if (file) return {
-      kind: 'file', query: file[1], start: caret - file[1].length - 1, end: caret,
-    };
-    return undefined;
+    return detectComposerCompletion(input.value, caret);
   }
 
   function updateSuggestions() {
@@ -1622,1010 +1581,6 @@ export function createMobileConversationView({
     });
   }
 
-  function normalizedFilePath(value) {
-    return String(value || '').replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/{2,}/g, '/');
-  }
-
-  function sameFilePath(candidate, requested) {
-    const left = normalizedFilePath(candidate);
-    const right = normalizedFilePath(requested);
-    return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`);
-  }
-
-  function conversationFiles(conversation) {
-    const files = [];
-    for (const item of conversation?.items || []) {
-      const tools = item.type === 'tool_group' ? item.tools || [] : item.type === 'tool' ? [item] : [];
-      for (const tool of tools) {
-        if (tool.file?.path && tool.file?.content !== undefined) files.push(tool.file);
-        for (const change of tool.diffs || []) {
-          files.push({
-            path: change.path,
-            content: change.newText || change.oldText || '',
-            startLine: change.newLine || change.oldLine || 1,
-            changed: true,
-          });
-        }
-      }
-    }
-    return files;
-  }
-
-  function fileLinesNode(file, { startLine, endLine, streamId = 'file' } = {}) {
-    const viewport = element('div', 'mobile-file-lines');
-    viewport.dataset.streamScroll = streamId;
-    const content = String(file?.content || '').replace(/\n$/, '');
-    const lines = content ? content.split('\n') : ['File content was not captured'];
-    const firstLine = Math.max(1, Number(file?.startLine) || 1);
-    const highlightStart = Math.max(1, Number(startLine) || 0);
-    const highlightEnd = Math.max(highlightStart, Number(endLine) || highlightStart);
-    const language = languageForPath(file?.path);
-    for (const [index, text] of lines.entries()) {
-      const number = firstLine + index;
-      const row = element('div', 'mobile-file-line');
-      if (highlightStart && number >= highlightStart && number <= highlightEnd) row.dataset.highlighted = 'true';
-      if (file?.changed) row.dataset.changed = 'true';
-      const code = element('code');
-      highlightCodeNode(code, text || ' ', language);
-      row.append(element('span', '', number), code);
-      viewport.append(row);
-    }
-    return viewport;
-  }
-
-  function filePreviewNode(file, options = {}) {
-    const section = element('section', 'mobile-event-file');
-    const header = element('header');
-    const lineLabel = file.totalLines ? `${metric(file.totalLines)} lines`
-      : options.startLine ? `Line ${options.startLine}${options.endLine && options.endLine !== options.startLine ? `–${options.endLine}` : ''}` : 'File';
-    header.append(element('strong', '', file.path || options.path || 'File'), element('small', '', lineLabel));
-    section.append(header, fileLinesNode(file, options));
-    return section;
-  }
-
-  function closeFileSheet() {
-    if (!fileSheet || fileSheet.hidden || fileSheet.dataset.closing === 'true') return;
-    filePreviewGeneration += 1;
-    const closeGeneration = ++fileSheetCloseGeneration;
-    fileSheet.dataset.closing = 'true';
-    fileSheet.inert = true;
-    let closeTimer;
-    const finish = () => {
-      fileSheetPanel.removeEventListener('animationend', finishAfterAnimation);
-      clearTimeout(closeTimer);
-      if (closeGeneration !== fileSheetCloseGeneration) return;
-      fileSheet.hidden = true;
-      fileSheet.inert = false;
-      delete fileSheet.dataset.closing;
-      delete fileSheetPanel.dataset.dragSettled;
-      fileSheetPanel.style.removeProperty('--mobile-sheet-drag');
-    };
-    const finishAfterAnimation = (event) => {
-      if (event.target === fileSheetPanel && event.animationName === 'mobile-sheet-out') finish();
-    };
-    fileSheetPanel.addEventListener('animationend', finishAfterAnimation);
-    closeTimer = setTimeout(finish, 600);
-  }
-
-  function ensureFileSheet() {
-    if (fileSheet) return;
-    fileSheet = element('section', 'mobile-file-sheet');
-    fileSheet.hidden = true;
-    fileSheet.tabIndex = -1;
-    fileSheet.setAttribute('role', 'dialog');
-    fileSheet.setAttribute('aria-modal', 'true');
-    fileSheet.setAttribute('aria-label', 'File preview');
-    fileSheetPanel = element('div', 'mobile-file-sheet-panel');
-    const handle = element('button', 'mobile-file-sheet-handle');
-    handle.type = 'button';
-    handle.setAttribute('aria-label', 'Drag down to close file preview');
-    const header = element('header', 'mobile-file-sheet-header');
-    const copy = element('span');
-    fileSheetTitle = element('strong', '', 'File');
-    fileSheetMeta = element('small');
-    copy.append(fileSheetTitle, fileSheetMeta);
-    fileSheetClose = createIconButton({
-      className: 'mobile-file-sheet-close close-button', label: 'Close file preview', glyph: '×',
-      variant: 'bare', size: 'xl',
-    });
-    fileSheetClose.addEventListener('click', closeFileSheet);
-    header.append(copy, fileSheetClose);
-    fileSheetBody = element('div', 'mobile-file-sheet-body');
-    fileSheetPanel.append(handle, header, fileSheetBody);
-    fileSheet.append(fileSheetPanel);
-    fileSheet.addEventListener('click', (event) => {
-      if (event.target === fileSheet) closeFileSheet();
-    });
-    fileSheet.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') closeFileSheet();
-    });
-    handle.addEventListener('pointerdown', (event) => {
-      fileSheetPointer = { id: event.pointerId, startY: event.clientY, distance: 0 };
-      handle.setPointerCapture?.(event.pointerId);
-      fileSheetPanel.dataset.dragging = 'true';
-    });
-    handle.addEventListener('pointermove', (event) => {
-      if (!fileSheetPointer || event.pointerId !== fileSheetPointer.id) return;
-      fileSheetPointer.distance = Math.max(0, event.clientY - fileSheetPointer.startY);
-      fileSheetPanel.style.setProperty('--mobile-sheet-drag', `${fileSheetPointer.distance}px`);
-    });
-    const finishFileSheetDrag = (event) => {
-      if (!fileSheetPointer || event.pointerId !== fileSheetPointer.id) return;
-      const shouldClose = fileSheetPointer.distance > 96;
-      fileSheetPointer = undefined;
-      fileSheetPanel.dataset.dragSettled = 'true';
-      delete fileSheetPanel.dataset.dragging;
-      if (shouldClose) closeFileSheet();
-      else fileSheetPanel.style.removeProperty('--mobile-sheet-drag');
-    };
-    handle.addEventListener('pointerup', finishFileSheetDrag);
-    handle.addEventListener('pointercancel', finishFileSheetDrag);
-    root.append(fileSheet);
-  }
-
-  async function openFileReference(reference, fallback) {
-    ensureFileSheet();
-    fileSheetCloseGeneration += 1;
-    delete fileSheet.dataset.closing;
-    delete fileSheetPanel.dataset.dragSettled;
-    fileSheetPanel.style.removeProperty('--mobile-sheet-drag');
-    fileSheet.inert = false;
-    const previewGeneration = ++filePreviewGeneration;
-    const candidates = conversationFiles(lastConversation).filter((file) => sameFilePath(file.path, reference.path));
-    let file = candidates.at(-1) || fallback;
-    fileSheet.hidden = false;
-    fileSheetTitle.textContent = reference.path.split('/').at(-1) || reference.path;
-    fileSheetMeta.textContent = reference.path;
-    fileSheetBody.replaceChildren(element('div', 'mobile-conversation-loading', 'Opening file…'));
-    fileSheet.focus({ preventScroll: true });
-    if (!file && sessionName && typeof readFile === 'function') {
-      try {
-        file = (await readFile(sessionName, reference.path))?.file;
-      } catch (error) {
-        if (previewGeneration !== filePreviewGeneration) return;
-        file = {
-          path: reference.path,
-          content: error.message || 'File content is unavailable.',
-          startLine: reference.startLine || 1,
-        };
-      }
-    }
-    if (previewGeneration !== filePreviewGeneration) return;
-    file ||= {
-      path: reference.path, content: 'File content was not captured in this conversation.', startLine: reference.startLine || 1,
-    };
-    const path = file.path || reference.path;
-    const startLine = reference.startLine || file.startLine || 1;
-    const endLine = reference.endLine || startLine;
-    fileSheetTitle.textContent = path.split('/').at(-1) || path;
-    fileSheetMeta.textContent = `${path}${reference.startLine ? ` · Lines ${startLine}${endLine !== startLine ? `–${endLine}` : ''}` : ''}`;
-    fileSheetBody.replaceChildren(filePreviewNode(file, {
-      path, startLine, endLine, streamId: `file-sheet:${path}`,
-    }));
-    animateSheetContent(fileSheetBody);
-  }
-
-  function searchMatchesNode(matches) {
-    const section = element('section', 'mobile-event-matches');
-    const list = element('div');
-    for (const match of matches) {
-      const button = element('button');
-      button.type = 'button';
-      const copy = element('span');
-      copy.append(element('strong', '', match.path), element('code', '', match.text || 'Match'));
-      button.append(element('small', '', `L${match.line}`), copy, element('i', '', '›'));
-      button.addEventListener('click', () => void openFileReference(
-        { path: match.path, startLine: match.line, endLine: match.line },
-        { path: match.path, content: match.text || '', startLine: match.line },
-      ));
-      list.append(button);
-    }
-    section.append(list);
-    return section;
-  }
-
-  function parsedToolInput(item) {
-    if (!item?.input) return {};
-    if (typeof item.input === 'object' && !Array.isArray(item.input)) return item.input;
-    try {
-      const input = JSON.parse(item.input);
-      return input && typeof input === 'object' && !Array.isArray(input) ? input : {};
-    } catch {
-      return {};
-    }
-  }
-
-  function searchToolTitle(item) {
-    if (item?.type !== 'tool' || (item.kind !== 'search' && !item.matches?.length)) return undefined;
-    const input = parsedToolInput(item);
-    const matchPaths = [...new Set((item.matches || []).map((match) => match.path).filter(Boolean))];
-    const scope = input.target_file || input.file_path || input.path || input.target_directory ||
-      (matchPaths.length === 1 ? matchPaths[0] : matchPaths.length > 1 ? `${matchPaths.length} files` : '');
-    const pattern = input.pattern || input.query || input.regex || item.subject || 'pattern';
-    const reportedCount = Number(String(item.output || '').match(/\b(?:Found\s+)?(\d+)\s+matches?\b/i)?.[1]);
-    const count = Number.isFinite(reportedCount) && reportedCount >= 0 ? reportedCount : item.matches?.length;
-    return [
-      `Search ${pattern}`,
-      scope ? `in ${scope}` : '',
-      Number.isFinite(count) ? `(${count} ${count === 1 ? 'match' : 'matches'})` : '',
-    ].filter(Boolean).join(' ');
-  }
-
-  function detail(panel, label, value, className = '') {
-    if (value === undefined || value === null || value === '') return;
-    const section = element('section', `mobile-event-detail ${className}`.trim());
-    section.append(element('small', '', label), element('pre', '', String(value)));
-    panel.append(section);
-  }
-
-  function changeLine(kind, oldNumber, newNumber, text, language) {
-    const row = element('div', 'mobile-event-change-line');
-    row.dataset.kind = kind;
-    row.append(
-      element('span', '', kind === 'remove' ? oldNumber || '' : newNumber || oldNumber || ''),
-      element('i', '', kind === 'add' ? '+' : kind === 'remove' ? '−' : ' '),
-      highlightCodeNode(element('code'), text, language),
-    );
-    return row;
-  }
-
-  function changeParts(change) {
-    const splitLines = (value) => {
-      const text = String(value || '').replace(/\n$/, '');
-      return text ? text.split('\n') : [];
-    };
-    const before = splitLines(change.oldText);
-    const after = splitLines(change.newText);
-    let prefix = 0;
-    while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) prefix += 1;
-    let suffix = 0;
-    while (suffix < before.length - prefix && suffix < after.length - prefix &&
-      before[before.length - 1 - suffix] === after[after.length - 1 - suffix]) suffix += 1;
-    return {
-      before, after, prefix, suffix,
-      removed: before.slice(prefix, before.length - suffix),
-      added: after.slice(prefix, after.length - suffix),
-    };
-  }
-
-  function changeStatsNode(added, removed) {
-    const stats = element('span', 'mobile-event-change-stats');
-    const addedCount = element('small', '', `+${added}`);
-    addedCount.dataset.kind = 'add';
-    const removedCount = element('small', '', `-${removed}`);
-    removedCount.dataset.kind = 'remove';
-    stats.append(addedCount, removedCount);
-    return stats;
-  }
-
-  function changeNode(change, index) {
-    const { before, after, prefix, suffix, removed, added } = changeParts(change);
-    const oldBase = Math.max(1, Number(change.oldLine) || 1);
-    const newBase = Math.max(1, Number(change.newLine) || 1);
-    const language = languageForPath(change.path);
-    const section = element('section', 'mobile-event-change');
-    const header = element('header');
-    header.append(
-      element('strong', '', change.path || 'Changed file'),
-      changeStatsNode(added.length, removed.length),
-    );
-    const scroll = element('div', 'mobile-event-change-scroll');
-    scroll.dataset.streamScroll = `diff:${index}:${change.path || 'changed-file'}`;
-    const lines = element('div', 'mobile-event-change-lines');
-    const contextStart = Math.max(0, prefix - 3);
-    if (contextStart > 0) lines.append(changeLine('skip', '', '', '…', language));
-    for (let index = contextStart; index < prefix; index += 1) {
-      lines.append(changeLine('context', oldBase + index, newBase + index, before[index], language));
-    }
-    removed.forEach((line, index) => {
-      lines.append(changeLine('remove', oldBase + prefix + index, '', line, language));
-    });
-    added.forEach((line, index) => {
-      lines.append(changeLine('add', '', newBase + prefix + index, line, language));
-    });
-    const contextCount = Math.min(3, suffix);
-    for (let index = 0; index < contextCount; index += 1) {
-      lines.append(changeLine(
-        'context', oldBase + before.length - suffix + index, newBase + after.length - suffix + index,
-        before[before.length - suffix + index], language,
-      ));
-    }
-    if (suffix > contextCount) lines.append(changeLine('skip', '', '', '…', language));
-    if (!lines.childNodes.length) lines.append(changeLine('context', oldBase, newBase, before[0] || after[0] || '', language));
-    scroll.append(lines);
-    section.append(header, scroll);
-    return section;
-  }
-
-  function commandNode(item) {
-    const section = element('section', 'mobile-tool-command');
-    const command = element('div', 'mobile-tool-command-line');
-    command.append(element('i', '', '$'), highlightCodeNode(element('code'), item.command, 'bash'));
-    section.append(command);
-    if (item.output) section.append(element('pre', 'mobile-tool-command-output', item.output));
-    return section;
-  }
-
-  function genericToolCommand(item) {
-    let input = item.input;
-    if (typeof input === 'string') {
-      try { input = JSON.parse(input); } catch { input = undefined; }
-    }
-    const inputTarget = input && typeof input === 'object' && !Array.isArray(input)
-      ? input.target_directory || input.target_file || input.file_path || input.path ||
-        input.query || input.pattern || input.url
-      : '';
-    const title = String(item.title || item.kind || item.name || 'Tool').trim();
-    const target = String(item.subject || inputTarget || item.locations?.[0] || '').trim();
-    if (!target || title.toLocaleLowerCase().includes(target.toLocaleLowerCase())) return title;
-    return `${title} ${target}`;
-  }
-
-  function genericToolNode(item) {
-    return commandNode({
-      command: genericToolCommand(item),
-      output: item.output || item.locations?.join('\n') || '',
-    });
-  }
-
-  function planListNode(item) {
-    const list = element('ol', 'mobile-plan-list');
-    for (const entry of item.entries || []) {
-      const row = element('li');
-      row.dataset.state = entry.status;
-      row.append(
-        element('i'),
-        element('span', '', entry.content),
-        element('small', '', statusLabel(entry.status)),
-      );
-      list.append(row);
-    }
-    return list;
-  }
-
-  function eventDetails(panel, item) {
-    if (item.type === 'recap') {
-      panel.append(markdownNode(item.text || '', {
-        onFileReference: (reference) => void openFileReference(reference),
-      }));
-    } else if (item.type === 'thought' || item.type === 'event') {
-      detail(panel, item.type === 'thought' ? 'Reasoning' : 'Details', item.text);
-    }
-    if (item.type === 'permission') detail(panel, 'Request', item.text || item.title);
-    if (item.type === 'tool') {
-      const diffs = Array.isArray(item.diffs) ? item.diffs : [];
-      if (diffs.length) {
-        for (const [index, change] of diffs.entries()) panel.append(changeNode(change, index));
-      } else {
-        if (item.command) panel.append(commandNode(item));
-        else if (!item.file && !item.matches?.length) panel.append(genericToolNode(item));
-        if (item.file) panel.append(filePreviewNode(item.file, { streamId: `read:${item.id}` }));
-        if (item.matches?.length) panel.append(searchMatchesNode(item.matches));
-      }
-      for (const output of item.images || []) {
-        const image = element('img', 'mobile-event-image');
-        image.alt = `${item.title || 'Tool'} output`;
-        image.loading = 'lazy';
-        image.src = `data:${output.mimeType};base64,${output.data}`;
-        panel.append(image);
-      }
-    }
-    if (item.type === 'plan') {
-      panel.append(planListNode(item));
-    }
-    if (item.type === 'goal') {
-      detail(panel, 'Objective', item.objective);
-      detail(panel, 'Phase', item.phase);
-      if (item.progress) detail(panel, 'Deliverables', `${metric(item.progress.completed)} / ${metric(item.progress.total)}`);
-      if (item.metrics) detail(panel, 'Usage', [
-        `${metric(item.metrics.tokensUsed)} tokens`,
-        duration(item.metrics.elapsedMs),
-        `${metric(item.metrics.workerRounds)} worker rounds`,
-        `${metric(item.metrics.verifyRounds)} verify rounds`,
-      ].join(' · '));
-      detail(panel, 'Latest event', item.lastEvent);
-    }
-    if (item.type === 'task') {
-      detail(panel, 'Command', item.command);
-      detail(panel, 'Directory', item.cwd);
-      detail(panel, 'Output', item.output);
-      detail(panel, 'Output file', item.outputFile);
-      if (item.exitCode !== undefined) detail(panel, 'Exit code', item.exitCode);
-    }
-    if (item.type === 'turn') {
-      detail(panel, 'Stop reason', item.stopReason);
-      if (item.usage) detail(panel, 'Usage', [
-        `${metric(item.usage.inputTokens)} in`,
-        `${metric(item.usage.outputTokens)} out`,
-        `${metric(item.usage.totalTokens)} total`,
-        `${metric(item.usage.cachedReadTokens)} cached`,
-        `${metric(item.usage.modelCalls)} calls`,
-        duration(item.usage.apiDurationMs),
-      ].join(' · '));
-    }
-    if (!panel.childNodes.length) detail(panel, 'Details', 'No additional details');
-  }
-
-  function permissionActions(item, status) {
-    const actions = element('div', 'mobile-permission-actions');
-    const hints = {
-      allow_once: 'Allow only this request',
-      allow_session: 'Allow for this session',
-      allow_always: 'Remember for future requests',
-      reject_once: 'Decline and return to Grok',
-      reject_always: 'Always decline this permission',
-    };
-    for (const option of item.options || []) {
-      const button = element('button');
-      button.type = 'button';
-      button.dataset.kind = option.kind || '';
-      button.dataset.optionId = option.id;
-      button.append(
-        element('strong', '', option.label),
-        element('small', '', hints[option.kind] || 'Choose this permission response'),
-      );
-      button.addEventListener('click', async () => {
-        for (const sibling of actions.querySelectorAll('button')) sibling.disabled = true;
-        try {
-          await respondPermission(sessionName, item.permissionId, option.id);
-          status.textContent = 'Permission sent';
-          status.dataset.state = 'working';
-        } catch (error) {
-          for (const sibling of actions.querySelectorAll('button')) sibling.disabled = false;
-          status.textContent = error.message || 'Permission failed';
-          status.dataset.state = 'error';
-          void refresh();
-        }
-      });
-      actions.append(button);
-    }
-    return actions;
-  }
-
-  function permissionDockNode(item) {
-    const card = element('section', 'mobile-interaction-card mobile-interaction-permission');
-    card.dataset.permissionId = item.permissionId;
-    card.dataset.state = item.status || 'pending';
-    const header = element('header', 'mobile-question-header');
-    const copy = element('span');
-    copy.append(element('strong', '', item.title || 'Permission required'));
-    const status = element('span', 'mobile-question-status', statusLabel(item.status));
-    status.dataset.state = item.status || 'pending';
-    header.append(copy, status);
-    card.append(header);
-    if (item.text) {
-      const details = element('details', 'mobile-permission-details');
-      details.open = true;
-      details.append(
-        element('summary', '', 'Command details'),
-        element('pre', '', item.text),
-      );
-      card.append(details);
-    }
-    card.append(permissionActions(item, status));
-    return card;
-  }
-
-  function eventNode(item) {
-    if ((item.type === 'recap' || (item.type === 'tool' && ['edit', 'write'].includes(item.kind))) &&
-        !autoExpandedItems.has(item.id)) {
-      autoExpandedItems.add(item.id);
-      expandedItems.add(item.id);
-    }
-    const card = element('article', `mobile-event-card mobile-event-${item.type}`);
-    card.dataset.eventId = item.id;
-    card.dataset.kind = item.kind || item.type;
-    card.dataset.state = item.status || 'completed';
-    const toggle = element('button', 'mobile-event-toggle');
-    toggle.type = 'button';
-    toggle.setAttribute('aria-expanded', String(expandedItems.has(item.id)));
-    const thinking = item.type === 'thought' && ['working', 'running'].includes(item.status);
-    const copy = element('span');
-    copy.append(element('small', '', item.type === 'thought' ? 'Reasoning' : item.kind || item.type));
-    const heading = element('span', 'mobile-event-heading');
-    const searchTitle = searchToolTitle(item);
-    heading.append(element('strong', '', item.type === 'thought'
-      ? thinking ? 'Thinking…' : 'Thought'
-      : searchTitle || item.title || 'Event'));
-    if (item.type === 'tool' && item.diffs?.length) {
-      const totals = item.diffs.reduce((summary, change) => {
-        const parts = changeParts(change);
-        summary.added += parts.added.length;
-        summary.removed += parts.removed.length;
-        return summary;
-      }, { added: 0, removed: 0 });
-      heading.append(changeStatsNode(totals.added, totals.removed));
-    }
-    copy.append(heading);
-    const state = element('span', 'mobile-event-status', item.type === 'thought' ? '' : statusLabel(item.status));
-    state.dataset.state = item.status;
-    if (thinking) {
-      state.classList.add('mobile-thinking-indicator');
-      state.setAttribute('aria-label', 'Thinking');
-    } else if (item.type === 'thought') state.hidden = true;
-    const arrow = element('i', '', '›');
-    const panel = element('div', 'mobile-event-panel');
-    panel.dataset.streamScroll = 'details';
-    initializeDisclosure(toggle, panel, expandedItems.has(item.id));
-    eventDetails(panel, item);
-    toggle.append(copy, state, arrow);
-    toggle.addEventListener('click', (event) => {
-      if (expandedItems.has(item.id)) expandedItems.delete(item.id);
-      else expandedItems.add(item.id);
-      const open = expandedItems.has(item.id);
-      animateDisclosure(toggle, panel, open);
-      if (item.type === 'tool' && event.detail !== 0) toggle.blur();
-    });
-    card.append(toggle, panel);
-    if (item.type === 'permission' && item.status === 'pending') {
-      card.append(permissionActions(item, state));
-    } else if (item.type === 'permission' && item.selectedLabel) {
-      card.append(element('div', 'mobile-permission-result', item.selectedLabel));
-    }
-    return card;
-  }
-
-  function updateQuestionState(questionId, next) {
-    pendingQuestions.set(questionId, next);
-    questionStateVersion += 1;
-  }
-
-  function questionAnswerValues(fieldset) {
-    const selected = Array.from(fieldset.querySelectorAll('input[type="radio"], input[type="checkbox"]'))
-      .filter((control) => control.checked)
-      .map((control) => control.dataset.other === 'true'
-        ? fieldset.querySelector('[data-question-custom]')?.value.trim()
-        : control.value)
-      .filter(Boolean);
-    return selected;
-  }
-
-  function keepCustomOptionVisible(customInput) {
-    const reveal = () => customInput.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    reveal();
-    window.visualViewport?.addEventListener('resize', reveal, { once: true });
-  }
-
-  function questionNode(item, { docked = false } = {}) {
-    const localState = pendingQuestions.get(item.questionId);
-    const resolved = !['calling', 'pending', 'working'].includes(item.status);
-    if (resolved || item.answers || item.answerSummary) pendingQuestions.delete(item.questionId);
-    const pending = resolved ? undefined : localState;
-    const submitting = pending?.status === 'submitting';
-    const card = element('article', 'mobile-question-card');
-    if (docked) card.classList.add('mobile-question-docked');
-    card.dataset.questionId = item.questionId;
-    card.dataset.state = submitting ? 'working' : item.status || 'pending';
-    const header = element('header', 'mobile-question-header');
-    const copy = element('span');
-    copy.append(element('strong', '', item.title || 'Question'));
-    const status = element('span', 'mobile-question-status', submitting ? 'Sending…' : statusLabel(item.status));
-    status.dataset.state = submitting ? 'working' : item.status || 'pending';
-    header.append(copy, status);
-    card.append(header);
-
-    if (resolved || item.answers || item.answerSummary) {
-      const summary = item.answerSummary || Object.values(item.answers || {}).flat().filter(Boolean).join(' · ');
-      if (summary) card.append(element('p', 'mobile-question-summary', summary));
-      return card;
-    }
-    if (item.status === 'calling') {
-      card.append(element('p', 'mobile-question-live', 'Preparing choices…'));
-      return card;
-    }
-    if (!(item.questions || []).length) {
-      card.append(element('p', 'mobile-question-live', 'Preparing choices…'));
-      return card;
-    }
-
-    const questions = item.questions || [];
-    const lastStep = Math.max(questions.length - 1, 0);
-    const step = Math.min(Math.max(pending?.step || 0, 0), lastStep);
-    card.dataset.questionStep = String(step);
-    const question = questions[step];
-    const form = element('form', 'mobile-question-form');
-    form.append(element('p', 'mobile-question-progress', `Question ${step + 1} of ${questions.length}`));
-    const live = element('p', 'mobile-question-live');
-    live.setAttribute('aria-live', 'polite');
-    if (pending?.status === 'failed') live.textContent = pending.error || 'Could not send your answer. Try again.';
-    const fieldset = element('fieldset', 'mobile-question-fieldset');
-    const legend = element('legend', '', question?.question || `Question ${step + 1}`);
-    fieldset.append(legend);
-    const options = element('div', 'mobile-question-options');
-    const inputType = question?.multiSelect ? 'checkbox' : 'radio';
-    const name = `question-${item.questionId}-${step}`;
-    for (const [optionIndex, option] of (question?.options || []).entries()) {
-      const label = element('label', 'mobile-question-option');
-      const control = element('input');
-      control.type = inputType;
-      control.name = name;
-      control.value = option.label || `Option ${optionIndex + 1}`;
-      control.disabled = submitting;
-      control.checked = Boolean(pending?.values?.[question.question]?.includes(control.value));
-      const copy = element('span');
-      copy.append(element('strong', '', option.label || `Option ${optionIndex + 1}`));
-      if (option.description) copy.append(element('small', '', option.description));
-      if (option.preview) copy.append(element('code', '', option.preview));
-      label.append(control, copy);
-      options.append(label);
-    }
-    const other = element('label', 'mobile-question-option mobile-question-other');
-    const otherControl = element('input');
-    otherControl.type = inputType;
-    otherControl.name = name;
-    otherControl.value = 'Other';
-    otherControl.dataset.other = 'true';
-    otherControl.disabled = submitting;
-    const otherCopy = element('span');
-    otherCopy.append(element('strong', '', 'Other'));
-    const custom = element('input', 'mobile-question-custom');
-    custom.type = 'text';
-    custom.placeholder = 'Add your own answer';
-    custom.setAttribute('aria-label', `Other answer for ${question?.question || `question ${step + 1}`}`);
-    custom.dataset.questionCustom = 'true';
-    custom.disabled = submitting;
-    custom.value = pending?.customs?.[question?.question] || '';
-    otherControl.checked = Boolean(custom.value);
-    custom.addEventListener('focus', () => {
-      otherControl.checked = true;
-      updateValidity();
-      keepCustomOptionVisible(custom);
-    });
-    otherCopy.append(custom);
-    other.append(otherControl, otherCopy);
-    options.append(other);
-    fieldset.append(options);
-    form.append(fieldset);
-    const actions = element('div', 'mobile-question-actions');
-    actions.dataset.firstStep = String(step === 0);
-    const back = element('button', 'mobile-question-back', 'Back');
-    back.type = 'button';
-    back.hidden = step === 0;
-    back.disabled = submitting;
-    const skip = element('button', 'mobile-question-skip', 'Skip');
-    skip.type = 'button';
-    skip.disabled = submitting;
-    const submit = element('button', 'mobile-question-submit', step < lastStep ? 'Next' : pending?.status === 'failed' ? 'Try again' : 'Continue');
-    submit.type = step < lastStep ? 'button' : 'submit';
-    submit.disabled = true;
-    actions.append(back, skip, submit);
-    form.append(live, actions);
-
-    function updateValidity() {
-      submit.disabled = submitting || questionAnswerValues(fieldset).length === 0;
-    }
-
-    function rememberSelections() {
-      if (submitting) return;
-      const previous = pendingQuestions.get(item.questionId);
-      updateQuestionState(item.questionId, {
-        status: previous?.status === 'failed' ? 'failed' : 'editing',
-        step,
-        values: { ...previous?.values, [question.question]: questionAnswerValues(fieldset) },
-        customs: { ...previous?.customs, [question.question]: custom.value.trim() },
-        ...(previous?.error ? { error: previous.error } : {}),
-      });
-    }
-
-    function showStep(nextStep) {
-      const previous = pendingQuestions.get(item.questionId) || {};
-      const { error, ...editable } = previous;
-      updateQuestionState(item.questionId, { ...editable, status: 'editing', step: nextStep });
-      renderedSignature = '';
-      if (lastConversation) render(lastConversation);
-    }
-
-    async function submitQuestion(outcome) {
-      if (submitting) return;
-      const values = { ...pending?.values, [question.question]: questionAnswerValues(fieldset) };
-      const customs = { ...pending?.customs, [question.question]: custom.value.trim() };
-      const answers = Object.fromEntries(Object.entries(values).map(([question, selected]) => [question, selected.join(', ')]));
-      updateQuestionState(item.questionId, { status: 'submitting', step, values, customs });
-      renderedSignature = '';
-      if (lastConversation) render(lastConversation);
-      try {
-        await respondQuestion(sessionName, item.threadId || threadId, item.questionId, answers, outcome);
-      } catch (error) {
-        updateQuestionState(item.questionId, {
-          ...pendingQuestions.get(item.questionId), status: 'failed', error: error.message,
-        });
-        renderedSignature = '';
-        if (lastConversation) render(lastConversation);
-        void refresh();
-      }
-    }
-
-    form.addEventListener('input', () => { updateValidity(); rememberSelections(); });
-    form.addEventListener('change', () => { updateValidity(); rememberSelections(); });
-    back.addEventListener('click', () => {
-      rememberSelections();
-      showStep(step - 1);
-    });
-    if (step < lastStep) submit.addEventListener('click', () => {
-      if (!submit.disabled) {
-        rememberSelections();
-        showStep(step + 1);
-      }
-    });
-    form.addEventListener('submit', (event) => {
-      event.preventDefault();
-      if (!submit.disabled) void submitQuestion('accepted');
-    });
-    skip.addEventListener('click', () => void submitQuestion('skip_interview'));
-    updateValidity();
-    card.append(form);
-    return card;
-  }
-
-  function planReviewState(item) {
-    const current = pendingPlanReviews.get(item.reviewId);
-    if (current?.content === item.planContent) return current;
-    const next = {
-      content: item.planContent, selection: undefined, comments: [],
-      status: 'editing', error: '', note: '', commentDraft: '',
-    };
-    pendingPlanReviews.set(item.reviewId, next);
-    return next;
-  }
-
-  function planLineKind(source, fenced) {
-    if (/^\s*```/.test(source)) return 'fence';
-    if (fenced) return 'code';
-    if (/^\s*#{1,6}\s+/.test(source)) return 'heading';
-    if (/^\s*(?:[-*+] |\d+[.)] )/.test(source)) return 'list';
-    return source.trim() ? 'text' : 'blank';
-  }
-
-  function planFeedback(state, outcome, extra) {
-    const blocks = state.comments.map((comment) => {
-      const location = comment.start === comment.end
-        ? `@plan.md:${comment.start}` : `@plan.md:${comment.start}-${comment.end}`;
-      return `${location}\n${comment.text}`;
-    });
-    if (extra.trim()) blocks.push(extra.trim());
-    if (!blocks.length) return '';
-    const lead = outcome === 'cancelled'
-      ? 'The user wants to revise the plan. The user said:'
-      : 'The user approved the plan with these review comments:';
-    return `${lead}\n${blocks.join('\n\n')}`;
-  }
-
-  function planReviewNode(item) {
-    const local = planReviewState(item);
-    const card = element('section', 'mobile-plan-review');
-    card.dataset.reviewId = item.reviewId;
-    card.dataset.state = local.status;
-    const header = element('header', 'mobile-plan-review-header');
-    const copy = element('span');
-    copy.append(
-      element('small', '', 'Plan review'),
-      element('strong', '', 'Review plan.md'),
-      element('p', '', 'Tap one line, then another to select a range and leave a comment.'),
-    );
-    const status = element('span', 'mobile-question-status', local.status === 'submitting' ? 'Sending…' : 'Pending');
-    header.append(copy, status);
-
-    const documentView = element('div', 'mobile-plan-document');
-    documentView.setAttribute('role', 'listbox');
-    documentView.setAttribute('aria-label', 'Plan lines');
-    const lineButtons = [];
-    let fenced = false;
-    const lines = String(item.planContent || '').replace(/\r\n?/g, '\n').split('\n');
-    for (const [index, source] of lines.entries()) {
-      const lineNumber = index + 1;
-      const kind = planLineKind(source, fenced);
-      const line = element('button', 'mobile-plan-line');
-      line.type = 'button';
-      line.dataset.line = String(lineNumber);
-      line.dataset.kind = kind;
-      line.setAttribute('role', 'option');
-      const displayed = kind === 'heading' ? source.replace(/^\s*#{1,6}\s+/, '') : source;
-      line.append(element('span', 'mobile-plan-line-number', String(lineNumber)), element('span', 'mobile-plan-line-text', displayed || ' '));
-      lineButtons.push(line);
-      documentView.append(line);
-      if (/^\s*```/.test(source)) fenced = !fenced;
-    }
-
-    const commentEditor = element('section', 'mobile-plan-comment-editor');
-    commentEditor.hidden = !local.selection;
-    const commentLabel = element('label', '', local.selection
-      ? `Comment on line ${local.selection.start}${local.selection.end !== local.selection.start ? `–${local.selection.end}` : ''}`
-      : 'Comment');
-    const commentInput = element('textarea');
-    commentInput.rows = 2;
-    commentInput.placeholder = 'What should Grok change here?';
-    commentInput.setAttribute('aria-label', commentLabel.textContent);
-    commentInput.value = local.commentDraft;
-    const commentActions = element('div', 'mobile-plan-comment-actions');
-    const cancelComment = element('button', '', 'Clear selection');
-    cancelComment.type = 'button';
-    const saveComment = element('button', '', 'Add comment');
-    saveComment.type = 'button';
-    saveComment.disabled = true;
-    commentActions.append(cancelComment, saveComment);
-    commentEditor.append(commentLabel, commentInput, commentActions);
-
-    const comments = element('div', 'mobile-plan-comments');
-    const notes = element('textarea', 'mobile-plan-review-notes');
-    notes.rows = 2;
-    notes.placeholder = 'Additional feedback (optional)';
-    notes.setAttribute('aria-label', 'Additional plan feedback');
-    notes.value = local.note;
-    const live = element('p', 'mobile-plan-review-live', local.error);
-    live.setAttribute('aria-live', 'polite');
-    const actions = element('div', 'mobile-plan-review-actions');
-    const requestChanges = element('button', 'mobile-plan-request-changes');
-    requestChanges.type = 'button';
-    requestChanges.append(element('strong', '', 'Request changes'), element('small', '', 'Send comments and keep planning'));
-    const approve = element('button', 'mobile-plan-approve');
-    approve.type = 'button';
-    approve.append(element('strong', '', 'Approve plan'), element('small', '', 'Leave Plan mode and start the work'));
-    const quit = element('button', 'mobile-plan-abandon', 'Quit Plan mode');
-    quit.type = 'button';
-    actions.append(requestChanges, approve, quit);
-
-    function paintSelection() {
-      const selection = local.selection;
-      for (const line of lineButtons) {
-        const value = Number(line.dataset.line);
-        const selected = Boolean(selection && value >= selection.start && value <= selection.end);
-        line.setAttribute('aria-selected', String(selected));
-      }
-      commentEditor.hidden = !selection;
-      if (selection) {
-        commentLabel.textContent = `Comment on line ${selection.start}${selection.end !== selection.start ? `–${selection.end}` : ''}`;
-        commentInput.setAttribute('aria-label', commentLabel.textContent);
-      }
-    }
-
-    function paintComments() {
-      comments.replaceChildren();
-      for (const [index, comment] of local.comments.entries()) {
-        const row = element('div', 'mobile-plan-comment');
-        const label = comment.start === comment.end ? `Line ${comment.start}` : `Lines ${comment.start}–${comment.end}`;
-        const remove = element('button', '', 'Remove');
-        remove.type = 'button';
-        remove.addEventListener('click', () => {
-          local.comments.splice(index, 1);
-          paintComments();
-          updateActions();
-        });
-        row.append(element('small', '', label), element('p', '', comment.text), remove);
-        comments.append(row);
-      }
-      comments.hidden = local.comments.length === 0;
-    }
-
-    function updateActions() {
-      const busy = local.status === 'submitting';
-      requestChanges.disabled = busy || (!local.comments.length && !notes.value.trim());
-      approve.disabled = busy;
-      quit.disabled = busy;
-      for (const line of lineButtons) line.disabled = busy;
-    }
-
-    for (const line of lineButtons) line.addEventListener('click', () => {
-      const value = Number(line.dataset.line);
-      if (!local.selection || local.selection.start !== local.selection.end) {
-        local.selection = { start: value, end: value };
-      } else if (value === local.selection.start) {
-        local.selection = undefined;
-      } else {
-        local.selection = {
-          start: Math.min(local.selection.start, value),
-          end: Math.max(local.selection.start, value),
-        };
-      }
-      commentInput.value = '';
-      local.commentDraft = '';
-      saveComment.disabled = true;
-      paintSelection();
-      if (local.selection) commentInput.focus({ preventScroll: true });
-    });
-    commentInput.addEventListener('input', () => {
-      local.commentDraft = commentInput.value;
-      saveComment.disabled = !commentInput.value.trim();
-    });
-    cancelComment.addEventListener('click', () => {
-      local.selection = undefined;
-      commentInput.value = '';
-      local.commentDraft = '';
-      paintSelection();
-    });
-    saveComment.addEventListener('click', () => {
-      if (!local.selection || !commentInput.value.trim()) return;
-      local.comments.push({ ...local.selection, text: commentInput.value.trim() });
-      local.selection = undefined;
-      commentInput.value = '';
-      local.commentDraft = '';
-      paintSelection();
-      paintComments();
-      updateActions();
-    });
-    notes.addEventListener('input', () => { local.note = notes.value; updateActions(); });
-
-    async function submit(outcome) {
-      if (local.status === 'submitting') return;
-      const feedback = planFeedback(local, outcome, notes.value);
-      if (outcome === 'cancelled' && !feedback) return;
-      local.status = 'submitting';
-      local.error = '';
-      card.dataset.state = 'submitting';
-      status.textContent = 'Sending…';
-      live.textContent = '';
-      updateActions();
-      try {
-        await respondPlanReview(sessionName, item.threadId || threadId, item.reviewId, outcome, feedback);
-      } catch (error) {
-        local.status = 'failed';
-        local.error = error.message || 'Could not send plan review. Try again.';
-        card.dataset.state = 'failed';
-        status.textContent = 'Try again';
-        live.textContent = local.error;
-        updateActions();
-        void refresh();
-      }
-    }
-    requestChanges.addEventListener('click', () => void submit('cancelled'));
-    approve.addEventListener('click', () => void submit('approved'));
-    quit.addEventListener('click', () => void submit('abandoned'));
-    paintSelection();
-    paintComments();
-    updateActions();
-    card.append(header, documentView, commentEditor, comments, notes, live, actions);
-    return card;
-  }
-
-  function toolGroupNode(item) {
-    let hasNewEditableTool = false;
-    for (const tool of item.tools || []) {
-      if (!['edit', 'write'].includes(tool.kind) || autoExpandedItems.has(tool.id)) continue;
-      hasNewEditableTool = true;
-      autoExpandedItems.add(tool.id);
-      expandedItems.add(tool.id);
-    }
-    if (hasNewEditableTool) {
-      autoExpandedItems.add(item.id);
-      expandedItems.add(item.id);
-    }
-    const group = element('article', 'mobile-tool-group');
-    group.dataset.eventId = item.id;
-    group.dataset.state = item.status || 'completed';
-    const toggle = element('button', 'mobile-tool-group-toggle');
-    toggle.type = 'button';
-    toggle.setAttribute('aria-expanded', String(expandedItems.has(item.id)));
-    toggle.append(
-      element('i'),
-      element('strong', '', item.title || `${item.tools?.length || 0} tools`),
-      element('small', '', statusLabel(item.status)),
-    );
-    const panel = element('div', 'mobile-tool-group-panel');
-    panel.dataset.streamScroll = 'tools';
-    initializeDisclosure(toggle, panel, expandedItems.has(item.id));
-    for (const tool of item.tools || []) {
-      const displayTitle = tool.command
-        ? `Ran ${tool.command}`
-        : tool.subject && !tool.title?.includes(tool.subject)
-          ? [tool.title, tool.subject].filter(Boolean).join(' ')
-          : tool.title;
-      const nested = eventNode({
-        ...tool,
-        title: displayTitle,
-      });
-      nested.__mobileItemSignature = JSON.stringify(tool);
-      panel.append(nested);
-    }
-    toggle.addEventListener('click', (event) => {
-      if (expandedItems.has(item.id)) expandedItems.delete(item.id);
-      else expandedItems.add(item.id);
-      const open = expandedItems.has(item.id);
-      animateDisclosure(toggle, panel, open);
-      if (event.detail !== 0) toggle.blur();
-    });
-    group.append(toggle, panel);
-    return group;
-  }
-
   function pendingInteraction(item) {
     if (item.type === 'permission') return item.status === 'pending';
     if (item.type === 'plan_review') return item.status === 'pending';
@@ -3244,123 +2199,7 @@ export function createMobileConversationView({
     return eventNode(item);
   }
 
-  function timelineNodeKey(node) {
-    if (node.nodeType !== Node.ELEMENT_NODE) return undefined;
-    if (node.matches('.mobile-tool-group')) return `group:${node.dataset.eventId}`;
-    if (node.matches('.mobile-event-card')) return `event:${node.dataset.eventId}`;
-    if (node.matches('.mobile-message')) {
-      return node.dataset.pending ? undefined : `message:${node.dataset.messageId}`;
-    }
-    if (node.matches('.mobile-question-card')) return `question:${node.dataset.questionId}`;
-    if (node.matches('.mobile-conversation-empty')) return 'conversation:empty';
-    if (node.matches('.mobile-conversation-loading')) return 'loading';
-    if (node.matches('.mobile-history-earlier')) return 'history:earlier';
-    return undefined;
-  }
-
-  function syncAttributes(current, fresh) {
-    const disclosureMoving = current.hasAttribute('data-disclosure-motion');
-    const preserve = disclosureMoving
-      ? new Set(['hidden', 'inert', 'aria-hidden', 'data-disclosure-motion'])
-      : undefined;
-    for (const attribute of [...current.attributes]) {
-      if (preserve?.has(attribute.name)) continue;
-      if (!fresh.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
-    }
-    for (const attribute of [...fresh.attributes]) {
-      if (preserve?.has(attribute.name)) continue;
-      if (current.getAttribute(attribute.name) !== attribute.value) {
-        current.setAttribute(attribute.name, attribute.value);
-      }
-    }
-  }
-
-  function syncEventCard(current, fresh) {
-    syncAttributes(current, fresh);
-    const currentToggle = current.querySelector(':scope > .mobile-event-toggle');
-    const freshToggle = fresh.querySelector(':scope > .mobile-event-toggle');
-    const currentPanel = current.querySelector(':scope > .mobile-event-panel');
-    const freshPanel = fresh.querySelector(':scope > .mobile-event-panel');
-    if (!currentToggle || !freshToggle || !currentPanel || !freshPanel) {
-      current.replaceChildren(...fresh.childNodes);
-      return current;
-    }
-    const freshExtras = [...fresh.children].filter((child) => child !== freshToggle && child !== freshPanel);
-    syncAttributes(currentToggle, freshToggle);
-    currentToggle.replaceChildren(...freshToggle.childNodes);
-    syncAttributes(currentPanel, freshPanel);
-    currentPanel.replaceChildren(...freshPanel.childNodes);
-    for (const child of [...current.children]) {
-      if (child !== currentToggle && child !== currentPanel) child.remove();
-    }
-    for (const child of freshExtras) current.append(child);
-    return current;
-  }
-
-  function reconcileTimeline(container, freshNodes) {
-    const currentByKey = new Map();
-    for (const node of [...container.children]) {
-      const key = timelineNodeKey(node);
-      if (key) currentByKey.set(key, node);
-    }
-    const kept = new Set();
-    let cursor = container.firstChild;
-    for (const fresh of freshNodes) {
-      const key = timelineNodeKey(fresh);
-      const current = key ? currentByKey.get(key) : undefined;
-      let node = fresh;
-      if (current && fresh.__mobileItemSignature !== undefined &&
-          current.__mobileItemSignature === fresh.__mobileItemSignature) {
-        // Most streamed snapshots only append text or update the newest tool.
-        // Keep all older nodes completely untouched so active taps, nested
-        // scroll positions, and compositor layers cannot be interrupted.
-        node = current;
-      } else if (current && current.matches('.mobile-tool-group') && fresh.matches('.mobile-tool-group')) {
-        syncAttributes(current, fresh);
-        const currentToggle = current.querySelector(':scope > .mobile-tool-group-toggle');
-        const freshToggle = fresh.querySelector(':scope > .mobile-tool-group-toggle');
-        const currentPanel = current.querySelector(':scope > .mobile-tool-group-panel');
-        const freshPanel = fresh.querySelector(':scope > .mobile-tool-group-panel');
-        if (currentToggle && freshToggle && currentPanel && freshPanel) {
-          syncAttributes(currentToggle, freshToggle);
-          if (currentToggle.textContent !== freshToggle.textContent) {
-            currentToggle.replaceChildren(...freshToggle.childNodes);
-          }
-          syncAttributes(currentPanel, freshPanel);
-          reconcileTimeline(currentPanel, [...freshPanel.children]);
-          node = current;
-        }
-      } else if (current && current.matches('.mobile-event-card') && fresh.matches('.mobile-event-card')) {
-        node = syncEventCard(current, fresh);
-      } else if (current && current.matches('.mobile-message') && fresh.matches('.mobile-message')) {
-        syncAttributes(current, fresh);
-        const currentContent = current.querySelector(':scope > .mobile-message-content[data-streaming="true"]');
-        const freshContent = fresh.querySelector(':scope > .mobile-message-content[data-streaming="true"]');
-        const freshSettledContent = fresh.querySelector(':scope > .mobile-message-content:not([data-streaming="true"])');
-        const previousText = currentContent?.__mobileRawText;
-        const nextText = freshContent?.__mobileRawText;
-        if (currentContent && freshContent && typeof previousText === 'string' &&
-            typeof nextText === 'string' && nextText.startsWith(previousText)) {
-          appendStreamingMarkdown(currentContent, nextText);
-        } else if (currentContent && freshSettledContent) {
-          // A completed turn should be visually identical to the last streamed
-          // frame. Morph once into the authoritative Markdown instead of
-          // replacing the entire message and flashing its layout.
-          morphStreamingMarkdown(currentContent, freshSettledContent, { streaming: false });
-        } else {
-          current.replaceChildren(...fresh.childNodes);
-        }
-        node = current;
-      }
-      if (node === current) node.__mobileItemSignature = fresh.__mobileItemSignature;
-      kept.add(node);
-      if (node === cursor) cursor = cursor.nextSibling;
-      else container.insertBefore(node, cursor);
-    }
-    for (const child of [...container.childNodes]) {
-      if (!kept.has(child)) child.remove();
-    }
-  }
+  const reconcileTimeline = createTimelineReconciler({ appendStreamingMarkdown, morphStreamingMarkdown });
 
   function render(conversation, { animate = false, fromStream = false } = {}) {
     const previousConversation = lastConversation;

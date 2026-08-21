@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
+import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -93,6 +94,17 @@ function remoteRequest(url, { method = 'GET', headers, body } = {}) {
   });
 }
 
+function rawHttpRequest(url, source) {
+  const { hostname, port } = new URL(url);
+  return new Promise((resolve, reject) => {
+    const socket = createConnection({ host: hostname, port: Number(port) }, () => socket.write(source));
+    const chunks = [];
+    socket.on('data', (chunk) => chunks.push(chunk));
+    socket.once('error', reject);
+    socket.once('close', () => resolve(Buffer.concat(chunks).toString('utf8')));
+  });
+}
+
 function localRemoteHeaders(url, headers = {}) {
   return { Origin: new URL(url).origin, ...headers };
 }
@@ -137,7 +149,10 @@ async function waitForCondition(predicate, message, timeoutMs = 5000) {
 
 test('serves the frontend and health status', async () => {
   await withServer({}, async (url) => {
-    const [page, manifest, tokens, apiClient, promptTitle, uiComponents, remoteControl, mobileConversation, markdown, syntax, markedVendor, purifierVendor, highlightVendor, health] = await Promise.all([
+    const [page, manifest, tokens, apiClient, promptTitle, uiComponents, remoteControl, mobileConversation,
+      mobileActivityState, mobileComposerModel, mobileTimelineReconciler, mobileFileSurface,
+      mobileEventRenderer, mobileInteractionRenderer, terminalSnapshots, visualViewport, browserMedia,
+      markdown, syntax, markedVendor, purifierVendor, highlightVendor, health] = await Promise.all([
       fetch(url),
       fetch(`${url}/manifest.webmanifest`),
       fetch(`${url}/tokens.css`),
@@ -146,6 +161,15 @@ test('serves the frontend and health status', async () => {
       fetch(`${url}/ui-components.js`),
       fetch(`${url}/remote-control.js`),
       fetch(`${url}/mobile-conversation.js`),
+      fetch(`${url}/mobile-activity-state.js`),
+      fetch(`${url}/mobile-composer-model.js`),
+      fetch(`${url}/mobile-timeline-reconciler.js`),
+      fetch(`${url}/mobile-file-surface.js`),
+      fetch(`${url}/mobile-event-renderer.js`),
+      fetch(`${url}/mobile-interaction-renderer.js`),
+      fetch(`${url}/terminal-snapshots.js`),
+      fetch(`${url}/visual-viewport.js`),
+      fetch(`${url}/browser-media.js`),
       fetch(`${url}/markdown.js`),
       fetch(`${url}/syntax.js`),
       fetch(`${url}/vendor/marked.js`),
@@ -173,6 +197,15 @@ test('serves the frontend and health status', async () => {
     assert.match(await promptTitle.text(), /derivePromptTitle/);
     assert.equal(uiComponents.status, 200);
     assert.match(await uiComponents.text(), /createIconButton/);
+    assert.equal(mobileActivityState.status, 200);
+    assert.equal(mobileComposerModel.status, 200);
+    assert.equal(mobileTimelineReconciler.status, 200);
+    assert.equal(mobileFileSurface.status, 200);
+    assert.equal(mobileEventRenderer.status, 200);
+    assert.equal(mobileInteractionRenderer.status, 200);
+    assert.equal(terminalSnapshots.status, 200);
+    assert.equal(visualViewport.status, 200);
+    assert.equal(browserMedia.status, 200);
     assert.equal(remoteControl.status, 200);
     assert.match(remoteControl.headers.get('content-type'), /^text\/javascript/);
     assert.equal(mobileConversation.status, 200);
@@ -1377,10 +1410,25 @@ test('routes backend split controls to the connected terminal websocket', async 
 test('rejects websocket clients without the configured token', async () => {
   await withServer({ token: 'secret' }, async (url) => {
     await assert.rejects(connect(url), /401/);
-    const socket = await connect(url, '/ws?token=secret');
+    await assert.rejects(connect(url, '/ws?token=secret'), /400/);
+    const socket = await connect(url, '/ws', { headers: { Authorization: 'Bearer secret' } });
     const output = waitForOutput(socket, '__AUTHORIZED__');
     socket.send(JSON.stringify({ type: 'input', data: "printf '__AUTHORIZED__\\r\\n'\r" }));
     assert.match(await output, /__AUTHORIZED__/);
+    socket.close();
+  });
+});
+
+test('exchanges the initial local token for a cookie used by HTTP and websocket clients', async () => {
+  await withServer({ token: 'secret' }, async (url) => {
+    const bootstrap = await fetch(`${url}/?token=secret`, { redirect: 'manual' });
+    assert.equal(bootstrap.status, 303);
+    assert.equal(bootstrap.headers.get('location'), '/');
+    const cookie = bootstrap.headers.get('set-cookie').split(';', 1)[0];
+    assert.match(cookie, /^agent_remote_local=[A-Za-z0-9_-]+$/);
+    assert.equal((await fetch(`${url}/api/sessions`, { headers: { Cookie: cookie } })).status, 200);
+    assert.equal((await fetch(`${url}/api/sessions?token=secret`)).status, 400);
+    const socket = await connect(url, '/ws', { headers: { Cookie: cookie } });
     socket.close();
   });
 });
@@ -1396,12 +1444,40 @@ test('blocks cross-origin browser websocket connections', async () => {
   });
 });
 
+test('rejects DNS-rebinding authorities for HTTP and websocket traffic', async () => {
+  await withServer({}, async (url) => {
+    const port = new URL(url).port;
+    const authority = `attacker.example:${port}`;
+    const response = await rawHttpRequest(url,
+      `GET /api/sessions HTTP/1.1\r\nHost: ${authority}\r\nOrigin: http://${authority}\r\nConnection: close\r\n\r\n`);
+    assert.match(response, /^HTTP\/1\.1 403 /);
+    await assert.rejects(connect(url, '/ws', {
+      headers: { Host: authority, Origin: `http://${authority}` },
+    }), /403/);
+  });
+});
+
+test('rejects malformed request targets without crashing the HTTP server', async () => {
+  await withServer({}, async (url) => {
+    const response = await rawHttpRequest(url,
+      `GET http://[ HTTP/1.1\r\nHost: ${new URL(url).host}\r\nConnection: close\r\n\r\n`);
+    assert.match(response, /^HTTP\/1\.1 400 /);
+    const upgrade = await rawHttpRequest(url,
+      `GET http://[ HTTP/1.1\r\nHost: ${new URL(url).host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n`);
+    assert.match(upgrade, /^HTTP\/1\.1 400 /);
+    assert.equal((await fetch(`${url}/health`)).status, 200);
+  });
+});
+
 test('protects session management APIs with token and origin checks', async () => {
   await withServer({ token: 'secret' }, async (url) => {
     assert.equal((await fetch(`${url}/api/sessions`)).status, 401);
-    assert.equal((await fetch(`${url}/api/sessions?token=secret`)).status, 200);
-    assert.equal((await fetch(`${url}/api/sessions?token=secret`, {
-      headers: { Origin: 'https://evil.example' },
+    assert.equal((await fetch(`${url}/api/sessions?token=secret`)).status, 400);
+    assert.equal((await fetch(`${url}/api/sessions`, {
+      headers: { Authorization: 'Bearer secret' },
+    })).status, 200);
+    assert.equal((await fetch(`${url}/api/sessions`, {
+      headers: { Origin: 'https://evil.example', Authorization: 'Bearer secret' },
     })).status, 403);
   });
 });

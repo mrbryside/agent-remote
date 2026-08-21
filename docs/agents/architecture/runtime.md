@@ -2,14 +2,30 @@
 
 ## Process boundaries
 
-- `src/server.js` owns both loopback HTTP listeners, the HTTP API, terminal, conversation, and renderer WebSockets, direct PTYs, static assets, and browser-renderer coordination. Local control defaults to `127.0.0.1:3000`; Remote gateway defaults to `127.0.0.1:3001`.
+- `src/server.js` composes both loopback HTTP listeners and owns terminal,
+  conversation, and renderer WebSocket lifecycles, direct PTYs, and
+  browser-renderer coordination. Focused HTTP handlers and protocol helpers
+  live under `src/server/`; renderer process lifecycle, CDP surface state,
+  graphics socket translation, and terminal-browser daemon control also have
+  separate modules there. HTTP dispatch, DevTools transport, conversation
+  sockets, and terminal sockets are isolated transport modules as well. They
+  receive stores and lifecycle callbacks from the composition root. Local
+  control defaults to `127.0.0.1:3000`; Remote gateway defaults to
+  `127.0.0.1:3001`.
 - The local listener owns Remote administration (`/api/remote/*`). The remote listener is a pre-route authentication gate and returns `404` for those routes even for an authenticated device; it delegates the normal workspace, terminal, renderer, and DevTools surfaces only after device authentication.
+- `src/server/local-auth.js` owns the narrow local bearer bootstrap and in-memory browser session cookie. Its HTTP/upgrade gates must run before local route dispatch: they exchange only `/?token=…`, reject all other token query parameters, and adapt a validated cookie to the existing internal authorization boundary. Do not place bearer tokens in browser-generated API, asset, SSE, image, or WebSocket URLs.
+- `src/server/request-target.js` is the single request-target parser for HTTP and WebSocket entrypoints. It accepts canonical origin-form targets only and returns a bounded `400` rejection for malformed, absolute-form, encoded-separator, or dot-normalized paths. Every async HTTP entrypoint must terminate rejected promises with a generic response; malformed input must never reach Node's unhandled-rejection boundary.
+- Local HTTP and WebSocket authorization validates the request `Host` against the actual listener address/port before considering `Origin`; equality between two client-controlled headers is not trust. Both workspace documents deny framing. Node request/header/keep-alive limits are explicit, and workspace SSE, conversation HTTP SSE, and DevTools WebSockets share the normalized `MAX_CONNECTIONS` capacity.
 - `src/remote/` owns Remote persistence, macOS Keychain credentials, Cloudflare API/DNS ownership checks, tunnel child lifecycle, device authentication, and remote gateway policy. Read [Remote access](remote-access.md) before changing these boundaries.
 - `src-tauri/src/main.rs` is a thin macOS wrapper. It attaches to a compatible local backend or owns a spawned sidecar; it does not duplicate backend behavior or grant the webview privileged IPC.
 - `src/sessions.js` creates and discovers only tmux sessions carrying the `@agent_remote` marker. Those sessions outlive browser connections.
 - `src/agents.js` owns the project-agent catalog. Project APIs accept an agent ID, and only the server resolves it to a launch command. Browser responses never expose those commands.
-- `public/app.js` owns mounted xterm runtimes, optimistic project/chat UI, session switching, per-session browser panes, and viewport resizing.
-- `src/conversations/` maps managed agent metadata to provider-owned conversation data. Grok uses an Agent Remote-specific shared ACP leader socket for replay, live updates, input, and nested subagents; it must not reuse Grok's default global leader socket. `public/mobile-conversation.js` renders its provider-neutral schema only on compact viewports.
+- `public/app.js` composes mounted xterm runtimes, optimistic project/chat UI,
+  session switching, and per-session browser panes. `public/browser-media.js`
+  owns renderer frame painting and recording, `public/terminal-snapshots.js`
+  owns bounded ANSI snapshot persistence, and `public/visual-viewport.js` owns
+  iOS viewport measurement and listener lifecycle.
+- `src/conversations/` maps managed agent metadata to provider-owned conversation data. Grok uses an Agent Remote-specific shared ACP leader socket for replay, live updates, input, and nested subagents; it must not reuse Grok's default global leader socket. `src/conversations/grok-state.js` owns persisted lifecycle reconciliation and model/context metadata. `public/mobile-conversation.js` composes the provider-neutral compact UI; file surfaces, event/tool cards, question/plan interactions, activity state, composer ranking, and keyed timeline reconciliation live in focused modules.
 - `bin/agent-remote.js` is the standalone session launcher. `bin/terminal-browser` routes agent browser commands back to the owning web session.
 
 ## Main terminal flow
@@ -42,11 +58,10 @@ copy while readiness is delayed. Pending chat creation and the promoted managed 
 reuse that same uninterrupted cover. Other catalog agents and standalone
 terminal commands retain the bounded quiet-window reveal path.
 
-The native mobile boot cover and desktop startup cover share the same `Agent chat`
-composition: orbit mark, `Preparing chat…` heading, and animated loading
-indicator. Mobile hides its conversation header, activity docks, and composer
-until the first complete snapshot replaces that cover, so startup presents the
-same centered page at both responsive sizes.
+The native mobile boot cover and desktop startup cover use the same minimal
+animated loading indicator. On mobile the cover is confined to message history;
+the conversation navbar and composer remain mounted, visible, and spatially
+stable while the composer is inert until the first complete snapshot arrives.
 
 ## State ownership
 
@@ -55,7 +70,9 @@ same centered page at both responsive sizes.
 | Running commands and shell history | tmux session |
 | Project definitions and chat metadata | SQLite via `src/projects.js` |
 | Active selection, expanded projects, pane widths | browser storage |
-| Mounted terminal caches during one page lifetime | `public/app.js` runtime maps |
+| Mounted terminal runtimes during one page lifetime | `public/app.js` runtime maps |
+| Bounded terminal restore snapshots | `public/terminal-snapshots.js` in session storage |
+| Mobile activity dismissal | `public/mobile-activity-state.js` per-session local storage |
 | Agent message/tool/subagent history | provider-owned files, read through `src/conversations/` |
 | Live mobile token/lifecycle delivery | session-scoped `/conversation-ws`, reconciled by provider snapshots |
 | Active Grok goal and elapsed metrics | provider ACP Goal updates, projected into the conversation snapshot |

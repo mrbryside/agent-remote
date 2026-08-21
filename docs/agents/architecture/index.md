@@ -9,5 +9,6 @@ Read this category before changing process ownership, WebSocket protocols, tmux/
 | Project/chat persistence and authoritative state | [Persistence](persistence.md) |
 | Terminal-browser renderer and session split lifecycle | [Browser renderer](browser-renderer.md) |
 | Mobile conversation providers and agent-session mapping | [Conversation providers](conversation-providers.md) |
+| Frontend domain modules and extraction boundaries | [Frontend modules](frontend-modules.md) |
 
 [Back to AGENTS.md](../../../AGENTS.md)
