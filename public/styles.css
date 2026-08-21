@@ -361,7 +361,7 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
 .primary-button, .quiet-button, .danger-button { padding: clamp(7px, .75vw, 8px) clamp(10px, 1vw, 12px); border-radius: 8px; cursor: pointer; font-size: clamp(11px, .95vw, 12px); transition: background .15s, border-color .15s, transform .15s, opacity .15s; }
 .primary-button { border: 1px solid var(--color-button-primary-border); background: var(--color-button-surface); color: var(--color-button-primary-text); font-weight: 620; }
 .primary-button:hover { border-color: var(--color-button-primary-border-hover); background: var(--color-button-surface); }
-.primary-button:disabled { cursor: wait; opacity: .55; }
+.primary-button:disabled { cursor: not-allowed; opacity: .55; }
 .quiet-button { border: 1px solid var(--color-button-neutral-border); background: var(--color-button-surface); color: var(--color-button-neutral-text); }
 .quiet-button:hover { border-color: var(--color-button-neutral-border-hover); background: var(--color-button-surface); color: var(--color-button-neutral-text-hover); }
 .danger-button { border: 1px solid var(--color-button-danger-border); background: var(--color-button-surface); color: var(--color-button-danger-text); }

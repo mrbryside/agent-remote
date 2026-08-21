@@ -359,6 +359,9 @@ test('keeps Remote configuration separate from the header Start and Stop control
   await remoteDialog.getByRole('button', { name: 'Next: Pair devices' }).click();
   await expect(remoteDialog.getByRole('heading', { name: 'Scan devices locally' })).toBeVisible();
   await expect(remoteDialog.locator('#remote-step-caption')).toHaveText('Step 2 of 2');
+  const disabledPairAction = remoteDialog.getByRole('button', { name: 'Create QR code' });
+  await expect(disabledPairAction).toBeDisabled();
+  await expect(disabledPairAction).toHaveCSS('cursor', 'not-allowed');
   expect(quickCalls).toBe(0);
   await power.click();
   await quickStarted;
