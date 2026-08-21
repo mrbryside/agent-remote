@@ -200,6 +200,19 @@ function rendererViewport(width, height) {
   };
 }
 
+export function selectRendererViewport(requests, fallback) {
+  const candidates = [...(requests || [])].filter((viewport) =>
+    Number.isInteger(viewport?.width) && viewport.width >= 160 && viewport.width <= 4096 &&
+    Number.isInteger(viewport?.height) && viewport.height >= 120 && viewport.height <= 4096);
+  if (candidates.length === 0) return fallback ? rendererViewport(fallback.width, fallback.height) : undefined;
+  return candidates.reduce((largest, candidate) => {
+    const area = candidate.width * candidate.height;
+    const largestArea = largest.width * largest.height;
+    if (area !== largestArea) return area > largestArea ? candidate : largest;
+    return candidate.width > largest.width ? candidate : largest;
+  });
+}
+
 function jpegDimensions(data) {
   let buffer;
   try {
@@ -231,6 +244,9 @@ function jpegDimensions(data) {
 
 const staticRoutes = new Map([
   ['/', join(publicDir, 'index.html')],
+  ['/manifest.webmanifest', join(publicDir, 'manifest.webmanifest')],
+  ['/document-boot.js', join(publicDir, 'document-boot.js')],
+  ['/workspace-boot.js', join(publicDir, 'workspace-boot.js')],
   ['/app.js', join(publicDir, 'app.js')],
   ['/api-client.js', join(publicDir, 'api-client.js')],
   ['/remote-control.js', join(publicDir, 'remote-control.js')],
@@ -253,7 +269,15 @@ const contentTypes = {
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
+
+const remoteWorkspaceDocumentHeaders = Object.freeze({
+  'cache-control': 'no-store',
+  'content-security-policy': "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; connect-src 'self'; worker-src 'self' blob:; font-src 'self' data:",
+  'referrer-policy': 'no-referrer',
+  'x-frame-options': 'DENY',
+});
 
 function sendJson(socket, payload) {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
@@ -400,17 +424,74 @@ export function createTerminalServer(options = {}) {
   const agentCatalog = createAgentCatalog(options.agentDefinitions);
   const clients = new Set();
   const conversationStreams = new Set();
+  const workspaceStreams = new Set();
+  let workspaceRevision = 0;
   const conversationInputQueues = new Map();
   const conversationInputRequests = new Map();
   const clientContexts = new Map();
   const renderers = new Map();
   const browserAgentCleanups = new Set();
+  const rendererDiscoveryAttempts = Number.isInteger(options.rendererDiscoveryAttempts)
+    ? Math.max(1, options.rendererDiscoveryAttempts)
+    : 50;
+  const rendererDiscoveryIntervalMs = Number.isInteger(options.rendererDiscoveryIntervalMs)
+    ? Math.max(0, options.rendererDiscoveryIntervalMs)
+    : 200;
   const closeBrowserAutomationSession = options.closeBrowserAutomationSession
     ?? closeTerminalBrowserAgentSession;
   const reapBrowserAutomationSessions = options.reapBrowserAutomationSessions
     ?? reapStaleTerminalBrowserAgentSessions;
   const projectStore = createProjectStore(config.databaseFile);
   let localControlUrl = '';
+
+  function publishWorkspaceChange({ type = 'workspace-changed', deleted = [] } = {}) {
+    const event = {
+      revision: ++workspaceRevision,
+      type,
+      deleted: [...new Set(deleted.filter((name) => typeof name === 'string' && name))],
+    };
+    for (const stream of [...workspaceStreams]) stream.send?.(event);
+    return event;
+  }
+
+  function openWorkspaceStream(request, response, surface) {
+    response.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-store, no-transform',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+      'x-content-type-options': 'nosniff',
+    });
+    response.flushHeaders?.();
+    response.socket?.setNoDelay?.(true);
+    response.write(`:${' '.repeat(2_048)}\nretry: 1000\n\n`);
+    let closed = false;
+    let untrackRemoteStream = () => {};
+    const close = async () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      workspaceStreams.delete(close);
+      untrackRemoteStream();
+      if (!response.writableEnded) response.end();
+    };
+    close.send = (event) => {
+      if (closed || response.writableEnded) return;
+      response.write(`id: ${event.revision}\nevent: workspace\ndata: ${JSON.stringify(event)}\n\n`);
+      response.flush?.();
+    };
+    const heartbeat = setInterval(() => {
+      if (!closed && !response.writableEnded) {
+        response.write(`event: heartbeat\ndata: ${Date.now()}\n\n`);
+        response.flush?.();
+      }
+    }, 15_000);
+    heartbeat.unref?.();
+    workspaceStreams.add(close);
+    if (surface === 'remote') untrackRemoteStream = remoteGateway.trackStream(close, request);
+    response.once('close', () => void close());
+    response.write(`event: ready\ndata: ${JSON.stringify({ revision: workspaceRevision })}\n\n`);
+  }
   const grokAcpClient = options.grokAcpClient ?? createGrokAcpClient({
     command: options.grokCommand ?? 'grok',
     spawn: options.grokAcpSpawn,
@@ -430,12 +511,15 @@ export function createTerminalServer(options = {}) {
   const conversationAttachments = options.conversationAttachments ?? createConversationAttachmentStore();
   const remoteStore = options.remoteStore ?? createRemoteStore(config.databaseFile);
   const remoteDeviceSockets = new Map();
+  let remoteGateway;
   const closeRemoteDeviceSockets = (deviceId) => {
     const sockets = remoteDeviceSockets.get(deviceId);
-    if (!sockets) return;
-    for (const socket of [...sockets]) {
-      if (socket.readyState < WebSocket.CLOSING) socket.close(4003, 'Device revoked');
+    if (sockets) {
+      for (const socket of [...sockets]) {
+        if (socket.readyState < WebSocket.CLOSING) socket.close(4003, 'Device revoked');
+      }
     }
+    remoteGateway?.closeDeviceConnections(deviceId);
   };
   const remoteAuth = options.remoteAuth ?? createRemoteAuth({
     store: remoteStore,
@@ -475,10 +559,11 @@ export function createTerminalServer(options = {}) {
     platform: options.remotePlatform ?? process.platform,
     allowInsecurePublicOrigin: options.remoteAllowInsecurePublicOrigin === true,
   });
-  const remoteGateway = createRemoteGateway({
+  remoteGateway = createRemoteGateway({
     auth: remoteAuth,
     getPublicUrl: options.getRemotePublicUrl ?? (() => options.remotePublicUrl ?? tunnelManager.status().publicUrl),
     allowInsecurePublicOrigin: options.remoteAllowInsecurePublicOrigin === true,
+    now: options.remoteAuthNow ?? Date.now,
   });
   let remoteRestore = Promise.resolve();
 
@@ -589,6 +674,12 @@ export function createTerminalServer(options = {}) {
       if (await stopManagedSession(config.tmuxCommand, session.name)) closeRenderer(`session:${session.name}`);
     }
     projectStore.removeProjectChats(projectId);
+    if (sessions.length) {
+      publishWorkspaceChange({
+        type: 'sessions-deleted',
+        deleted: sessions.map((session) => session.name),
+      });
+    }
     return sessions.length;
   }
 
@@ -723,6 +814,34 @@ export function createTerminalServer(options = {}) {
       const pending = client.pendingRendererFrame;
       client.pendingRendererFrame = undefined;
       if (!error && pending) sendRendererFrame(client, pending);
+    });
+  }
+
+  function setRendererState(renderer, state, message) {
+    if (renderer.state === state && renderer.stateMessage === message) return;
+    renderer.state = state;
+    renderer.stateMessage = message;
+    const payload = { type: 'renderer-state', state };
+    if (message) payload.message = message;
+    for (const client of renderer.clients) sendJson(client, payload);
+  }
+
+  function requestRendererViewport(renderer) {
+    const requested = selectRendererViewport(
+      [...renderer.clients]
+        .filter((client) => client.readyState === WebSocket.OPEN && client.rendererVisible !== false)
+        .map((client) => client.rendererViewport)
+        .filter(Boolean),
+      renderer.pendingViewport || renderer.viewport,
+    );
+    if (!requested) return;
+    const pending = renderer.pendingViewport;
+    const current = renderer.viewport;
+    if ((pending && pending.width === requested.width && pending.height === requested.height) ||
+        (!pending && current && current.width === requested.width && current.height === requested.height)) return;
+    renderer.pendingViewport = requested;
+    if (renderer.cdp) void configureRendererViewport(renderer).catch((error) => {
+      setRendererState(renderer, 'failed', error.message || 'Browser viewport configuration failed');
     });
   }
 
@@ -972,8 +1091,10 @@ export function createTerminalServer(options = {}) {
     // leaving the cover stuck until a manual resize produces another frame.
     broadcastSurfaceInfo(renderer);
     await configureRendererViewport(renderer);
+    if (!renderer.lastFrame) throw new Error('Browser surface did not produce a first frame');
     renderer.outputChunks = [];
     renderer.outputBytes = 0;
+    setRendererState(renderer, 'ready');
     broadcastSurface(renderer);
   }
 
@@ -1091,20 +1212,28 @@ export function createTerminalServer(options = {}) {
   }
 
   async function discoverRendererSurface(renderer, previousKeys) {
-    for (let attempt = 0; attempt < 50 && !renderer.closing; attempt += 1) {
+    for (let attempt = 0; attempt < rendererDiscoveryAttempts && !renderer.closing; attempt += 1) {
       const browsers = await listTerminalBrowsers();
       const claimed = new Set([...renderers.values()].map((item) => item.browserKey).filter(Boolean));
       const browser = browsers.find((item) => !previousKeys.has(item.key) && !claimed.has(item.key));
       if (browser) {
         renderer.browserKey = browser.key;
         renderer.browserSocket = browser.socket;
-        try { await connectRendererSurface(renderer, browser); } catch {}
+        try {
+          await connectRendererSurface(renderer, browser);
+        } catch (error) {
+          renderer.browserKey = undefined;
+          renderer.browserSocket = undefined;
+          throw new Error(`Could not connect to terminal-browser: ${error.message}`);
+        }
         renderer.tabPoll = setInterval(() => void refreshRendererSurface(renderer), 1000);
         renderer.tabPoll.unref?.();
-        return;
+        return browser;
       }
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await new Promise((resolve) => setTimeout(resolve, rendererDiscoveryIntervalMs));
     }
+    if (!renderer.closing) throw new Error('terminal-browser did not register a browser surface');
+    return undefined;
   }
 
   async function launchRenderer(renderer, argv) {
@@ -1113,8 +1242,10 @@ export function createTerminalServer(options = {}) {
     const previous = discoversBrowser
       ? new Set((await listTerminalBrowsers()).map((browser) => browser.key))
       : null;
-    renderer.terminal.write(`${argv.map(shellQuote).join(' ')}\r`);
-    if (previous) void discoverRendererSurface(renderer, previous);
+    setRendererState(renderer, discoversBrowser ? 'starting' : 'terminal');
+    const command = argv.map(shellQuote).join(' ');
+    renderer.terminal.write(`${discoversBrowser ? 'TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK=1 ' : ''}${command}\r`);
+    if (previous) await discoverRendererSurface(renderer, previous);
   }
 
   function rendererEnvironment() {
@@ -1135,11 +1266,24 @@ export function createTerminalServer(options = {}) {
     };
     delete environment.TMUX;
     delete environment.TMUX_PANE;
+    // The renderer PTY never paints terminal-browser's Kitty image stream;
+    // agent-remote consumes its registered Chrome/CDP surface instead. Assign
+    // this after normalizing inherited terminal metadata so an inherited
+    // empty value can never win over the renderer contract.
+    environment.TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK = '1';
     return environment;
   }
 
   function createRenderer(key, cols, rows) {
-    const terminal = pty.spawn(config.shell, config.shellArgs, {
+    // A graphics renderer is an internal command transport, not the user's
+    // interactive shell. Starting it through the configured login shell lets
+    // zsh/bash profiles race the first launch write (and can consume or delay
+    // it), which is why a first terminal-browser open could hang while a retry
+    // succeeded. A profile-free POSIX shell gives the renderer a deterministic
+    // ready stdin while preserving its PTY for terminal-browser key input.
+    const rendererShell = process.platform === 'win32' ? config.shell : '/bin/sh';
+    const rendererShellArgs = process.platform === 'win32' ? config.shellArgs : [];
+    const terminal = pty.spawn(rendererShell, rendererShellArgs, {
       name: 'xterm-256color',
       cols,
       rows,
@@ -1156,7 +1300,10 @@ export function createTerminalServer(options = {}) {
       output: undefined,
       exit: undefined,
       terminalClient: undefined,
+      state: 'idle',
+      stateMessage: undefined,
       browserKey: undefined,
+      launchSignature: undefined,
       agentCleanupStarted: false,
       browserSocket: undefined,
       cdp: undefined,
@@ -1263,6 +1410,11 @@ export function createTerminalServer(options = {}) {
     // switch race where the old socket is still OPEN server-side for a moment.
     renderer.terminalClient = socket;
     sendJson(socket, { type: 'ready', mode: 'graphics', label: 'graphics', renderer: key, restored });
+    sendJson(socket, {
+      type: 'renderer-state',
+      state: renderer.state,
+      ...(renderer.stateMessage ? { message: renderer.stateMessage } : {}),
+    });
     if (renderer.terminalClient === socket && !renderer.surface) {
       for (const data of renderer.outputChunks) sendJson(socket, { type: 'output', data });
     }
@@ -1284,7 +1436,24 @@ export function createTerminalServer(options = {}) {
 
       if (message.type === 'launch' && Array.isArray(message.argv) && message.argv.length > 0 && message.argv.length <= 100 &&
           message.argv.every((argument) => typeof argument === 'string' && argument.length <= 4096)) {
-        void launchRenderer(renderer, message.argv);
+        const signature = JSON.stringify(message.argv);
+        // The same split control is intentionally delivered to every active
+        // view of a chat (desktop terminal and remote mobile conversation).
+        // They attach to one keyed renderer, so only the first launch may
+        // write into its PTY; duplicate writes can otherwise corrupt the
+        // foreground terminal-browser process and strand the phone on its
+        // opening cover.
+        if (!renderer.launchSignature) {
+          renderer.launchSignature = signature;
+          void launchRenderer(renderer, message.argv).catch((error) => {
+            if (renderer.launchSignature === signature && !renderer.surface) {
+              renderer.launchSignature = undefined;
+            }
+            const failure = error.message || 'Browser launch failed';
+            setRendererState(renderer, 'failed', failure);
+            for (const client of renderer.clients) sendJson(client, { type: 'error', message: failure });
+          });
+        }
       } else if (message.type === 'input' && typeof message.data === 'string') {
         renderer.terminal.write(message.data);
       } else if (message.type === 'visibility' && typeof message.visible === 'boolean') {
@@ -1296,13 +1465,27 @@ export function createTerminalServer(options = {}) {
           if (frame) sendRendererFrame(socket, frame);
           sendJson(socket, { type: 'cursor', value: renderer.cursor || 'default' });
         }
-        if (renderer.viewport) renderer.pendingViewport = renderer.viewport;
-        if (renderer.cdp) void configureRendererViewport(renderer).catch(() => {});
+        requestRendererViewport(renderer);
+        if (renderer.cdp) void configureRendererViewport(renderer).catch((error) => {
+          setRendererState(renderer, 'failed', error.message || 'Browser viewport configuration failed');
+        });
+      } else if (message.type === 'frame-request') {
+        const frame = rendererFrameMessage(renderer);
+        if (frame) sendRendererFrame(socket, frame);
+        else if (renderer.cdp && renderer.viewport) {
+          void sendCdp(renderer, 'Page.captureScreenshot', {
+            format: 'jpeg', quality: 90, fromSurface: true,
+          }).then((result) => {
+            if (result?.data) publishRendererFrame(renderer, result.data, renderer.viewport);
+          }).catch((error) => setRendererState(
+            renderer, 'failed', error.message || 'Browser frame capture failed',
+          ));
+        }
       } else if (message.type === 'viewport' &&
           Number.isInteger(message.width) && message.width >= 160 && message.width <= 4096 &&
           Number.isInteger(message.height) && message.height >= 120 && message.height <= 4096) {
-        renderer.pendingViewport = rendererViewport(message.width, message.height);
-        if (renderer.cdp) void configureRendererViewport(renderer).catch(() => {});
+        socket.rendererViewport = rendererViewport(message.width, message.height);
+        requestRendererViewport(renderer);
       } else if (message.type === 'pointer' && renderer.cdp &&
           ['mousePressed', 'mouseReleased', 'mouseMoved', 'mouseWheel'].includes(message.event) &&
           Number.isFinite(message.x) && Number.isFinite(message.y)) {
@@ -1387,6 +1570,7 @@ export function createTerminalServer(options = {}) {
       clients.delete(socket);
       clientContexts.delete(socket);
       renderer.clients.delete(socket);
+      requestRendererViewport(renderer);
       if (renderer.terminalClient === socket) {
         renderer.terminalClient = renderer.clients.values().next().value;
         if (renderer.terminalClient && !renderer.surface) {
@@ -1449,6 +1633,9 @@ export function createTerminalServer(options = {}) {
         if (request.method === 'GET' && pathname === '/api/remote/status') {
           return json(response, 200, await remoteController.status());
         }
+        if (request.method === 'GET' && pathname === '/api/remote/tunnel-status') {
+          return json(response, 200, { tunnel: remoteController.tunnelStatus() });
+        }
         if (request.method === 'PUT' && pathname === '/api/remote/cloudflare-token') {
           const body = await readRemoteJson(request);
           return json(response, 200, await remoteController.setCloudflareToken(body.token));
@@ -1483,12 +1670,15 @@ export function createTerminalServer(options = {}) {
         if (request.method === 'GET' && pathname === '/api/remote/devices') {
           return json(response, 200, { devices: remoteStore.listDevices().map(safeRemoteDevice) });
         }
+        if (request.method === 'DELETE' && pathname === '/api/remote/devices') {
+          return json(response, 200, { removed: remoteAuth.revokeAllDevices() });
+        }
         const deviceMatch = pathname.match(/^\/api\/remote\/devices\/([^/]+)$/);
         if (request.method === 'DELETE' && deviceMatch) {
           const deviceId = decodeURIComponent(deviceMatch[1]);
-          const revoked = await remoteAuth.revokeDevice(deviceId);
-          return revoked
-            ? json(response, 200, { revoked: true })
+          const removed = await remoteAuth.revokeDevice(deviceId);
+          return removed
+            ? json(response, 200, { removed: true })
             : json(response, 404, { error: 'Remote device not found' });
         }
         return json(response, 404, { error: 'Not found' });
@@ -1620,6 +1810,10 @@ export function createTerminalServer(options = {}) {
         if (request.method === 'GET' && pathname === '/api/sessions') {
           return json(response, 200, { sessions: await listWorkspaceSessions() });
         }
+        if (request.method === 'GET' && pathname === '/api/workspace/stream') {
+          openWorkspaceStream(request, response, surface);
+          return;
+        }
         if (request.method === 'GET' && pathname === '/api/projects') {
           return json(response, 200, { projects: await projectStore.list() });
         }
@@ -1706,6 +1900,25 @@ export function createTerminalServer(options = {}) {
           } catch (error) {
             if (error?.code === 'GROK_ACP_MODE_INVALID') return json(response, 400, { error: error.message, code: error.code });
             if (error?.code === 'GROK_ACP_SESSION_BUSY') return json(response, 409, { error: error.message, code: error.code });
+            return conversationFailure(response, error);
+          }
+        }
+        const conversationGoalMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/goal$/);
+        if (request.method === 'POST' && conversationGoalMatch) {
+          const name = decodeURIComponent(conversationGoalMatch[1]);
+          const body = await readJson(request);
+          if (!['pause', 'resume', 'clear'].includes(body.action)) {
+            return json(response, 400, { error: 'action must be pause, resume, or clear' });
+          }
+          const session = await conversationSession(name);
+          if (!session) return json(response, 404, { error: 'Managed session not found' });
+          try {
+            return json(response, 202, {
+              accepted: true,
+              action: body.action,
+              ...(await conversationRegistry.controlGoal(session, body.action)),
+            });
+          } catch (error) {
             return conversationFailure(response, error);
           }
         }
@@ -2039,6 +2252,7 @@ export function createTerminalServer(options = {}) {
           // model chunks. The comment is ignored by EventSource consumers.
           response.write(`:${' '.repeat(2_048)}\nretry: 1000\n\n`);
           let stopWatching = async () => {};
+          let untrackRemoteStream = () => {};
           let closed = false;
           let streamedMessageId;
           const close = async () => {
@@ -2046,6 +2260,7 @@ export function createTerminalServer(options = {}) {
             closed = true;
             clearInterval(heartbeat);
             conversationStreams.delete(close);
+            untrackRemoteStream();
             await stopWatching();
             if (!response.writableEnded) response.end();
           };
@@ -2063,6 +2278,7 @@ export function createTerminalServer(options = {}) {
           }, 3_000);
           heartbeat.unref?.();
           conversationStreams.add(close);
+          if (surface === 'remote') untrackRemoteStream = remoteGateway.trackStream(close, request);
           response.once('close', () => void close());
           try {
             stopWatching = await conversationRegistry.watch(session, conversationOptions, (event) => {
@@ -2134,6 +2350,7 @@ export function createTerminalServer(options = {}) {
             agentRemoteToken: config.token,
             grokLeaderSocket: config.grokLeaderSocket,
           });
+          publishWorkspaceChange({ type: 'session-created' });
           return json(response, 201, { session });
         }
         if (request.method === 'POST' && pathname === '/api/projects') {
@@ -2151,6 +2368,7 @@ export function createTerminalServer(options = {}) {
             cwd: selected.path,
             agentId: body.agentId,
           });
+          publishWorkspaceChange({ type: 'project-created' });
           return json(response, 201, { project });
         }
         const projectSessionsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/sessions$/);
@@ -2183,6 +2401,7 @@ export function createTerminalServer(options = {}) {
               await stopManagedSession(config.tmuxCommand, session.name).catch(() => {});
               throw error;
             }
+            publishWorkspaceChange({ type: 'session-created' });
             return json(response, 201, { session });
           }
           if (request.method === 'DELETE') {
@@ -2212,11 +2431,14 @@ export function createTerminalServer(options = {}) {
             if (body.cwd !== undefined) {
               changes.cwd = (await resolveAllowedDirectory(body.cwd, config.allowedCwdRoots)).path;
             }
-            return json(response, 200, { project: await projectStore.update(projectId, changes) });
+            const project = await projectStore.update(projectId, changes);
+            publishWorkspaceChange({ type: 'project-updated' });
+            return json(response, 200, { project });
           }
           if (request.method === 'DELETE') {
             const cleared = await stopProjectSessions(projectId);
             await projectStore.remove(projectId);
+            publishWorkspaceChange({ type: 'project-deleted' });
             return json(response, 200, { deleted: true, cleared });
           }
         }
@@ -2237,6 +2459,7 @@ export function createTerminalServer(options = {}) {
           }
           const label = await renameManagedSession(config.tmuxCommand, name, body.label);
           if (label) projectStore.renameChat(name, label);
+          if (label) publishWorkspaceChange({ type: 'session-updated' });
           return label
             ? json(response, 200, { label })
             : json(response, 404, { error: 'Managed session not found' });
@@ -2247,6 +2470,10 @@ export function createTerminalServer(options = {}) {
           if (stopped) {
             projectStore.removeChat(name);
             closeRenderer(`session:${name}`);
+            await Promise.all([...conversationStreams]
+              .filter((stream) => stream.sessionName === name)
+              .map((stream) => stream(true)));
+            publishWorkspaceChange({ type: 'sessions-deleted', deleted: [name] });
           }
           return stopped
             ? json(response, 200, { stopped: true })
@@ -2269,6 +2496,7 @@ export function createTerminalServer(options = {}) {
       'content-type': contentTypes[extname(file)] ?? 'application/octet-stream',
       'cache-control': pathname.startsWith('/vendor/') ? 'public, max-age=86400' : 'no-cache',
       'x-content-type-options': 'nosniff',
+      ...(surface === 'remote' && pathname === '/' ? remoteWorkspaceDocumentHeaders : {}),
     });
     createReadStream(file).pipe(response);
   }
@@ -2796,6 +3024,7 @@ export function createTerminalServer(options = {}) {
       for (const client of clients) client.terminate();
       for (const client of devtoolsClients) client.terminate();
       remoteGateway.close();
+      await Promise.all([...workspaceStreams].map((close) => close(true)));
       await Promise.all([...conversationStreams].map((close) => close(true)));
       await conversationRegistry.close?.();
       await conversationAttachments.close?.();

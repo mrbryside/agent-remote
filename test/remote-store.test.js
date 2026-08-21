@@ -84,7 +84,7 @@ test('persists named-tunnel metadata and preserves its installation identity whe
   }
 });
 
-test('stores canonical public JWKs, retains revoked devices, and limits active-device use', () => {
+test('stores canonical public JWKs and deletes revoked devices', () => {
   const { root, file } = temporaryDatabase();
   try {
     const store = createRemoteStore(file);
@@ -102,12 +102,51 @@ test('stores canonical public JWKs, retains revoked devices, and limits active-d
     }), /UNIQUE constraint failed/);
     assert.equal(store.touchDevice('device-1', 200), true);
     assert.equal(store.getActiveDevice('device-1').lastUsedAt, 200);
-    assert.equal(store.revokeDevice('device-1', 300), true);
+    assert.equal(store.deleteDevice('device-1'), true);
     assert.equal(store.getActiveDevice('device-1'), undefined);
     assert.equal(store.touchDevice('device-1', 400), false);
-    assert.equal(store.revokeDevice('device-1', 400), false);
-    assert.deepEqual(store.listDevices(), [{ ...device, lastUsedAt: 200, revokedAt: 300 }]);
+    assert.equal(store.deleteDevice('device-1'), false);
+    assert.deepEqual(store.listDevices(), []);
+    const pairedAgain = store.upsertDevice({
+      id: 'device-2', name: 'Mac · Safari', publicKeyJwk, fingerprint: 'fingerprint-1', createdAt: 500,
+    });
+    assert.deepEqual(pairedAgain, {
+      ...device, id: 'device-2', name: 'Mac · Safari', createdAt: 500, lastUsedAt: null, revokedAt: null,
+    });
+    assert.deepEqual(store.listDevices(), [pairedAgain]);
+    store.registerDevice({
+      id: 'device-3', name: 'iPhone · Safari', publicKeyJwk,
+      fingerprint: 'fingerprint-2', createdAt: 600,
+    });
+    assert.equal(store.deleteAllDevices(), 2);
+    assert.deepEqual(store.listDevices(), []);
+    assert.equal(store.deleteAllDevices(), 0);
     store.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('removes retained revoked rows created by older versions', () => {
+  const { root, file } = temporaryDatabase();
+  try {
+    const first = createRemoteStore(file);
+    first.registerDevice({
+      id: 'legacy-revoked', name: 'Old phone',
+      publicKeyJwk: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' },
+      fingerprint: 'legacy-fingerprint', createdAt: 100,
+    });
+    first.close();
+    const legacy = new DatabaseSync(file);
+    legacy.prepare('UPDATE remote_devices SET revoked_at = 200 WHERE id = ?').run('legacy-revoked');
+    legacy.close();
+
+    const migrated = createRemoteStore(file);
+    assert.deepEqual(migrated.listDevices(), []);
+    migrated.close();
+    const check = new DatabaseSync(file);
+    assert.equal(check.prepare('SELECT COUNT(*) AS count FROM remote_devices').get().count, 0);
+    check.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

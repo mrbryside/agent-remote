@@ -275,18 +275,21 @@ export function createTunnelManager(dependencies = {}) {
     return operation;
   }
 
-  function stop() {
+  function stop({ preserveDesiredState = false } = {}) {
     if (operation && current.state === 'stopping') return operation;
     clearRetry();
     const record = active;
     if (!record && current.mode !== 'named') {
+      const persistStopped = preserveDesiredState ? Promise.resolve() : setDesiredState('stopped');
       publish({ mode: 'none', state: 'stopped' });
-      return Promise.resolve(status());
+      return persistStopped.then(() => status());
     }
     publish({ mode: current.mode, state: 'stopping', publicUrl: current.publicUrl, hostname: current.hostname });
     if (record) record.explicitStop = true;
     const stopOperation = Promise.resolve()
-      .then(() => current.mode === 'named' || record?.mode === 'named' ? setDesiredState('stopped') : undefined)
+      .then(() => !preserveDesiredState && (current.mode === 'named' || record?.mode === 'named')
+        ? setDesiredState('stopped')
+        : undefined)
       .then(() => terminate(record))
       .then(() => {
         if (active === record) active = undefined;
@@ -308,7 +311,7 @@ export function createTunnelManager(dependencies = {}) {
     async close() {
       closed = true;
       clearRetry();
-      await stop();
+      await stop({ preserveDesiredState: true });
       listeners.clear();
     },
     onStatus(listener) {

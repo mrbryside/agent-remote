@@ -14,6 +14,10 @@ The `projects` table stores display name, working directory, selected `agent_id`
   pane widths, and the per-session revision of a dismissed mobile Plan sheet.
   A changed plan revision must surface the Plan pill again.
 - `sessionStorage` terminal snapshots are display acceleration only. They may be evicted and must never block a live PTY.
+- Browser terminal and native-conversation caches are page-lifetime acceleration
+  only. Their keys include the persisted session incarnation (`createdAt`, with
+  provider thread ID as a fallback); a workspace-stream deletion or incarnation
+  change must evict them even when tmux later reuses the same session name.
 
 When changing the schema, make migration logic idempotent and extend `test/projects.test.js` with both a fresh-database and an existing-database case.
 

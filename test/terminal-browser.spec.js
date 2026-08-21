@@ -50,6 +50,13 @@ test('agent terminal-browser command opens a rendered web split on the right', a
   test.setTimeout(75_000);
   test.skip(!terminalBrowserInstalled, 'terminal-browser is not installed');
 
+  // iOS Safari can expose createImageBitmap while rejecting WebSocket JPEG
+  // blobs. Exercise the native Image decoder fallback for the entire browser
+  // flow so a rejected fast path can never strand the opening cover.
+  await page.addInitScript(() => {
+    window.createImageBitmap = async () => { throw new Error('fixture decoder rejection'); };
+  });
+
   await page.goto('/');
   const origin = new URL(page.url()).origin;
   const sessionName = `browser-agent-${Date.now()}`;
@@ -449,7 +456,16 @@ test('agent terminal-browser command opens a rendered web split on the right', a
     await expect(page.locator('.graphics-terminal-instance:not([hidden]) .browser-tab')).toHaveCount(1);
 
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload();
     const mobileSheet = page.locator('#graphics-split');
+    await expect(mobileSheet).toBeHidden();
+    await expect(page.locator('#toggle-graphics-pane')).toBeHidden();
+    await expect(page.locator('#graphics-mobile-reopen')).toBeVisible({ timeout: 10_000 });
+    await expect.poll(async () => {
+      const payload = await (await page.request.get('/api/renderers')).json();
+      return payload.renderers.some((renderer) => renderer.key === `session:${managedName}`);
+    }).toBe(true);
+    await page.locator('#graphics-mobile-reopen').click();
     await expect(mobileSheet).toBeVisible();
     await expect(page.locator('#graphics-sheet-handle')).toBeVisible();
     await expect(page.locator('#graphics-sheet-backdrop')).toBeVisible();

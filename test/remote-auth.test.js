@@ -73,10 +73,11 @@ test('pairing hashes secrets, replaces previous sessions, expires them, and cons
   }
 });
 
-test('pairing validates canonical P-256 public keys, duplicate fingerprints, and names', async () => {
+test('pairing validates canonical P-256 public keys and updates a repeated fingerprint in place', async () => {
   const { root, store } = temporaryStore();
+  let time = 10_000;
   try {
-    const auth = createRemoteAuth({ store, randomBytes: deterministicBytes() });
+    const auth = createRemoteAuth({ store, now: () => time, randomBytes: deterministicBytes() });
     const { jwk } = await publicKey();
     const pair = async (publicKeyJwk, deviceName = '  My\u0000 Phone  ') => {
       const session = await auth.createPairing('https://term.example.test');
@@ -87,7 +88,39 @@ test('pairing validates canonical P-256 public keys, duplicate fingerprints, and
     await assert.rejects(pair(jwk, 'x'.repeat(81)), /80 characters/);
     const first = await pair(jwk);
     assert.equal(first.device.name, 'My Phone');
-    await assert.rejects(pair(jwk), /already paired/);
+    time = 20_000;
+    const repeated = await pair(jwk, 'iPhone · Safari');
+    assert.equal(repeated.device.id, first.device.id);
+    assert.equal(repeated.device.name, 'iPhone · Safari');
+    assert.equal(repeated.device.lastUsedAt, 20_000);
+    assert.equal(store.listDevices().length, 1);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('pairing infers a useful device label when the browser does not submit one', async () => {
+  const { root, store } = temporaryStore();
+  try {
+    const auth = createRemoteAuth({ store, randomBytes: deterministicBytes() });
+    const { jwk } = await publicKey();
+    const pairing = await auth.createPairing('https://term.example.test');
+    const result = await auth.pair({
+      secret: secretFromPairUrl(pairing.pairUrl),
+      publicKeyJwk: jwk,
+      request: { headers: { 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Version/18.6 Mobile/15E148 Safari/604.1' } },
+    });
+    assert.equal(result.device.name, 'iPhone · Safari');
+
+    const nullNamePairing = await auth.createPairing('https://term.example.test');
+    const nullNameResult = await auth.pair({
+      secret: secretFromPairUrl(nullNamePairing.pairUrl),
+      deviceName: null,
+      publicKeyJwk: jwk,
+      request: { headers: { 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Version/18.6 Mobile/15E148 Safari/604.1' } },
+    });
+    assert.equal(nullNameResult.device.name, 'iPhone · Safari');
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -163,9 +196,67 @@ test('sessions use a host cookie, expire, logout, and invalidate when a device i
     const third = await auth.pair({ secret: secretFromPairUrl(thirdPairing.pairUrl), deviceName: 'Desktop', publicKeyJwk: thirdJwk });
     assert.equal(auth.revokeDevice(third.device.id), true);
     assert.equal(auth.authenticate({ headers: { cookie: third.setCookie } }), undefined);
+    assert.equal(store.listDevices().some((device) => device.id === third.device.id), false);
     assert.deepEqual(revoked, [third.device.id]);
     assert.match(auth.clearSessionCookie(), /Max-Age=0/);
     auth.close();
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('revokes every paired device in one batch and invalidates all sessions', async () => {
+  const { root, store } = temporaryStore();
+  const revoked = [];
+  try {
+    const auth = createRemoteAuth({
+      store, randomBytes: deterministicBytes(), onRevoke: (deviceId) => revoked.push(deviceId),
+    });
+    const devices = [];
+    for (const name of ['Phone', 'Tablet']) {
+      const { jwk } = await publicKey();
+      const pairing = await auth.createPairing('https://term.example.test');
+      devices.push(await auth.pair({ secret: secretFromPairUrl(pairing.pairUrl), deviceName: name, publicKeyJwk: jwk }));
+    }
+    assert.equal(auth.revokeAllDevices(), 2);
+    assert.deepEqual(store.listDevices(), []);
+    for (const device of devices) assert.equal(auth.authenticate({ headers: { cookie: device.setCookie } }), undefined);
+    assert.deepEqual(new Set(revoked), new Set(devices.map(({ device }) => device.id)));
+    assert.equal(auth.revokeAllDevices(), 0);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('revoke and clear operations invalidate a pending pairing even when no device rows exist', async () => {
+  const { root, store } = temporaryStore();
+  try {
+    const auth = createRemoteAuth({ store, randomBytes: deterministicBytes() });
+    const { jwk } = await publicKey();
+
+    const cleared = await auth.createPairing('https://term.example.test');
+    assert.equal(auth.revokeAllDevices(), 0);
+    await assert.rejects(
+      auth.pair({ secret: secretFromPairUrl(cleared.pairUrl), publicKeyJwk: jwk }),
+      (error) => error.code === 'PAIRING_EXPIRED',
+    );
+
+    const revoked = await auth.createPairing('https://term.example.test');
+    assert.equal(auth.revokeDevice('missing-device'), false);
+    await assert.rejects(
+      auth.pair({ secret: secretFromPairUrl(revoked.pairUrl), publicKeyJwk: jwk }),
+      (error) => error.code === 'PAIRING_EXPIRED',
+    );
+
+    const cancelled = await auth.createPairing('https://term.example.test');
+    assert.equal(auth.cancelPairing(), true);
+    assert.equal(auth.cancelPairing(), false);
+    await assert.rejects(
+      auth.pair({ secret: secretFromPairUrl(cancelled.pairUrl), publicKeyJwk: jwk }),
+      (error) => error.code === 'PAIRING_EXPIRED',
+    );
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

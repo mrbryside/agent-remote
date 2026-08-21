@@ -171,6 +171,10 @@ export function createRemoteController({
   return {
     status,
 
+    tunnelStatus() {
+      return publicTunnel(tunnelManager.status());
+    },
+
     async setCloudflareToken(value) {
       const token = validateToken(value);
       const zones = await provisioner.validateToken(token);
@@ -209,6 +213,34 @@ export function createRemoteController({
         return Promise.resolve(current);
       }
       return runTarget(target, async () => {
+        // Validate the replacement before touching the currently owned
+        // hostname. A foreign DNS collision must leave the working tunnel and
+        // its ownership metadata completely intact.
+        const availability = await provisioner.checkAvailability(zoneId, subdomain);
+        if (availability?.status === 'conflict') {
+          throw remoteError('HOSTNAME_CONFLICT', 'That hostname is already in use.', 409);
+        }
+        const existing = await getNamedSettings();
+        const replacingOwnedHostname = typeof existing?.hostname === 'string'
+          && existing.hostname.length > 0
+          && (existing.hostname !== availability?.hostname
+            || (typeof existing.zoneId === 'string' && existing.zoneId !== zoneId));
+        if (replacingOwnedHostname) {
+          const running = tunnelManager.status();
+          if (running.mode !== 'none' || running.state !== 'stopped') await tunnelManager.stop();
+          const removed = await provisioner.removeNamed();
+          if (!removed?.removed) {
+            const detail = Array.isArray(removed?.warnings)
+              ? removed.warnings.filter((warning) => typeof warning === 'string' && warning).join(' ')
+              : '';
+            throw remoteError(
+              'HOSTNAME_CONFLICT',
+              detail || 'The existing Custom Domain could not be removed safely.',
+              409,
+            );
+          }
+          namedTarget = undefined;
+        }
         const prepared = await provisioner.prepareNamed({ zoneId, subdomain });
         const latest = tunnelManager.status();
         if (latest.mode === 'named' && latest.hostname === prepared.hostname
@@ -225,8 +257,7 @@ export function createRemoteController({
 
     stop() {
       return runTarget('stop', async () => {
-        const current = tunnelManager.status();
-        if (current.mode === 'none' && current.state === 'stopped') return current;
+        auth.cancelPairing?.();
         const stopped = await tunnelManager.stop();
         namedTarget = undefined;
         return stopped;

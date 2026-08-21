@@ -2,41 +2,30 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0c0c0d" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="Agent Remote" />
     <title>Agent Remote</title>
-    <script>
-      const documentRoot = document.documentElement;
-      documentRoot.dataset.sidebarBooting = 'true';
-      documentRoot.dataset.initialSidebar = matchMedia('(max-width: 760px)').matches
-        ? 'collapsed'
-        : 'expanded';
-      try {
-        if (localStorage.getItem('agent-remote-session')) {
-          documentRoot.dataset.restoringSession = 'true';
-        }
-        const savedSidebarWidth = Number(localStorage.getItem('agent-remote-sidebar-width'));
-        if (Number.isFinite(savedSidebarWidth) && savedSidebarWidth > 0) {
-          documentRoot.style.setProperty('--sidebar-width', `${savedSidebarWidth}px`);
-        }
-        if (!matchMedia('(max-width: 760px)').matches &&
-            localStorage.getItem('agent-remote-sidebar-collapsed') === 'true') {
-          documentRoot.dataset.initialSidebar = 'collapsed';
-        }
-      } catch {}
-    </script>
+    <script src="/document-boot.js"></script>
+    <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="stylesheet" href="/vendor/xterm.css" />
     <link rel="stylesheet" href="/tokens.css" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <section class="portrait-lock" role="alert" aria-label="Portrait orientation required">
+      <svg aria-hidden="true" viewBox="0 0 48 48">
+        <rect x="14" y="5" width="20" height="38" rx="5"></rect>
+        <path d="M21 37h6"></path>
+      </svg>
+      <strong>Portrait only</strong>
+      <span>Rotate your phone upright to continue.</span>
+    </section>
     <main class="workspace" data-sidebar="expanded" data-view="empty">
-      <script>
-        // Apply the persisted layout while the document is still parsing, so
-        // the first styled frame already has the final sidebar geometry.
-        document.currentScript.parentElement.dataset.sidebar =
-          document.documentElement.dataset.initialSidebar || 'expanded';
-      </script>
+      <script src="/workspace-boot.js"></script>
       <aside class="sidebar" aria-label="Projects">
         <div class="sidebar-header">
           <button id="toggle-sidebar" class="sidebar-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar (Ctrl/Cmd+B)">←</button>
@@ -46,7 +35,17 @@
           <button id="new-project" class="icon-button" type="button" title="New project" aria-label="New project">+</button>
         </div>
         <div id="project-list" class="project-list" aria-label="Projects and chats"></div>
+        <footer class="sidebar-footer">
+          <button id="remote-button" class="remote-fab" type="button" hidden aria-label="Remote access" title="Remote access">
+            <svg aria-hidden="true" viewBox="0 0 20 20">
+              <rect x="5" y="2.5" width="10" height="15" rx="2.4"></rect>
+              <path d="M8.5 14.5h3"></path>
+            </svg>
+            <span class="remote-fab-label" aria-hidden="true">Remote Off</span>
+          </button>
+        </footer>
       </aside>
+      <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="Close projects" hidden></button>
       <div id="sidebar-resizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
 
       <section class="terminal-shell">
@@ -54,6 +53,12 @@
           <button id="open-sidebar" class="sidebar-toggle sidebar-open" type="button" aria-label="Expand sidebar" aria-expanded="false" title="Expand sidebar (Ctrl/Cmd+B)">☰</button>
           <div id="terminal-title" class="title" aria-live="polite"></div>
           <div id="status" class="status" data-state="idle" hidden><span class="status-dot"></span><span id="status-text">Idle</span></div>
+          <button id="toggle-graphics-pane" class="graphics-pane-toggle" type="button" aria-label="Hide browser pane" aria-controls="graphics-split" aria-expanded="true" title="Hide browser pane" hidden>
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <rect x="3.5" y="3.5" width="17" height="17" rx="3"></rect>
+              <path d="M15.5 4v16"></path>
+            </svg>
+          </button>
         </header>
         <div id="terminal-stage" class="terminal-stage">
           <div id="primary-terminal-pane" class="primary-terminal-pane">
@@ -63,11 +68,12 @@
               <h2 id="empty-title">What should we build next?</h2>
               <p id="empty-copy">Choose a project, then open a chat to start a fresh terminal in the right folder.</p>
             </section>
-            <section id="session-loading" class="session-loading" aria-live="polite" hidden>
-              <span class="session-loading-spinner" aria-hidden="true"></span>
-              <span id="session-loading-kicker" class="empty-kicker">Starting chat</span>
+            <section id="session-loading" class="session-loading chat-loading-state" aria-live="polite" hidden>
+              <div class="empty-orbit session-loading-orbit" aria-hidden="true"><span></span><i></i></div>
+              <span id="session-loading-kicker" class="empty-kicker">Agent chat</span>
               <h2 id="session-loading-title">Preparing chat…</h2>
               <p id="session-loading-copy">Opening the project folder and starting its command.</p>
+              <span class="chat-loading-indicator" aria-hidden="true"></span>
             </section>
             <div id="terminal" aria-label="Interactive terminal" hidden></div>
             <section id="mobile-conversation" class="mobile-conversation" aria-label="Conversation" hidden>
@@ -76,12 +82,19 @@
                 <button id="mobile-conversation-back" type="button" aria-label="Back to parent conversation" hidden>←</button>
                 <div><strong id="mobile-conversation-title">Conversation</strong><small id="mobile-conversation-meta"></small></div>
                 <span id="mobile-conversation-state" data-state="idle">Ready</span>
-                <button id="mobile-conversation-activity-toggle" class="mobile-conversation-activity-toggle" type="button" aria-label="Show activity" hidden>⋯</button>
+                <button id="mobile-conversation-activity-toggle" class="mobile-conversation-activity-toggle" type="button" aria-label="Show activity" title="Show activity" hidden>
+                  <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <rect x="2.75" y="3.25" width="14.5" height="13.5" rx="2"></rect>
+                    <path d="M7 3.5v13M9.75 7h4.5M9.75 10h4.5M9.75 13h3"></path>
+                  </svg>
+                </button>
               </header>
               <div class="mobile-conversation-scroll-shell">
-                <div id="mobile-conversation-boot" class="mobile-conversation-boot" role="status" aria-live="polite" hidden>
-                  <i aria-hidden="true"></i>
-                  <span>Loading chat…</span>
+                <div id="mobile-conversation-boot" class="mobile-conversation-boot chat-loading-state" role="status" aria-live="polite" hidden>
+                  <div class="empty-orbit mobile-conversation-boot-orbit" aria-hidden="true"><span></span><i></i></div>
+                  <span class="empty-kicker">Agent chat</span>
+                  <h2>Preparing chat…</h2>
+                  <span class="chat-loading-indicator" aria-hidden="true"></span>
                 </div>
                 <div id="mobile-conversation-messages" class="mobile-conversation-messages" role="log" aria-live="polite"></div>
                 <button id="mobile-conversation-jump" class="mobile-conversation-jump" type="button" aria-label="Scroll to latest message" hidden>↓</button>
@@ -96,14 +109,14 @@
                 </div>
                 <div id="mobile-conversation-attachments" class="mobile-conversation-attachments" hidden></div>
                 <div class="mobile-conversation-compose-row">
+                  <button id="mobile-conversation-attach" type="button" aria-label="Attach files">＋</button>
                   <textarea id="mobile-conversation-input" rows="1" maxlength="16384" enterkeyhint="send" autocapitalize="sentences" autocomplete="off" placeholder="Message Grok…" aria-label="Message"></textarea>
+                  <button id="mobile-conversation-send" type="submit" aria-label="Send message">↑</button>
                 </div>
                 <div class="mobile-conversation-compose-toolbar">
                   <input id="mobile-conversation-file" type="file" multiple hidden aria-label="Choose files from this device">
-                  <button id="mobile-conversation-attach" type="button" aria-label="Attach files">＋</button>
-                  <button id="mobile-conversation-mode" type="button" aria-haspopup="listbox" aria-expanded="false" hidden><span>Normal</span><i>⌄</i></button>
-                  <button id="mobile-conversation-model" type="button" aria-haspopup="listbox" aria-expanded="false" hidden><span>Model</span><i>⌄</i></button>
-                  <button id="mobile-conversation-send" type="submit" aria-label="Send message">↑</button>
+                  <button id="mobile-conversation-mode" type="button" aria-haspopup="listbox" aria-expanded="false" hidden><span>Normal</span><i aria-hidden="true"><svg viewBox="0 0 12 12"><path d="M2.5 4.25 6 7.75l3.5-3.5" /></svg></i></button>
+                  <button id="mobile-conversation-model" type="button" aria-haspopup="listbox" aria-expanded="false" hidden><span>Model</span><i aria-hidden="true"><svg viewBox="0 0 12 12"><path d="M2.5 4.25 6 7.75l3.5-3.5" /></svg></i></button>
                 </div>
                 <div id="mobile-conversation-model-list" class="mobile-conversation-model-list" role="listbox" aria-label="Choose model" hidden></div>
                 <div id="mobile-conversation-mode-list" class="mobile-conversation-model-list" role="listbox" aria-label="Choose mode" hidden></div>
@@ -119,7 +132,7 @@
               <span><i id="graphics-status-dot"></i> browser</span>
               <span class="graphics-split-actions">
                 <button id="graphics-mobile-agents" type="button" hidden>Agents</button>
-                <button id="close-graphics-split" type="button" aria-label="Close browser pane" title="Close browser pane">×</button>
+                <button id="close-graphics-split" class="close-button" type="button" aria-label="Close browser pane" title="Close browser pane">×</button>
               </span>
             </header>
             <div id="graphics-terminal" aria-label="Terminal browser pane"></div>
@@ -134,7 +147,7 @@
       <form id="project-form" method="dialog">
         <div class="dialog-header">
           <div><span class="dialog-kicker">Project settings</span><h2 id="dialog-title">New project</h2></div>
-          <button class="icon-button" value="cancel" aria-label="Close">×</button>
+          <button class="icon-button close-button" value="cancel" aria-label="Close">×</button>
         </div>
         <label><span>Project name <small>uses the folder name when empty</small></span><input id="project-name" name="name" placeholder="agent-remote" maxlength="80" autocomplete="off" /></label>
         <label><span>Agent</span><select id="project-agent" name="agentId" required aria-describedby="project-agent-help"></select><small id="project-agent-help">The launch command is managed by Agent Remote.</small></label>
@@ -153,25 +166,29 @@
       </form>
     </dialog>
 
-    <button id="remote-button" class="remote-fab" type="button" hidden aria-label="Remote access">
-      <span aria-hidden="true">⌁</span><span>Remote</span>
-    </button>
     <dialog id="remote-dialog" aria-labelledby="remote-dialog-title" aria-describedby="remote-alert">
       <div class="remote-dialog-body">
         <header class="dialog-header">
           <div><span class="dialog-kicker">Local control</span><h2 id="remote-dialog-title">Remote access</h2></div>
-          <button class="icon-button" type="button" data-remote-close aria-label="Close Remote access">×</button>
+          <div class="remote-dialog-header-actions">
+            <button id="remote-manage-devices" class="quiet-button" type="button" aria-pressed="false">Manage devices</button>
+            <button class="icon-button remote-close-icon close-button" type="button" data-remote-close aria-label="Close Remote access">×</button>
+          </div>
         </header>
         <p id="remote-alert" class="remote-alert" role="alert" hidden></p>
+
+        <div id="remote-loading" class="remote-loading" role="status" aria-live="polite" hidden>
+          <i aria-hidden="true"></i>
+          <strong>Loading remote setup…</strong>
+          <span>Checking the active connection and paired devices.</span>
+        </div>
 
         <nav class="remote-stepper" aria-label="Remote setup progress">
           <button type="button" data-remote-step-target="1" aria-current="step"><span>1</span><small>Connection</small></button>
           <i aria-hidden="true"></i>
           <button type="button" data-remote-step-target="2"><span>2</span><small>Domain</small></button>
           <i aria-hidden="true"></i>
-          <button type="button" data-remote-step-target="3"><span>3</span><small>Pair</small></button>
-          <i aria-hidden="true"></i>
-          <button type="button" data-remote-step-target="4"><span>4</span><small>Devices</small></button>
+          <button type="button" data-remote-step-target="3"><span>3</span><small>Devices</small></button>
         </nav>
 
         <section class="remote-section remote-step" data-remote-step="1" aria-labelledby="remote-connection-heading" tabindex="-1">
@@ -192,29 +209,80 @@
 
         <section class="remote-section remote-step" data-remote-step="2" aria-labelledby="remote-cloudflare-heading" tabindex="-1" hidden>
           <div class="remote-section-heading"><div><span class="dialog-kicker">2 · Cloudflare setup</span><h3 id="remote-cloudflare-heading">Custom Domain</h3></div></div>
-          <p class="remote-note">Create a <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">Cloudflare Custom Token</a> with Account → Cloudflare Tunnel → Edit, Zone → DNS → Edit, and Zone → Zone → Read. Limit it to the account and zone you choose here. Account API tokens and Global API Keys are not supported.</p>
+          <p class="remote-note">Use a scoped Cloudflare Custom Token for this domain. <button id="remote-token-guide-open" class="remote-inline-link" type="button">See the step-by-step setup guide</button></p>
           <form id="remote-token-form" class="remote-token-form"><label for="remote-token">Cloudflare API token <small>stored in your Mac Keychain; it is never shown again</small></label><div><input id="remote-token" type="password" autocomplete="new-password" spellcheck="false" maxlength="4096" required /><button class="primary-button" type="submit">Validate token</button><button id="remote-clear-token" class="quiet-button" type="button">Remove token</button></div></form>
           <div class="remote-domain-form"><label for="remote-zone">Zone <small>start typing a zone from Cloudflare</small><input id="remote-zone" list="remote-zone-options" autocomplete="off" spellcheck="false" placeholder="example.com" disabled /><datalist id="remote-zone-options"></datalist></label><label for="remote-subdomain">Subdomain <small>suggestions appear after the DNS check</small><input id="remote-subdomain" list="remote-subdomain-options" autocapitalize="none" spellcheck="false" pattern="[a-z0-9][a-z0-9-]{0,61}[a-z0-9]|[a-z0-9]" maxlength="63" placeholder="terminal" /><datalist id="remote-subdomain-options"></datalist></label><p id="remote-hostname-availability" class="remote-note" aria-live="polite">Choose a zone and subdomain to check availability.</p><div id="remote-hostname-suggestions" class="remote-suggestions"></div><div class="remote-actions"><button id="remote-connect-domain" class="primary-button" type="button">Connect Custom Domain</button><button id="remote-remove" class="danger-button" type="button">Remove Custom Domain</button></div></div>
         </section>
 
         <section class="remote-section remote-step" data-remote-step="3" aria-labelledby="remote-pair-heading" tabindex="-1" hidden>
-          <div class="remote-section-heading"><div><span class="dialog-kicker">3 · Pair device</span><h3 id="remote-pair-heading">Scan locally</h3></div></div>
-          <p class="remote-note">Create a one-time QR code, then scan it from the browser profile you want to pair. Anyone who can see this QR before it expires can pair a device.</p>
-          <div class="remote-pairing"><img id="remote-qr" alt="Pair a remote device" hidden /><div><button id="remote-pair" class="primary-button" type="button">Create QR code</button><p id="remote-pairing-countdown" class="remote-note" aria-live="polite">Create a QR code when you are ready to pair a device.</p></div></div>
+          <div class="remote-section-heading"><div><span class="dialog-kicker">3 · Pair devices</span><h3 id="remote-pair-heading">Scan devices locally</h3></div></div>
+          <p class="remote-note">Pair as many browser profiles as you need. Create and scan one QR code per device, then create another QR to add the next one. Anyone who sees an active QR can pair before it expires.</p>
+          <div class="remote-pairing"><img id="remote-qr" alt="Pair a remote device" hidden /><div><button id="remote-pair" class="primary-button" type="button">Create QR code</button><p id="remote-pairing-countdown" class="remote-note" aria-live="polite">Create one QR code for each device you want to pair.</p></div></div>
         </section>
 
-        <section class="remote-section remote-step" data-remote-step="4" aria-labelledby="remote-devices-heading" tabindex="-1" hidden>
-          <div class="remote-section-heading"><div><span class="dialog-kicker">4 · Devices</span><h3 id="remote-devices-heading">Paired devices</h3></div></div>
+        <section id="remote-devices-panel" class="remote-section remote-step" aria-labelledby="remote-devices-heading" tabindex="-1" hidden>
+          <div class="remote-section-heading"><div><span class="dialog-kicker">Devices</span><h3 id="remote-devices-heading">Paired devices</h3></div><button id="remote-clear-devices" class="danger-button" type="button" hidden disabled>Clear all</button></div>
           <ul id="remote-devices" class="remote-devices" aria-live="polite"><li class="remote-empty">Loading paired devices…</li></ul>
         </section>
 
         <footer class="remote-wizard-actions">
-          <button id="remote-stop" class="quiet-button" type="button">Stop</button>
-          <button id="remote-back" class="quiet-button" type="button">Back</button>
-          <span id="remote-step-caption" class="remote-note" aria-live="polite">Step 1 of 4</span>
+          <button id="remote-stop" class="quiet-button" type="button">Stop Remote</button>
+          <span id="remote-step-caption" class="remote-note" aria-live="polite">Step 1 of 3</span>
           <button id="remote-next" class="primary-button" type="button">Next: Custom Domain</button>
         </footer>
       </div>
+    </dialog>
+
+    <dialog id="cloudflare-token-guide-dialog" aria-labelledby="cloudflare-token-guide-title">
+      <form method="dialog" class="cloudflare-token-guide">
+        <header class="dialog-header">
+          <div><span class="dialog-kicker">Custom Domain guide</span><h2 id="cloudflare-token-guide-title">Create a Cloudflare API token</h2></div>
+          <button class="icon-button remote-close-icon close-button" value="close" aria-label="Close token guide">×</button>
+        </header>
+
+        <div class="cloudflare-token-guide-scroll">
+          <p class="cloudflare-token-guide-intro">Create a narrowly scoped <strong>User API Token</strong>. Do not use an Account API Token or Global API Key.</p>
+          <ol class="cloudflare-token-guide-steps">
+            <li>
+              <div><strong>Open the token page</strong><span>Go to <a href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">Cloudflare → My Profile → API Tokens</a>, choose <b>Create Token</b>, then <b>Create Custom Token</b>.</span></div>
+            </li>
+            <li>
+              <div><strong>Name the token</strong><span>Use a recognizable name such as <code>Agent Remote</code> or <code>Agent Remote – example.com</code>.</span></div>
+            </li>
+            <li>
+              <div>
+                <strong>Add exactly these three permissions</strong>
+                <span>Select the values in each dropdown row, then use <b>+ Add more</b> for the next row.</span>
+                <div class="cloudflare-permissions-table" role="table" aria-label="Required Cloudflare token permissions">
+                  <div class="cloudflare-permissions-head" role="row"><span role="columnheader">Scope</span><span role="columnheader">Permission</span><span role="columnheader">Access</span></div>
+                  <div role="row"><span role="cell">Account</span><span role="cell">Cloudflare Tunnel</span><span role="cell">Edit / Write</span></div>
+                  <div role="row"><span role="cell">Zone</span><span role="cell">DNS</span><span role="cell">Edit / Write</span></div>
+                  <div role="row"><span role="cell">Zone</span><span role="cell">Zone</span><span role="cell">Read</span></div>
+                </div>
+                <aside class="cloudflare-guide-callout"><strong>Seeing “Write” instead of “Edit”?</strong><span>Choose <b>Write</b>. Cloudflare's newer UI uses it for the same write-level permission needed here.</span></aside>
+              </div>
+            </li>
+            <li>
+              <div><strong>Limit the resources</strong><span>Under <b>Account Resources</b>, choose <b>Include → Specific account</b> and select your account. Under <b>Zone Resources</b>, choose <b>Include → Specific zone</b> and select the domain you will connect. Avoid “All accounts” and “All zones”.</span></div>
+            </li>
+            <li>
+              <div><strong>Leave optional restrictions empty</strong><span>Leave <b>Client IP Address Filtering</b> blank unless this Mac has a fixed public IP. Leave <b>TTL</b> unset for uninterrupted reconnects; if you set an expiry, you must create and paste a replacement token later.</span></div>
+            </li>
+            <li>
+              <div><strong>Create and copy the token</strong><span>Choose <b>Continue to summary</b>, verify the three permissions and selected resources, then choose <b>Create Token</b>. Copy the secret immediately—Cloudflare shows it only once.</span></div>
+            </li>
+            <li>
+              <div><strong>Return here and validate</strong><span>Paste the secret into <b>Cloudflare API token</b> and choose <b>Validate token</b>. Agent Remote stores the validated token in your Mac Keychain.</span></div>
+            </li>
+          </ol>
+        </div>
+
+        <footer class="dialog-actions cloudflare-token-guide-actions">
+          <a class="quiet-button cloudflare-dashboard-link" href="https://dash.cloudflare.com/profile/api-tokens" target="_blank" rel="noreferrer">Open Cloudflare</a>
+          <span class="dialog-spacer"></span>
+          <button class="primary-button" value="close">Done</button>
+        </footer>
+      </form>
     </dialog>
 
     <noscript>This terminal needs JavaScript enabled.</noscript>

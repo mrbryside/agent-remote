@@ -1,0 +1,10 @@
+{
+  "name": "Agent Remote",
+  "short_name": "Agent Remote",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0c0c0d",
+  "theme_color": "#0c0c0d",
+  "orientation": "portrait-primary"
+}

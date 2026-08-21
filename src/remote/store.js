@@ -78,6 +78,7 @@ export function createRemoteStore(file) {
       last_used_at INTEGER,
       revoked_at INTEGER
     );
+    DELETE FROM remote_devices WHERE revoked_at IS NOT NULL;
   `);
 
   const statements = {
@@ -97,15 +98,26 @@ export function createRemoteStore(file) {
         desired_state = 'stopped', updated_at = ?
       WHERE singleton = 1
     `),
-    listDevices: database.prepare('SELECT * FROM remote_devices ORDER BY created_at DESC, id ASC'),
+    listDevices: database.prepare('SELECT * FROM remote_devices WHERE revoked_at IS NULL ORDER BY created_at DESC, id ASC'),
     getActiveDevice: database.prepare('SELECT * FROM remote_devices WHERE id = ? AND revoked_at IS NULL'),
+    getDeviceByFingerprint: database.prepare('SELECT * FROM remote_devices WHERE fingerprint = ?'),
     insertDevice: database.prepare(`
       INSERT INTO remote_devices (id, name, public_key_jwk, fingerprint, created_at)
       VALUES (?, ?, ?, ?, ?)
     `),
+    upsertDevice: database.prepare(`
+      INSERT INTO remote_devices (id, name, public_key_jwk, fingerprint, created_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(fingerprint) DO UPDATE SET
+        name = excluded.name,
+        public_key_jwk = excluded.public_key_jwk,
+        last_used_at = excluded.created_at,
+        revoked_at = NULL
+    `),
     getDevice: database.prepare('SELECT * FROM remote_devices WHERE id = ?'),
     touchDevice: database.prepare('UPDATE remote_devices SET last_used_at = ? WHERE id = ? AND revoked_at IS NULL'),
-    revokeDevice: database.prepare('UPDATE remote_devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL'),
+    deleteDevice: database.prepare('DELETE FROM remote_devices WHERE id = ?'),
+    deleteAllDevices: database.prepare('DELETE FROM remote_devices'),
   };
 
   function transaction(action) {
@@ -159,12 +171,22 @@ export function createRemoteStore(file) {
       return deviceRow(statements.getDevice.get(id));
     },
 
+    upsertDevice({ id, name, publicKeyJwk, fingerprint, createdAt = Date.now() }) {
+      const serializedJwk = serializePublicKeyJwk(publicKeyJwk);
+      transaction(() => statements.upsertDevice.run(id, name, serializedJwk, fingerprint, createdAt));
+      return deviceRow(statements.getDeviceByFingerprint.get(fingerprint));
+    },
+
     touchDevice(id, usedAt = Date.now()) {
       return transaction(() => statements.touchDevice.run(usedAt, id).changes > 0);
     },
 
-    revokeDevice(id, revokedAt = Date.now()) {
-      return transaction(() => statements.revokeDevice.run(revokedAt, id).changes > 0);
+    deleteDevice(id) {
+      return transaction(() => statements.deleteDevice.run(id).changes > 0);
+    },
+
+    deleteAllDevices() {
+      return transaction(() => statements.deleteAllDevices.run().changes);
     },
 
     close() {

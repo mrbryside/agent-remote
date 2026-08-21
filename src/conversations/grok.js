@@ -573,7 +573,12 @@ function timeline(updates, { turnActive } = {}) {
       settleOpenTools();
       status = 'working';
       activity = { phase: 'waiting', label: 'Waiting for response…' };
-      appendMessage('user', userMessageContent(update.content), index, record.timestamp);
+      const message = userMessageContent(update.content);
+      // Goal controls are represented by the dedicated goal dock. Repeating
+      // the slash command as a user bubble makes delete/pause look like chat.
+      if (!/^\/goal\s+(?:pause|resume|clear)\s*$/i.test(message.trim())) {
+        appendMessage('user', message, index, record.timestamp);
+      }
       return;
     }
     if (kind === 'agent_message_chunk') {
@@ -850,6 +855,14 @@ function timeline(updates, { turnActive } = {}) {
       return;
     }
     if (kind === 'goal_updated') {
+      if (String(update.status || '').toLowerCase() === 'cleared') {
+        for (const goal of goals.values()) {
+          const itemIndex = items.indexOf(goal);
+          if (itemIndex >= 0) items.splice(itemIndex, 1);
+        }
+        goals.clear();
+        return;
+      }
       const id = shortText(update.goal_id, 'goal', 100);
       let goal = goals.get(id);
       if (!goal) {
@@ -1506,6 +1519,16 @@ export function createGrokConversationProvider({
     async setMode(handle, modeId) {
       await reconcilePersistedTurn(handle.cwd, handle.rootThreadId);
       return acpClient.setMode({ sessionId: handle.rootThreadId, cwd: handle.cwd, modeId });
+    },
+    async controlGoal(handle, action) {
+      if (!['pause', 'resume', 'clear'].includes(action)) throw new Error('Goal action is invalid');
+      await reconcilePersistedTurn(handle.cwd, handle.rootThreadId);
+      return acpClient.prompt({
+        sessionId: handle.rootThreadId,
+        cwd: handle.cwd,
+        text: `/goal ${action}`,
+        displayText: `/goal ${action}`,
+      });
     },
     async removeQueuedInput(handle, queueId) {
       return acpClient.removeQueuedPrompt({ sessionId: handle.rootThreadId, queueId });

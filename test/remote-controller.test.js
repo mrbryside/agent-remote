@@ -45,6 +45,7 @@ function dependencies(overrides = {}) {
   };
   const auth = {
     createPairing: async (publicUrl) => ({ pairUrl: `${publicUrl}/pair#super-secret`, expiresAt: 123_000 }),
+    cancelPairing: () => calls.push('cancel-pairing'),
     ...overrides.auth,
   };
   const controller = createRemoteController({
@@ -77,6 +78,9 @@ test('reports a redacted complete local Remote status when supported, unavailabl
     tokenConfigured: true,
     tunnel: { mode: 'named', state: 'running', hostname: 'term.example.com', publicUrl: 'https://term.example.com' },
     named: { zoneName: 'example.com', hostname: 'term.example.com', desiredState: 'running' },
+  });
+  assert.deepEqual(supported.tunnelStatus(), {
+    mode: 'named', state: 'running', hostname: 'term.example.com', publicUrl: 'https://term.example.com',
   });
 
   const missing = dependencies({
@@ -144,10 +148,19 @@ test('checks hostname availability and serializes idempotent Quick, named, Stop,
 
   const stopped = await Promise.all([controller.stop(), controller.stop()]);
   assert.deepEqual(stopped, [tunnelStatus(), tunnelStatus()]);
-  assert.deepEqual(calls, ['quick', 'stop', 'named:term.example.com:zone-1-token', 'stop']);
+  assert.deepEqual(calls, ['quick', 'stop', 'named:term.example.com:zone-1-token', 'cancel-pairing', 'stop']);
+
+  await controller.stop();
+  assert.deepEqual(calls, [
+    'quick', 'stop', 'named:term.example.com:zone-1-token',
+    'cancel-pairing', 'stop', 'cancel-pairing', 'stop',
+  ]);
 
   assert.deepEqual(await controller.removeNamed(), { removed: true, warnings: [] });
-  assert.deepEqual(calls, ['quick', 'stop', 'named:term.example.com:zone-1-token', 'stop']);
+  assert.deepEqual(calls, [
+    'quick', 'stop', 'named:term.example.com:zone-1-token',
+    'cancel-pairing', 'stop', 'cancel-pairing', 'stop',
+  ]);
 });
 
 test('stops an owned tunnel before removal and preserves ownership warnings verbatim', async () => {
@@ -165,6 +178,72 @@ test('stops an owned tunnel before removal and preserves ownership warnings verb
     warnings: ['DNS changed outside agent-remote; it was left untouched.'],
   });
   assert.deepEqual(calls, ['stop']);
+});
+
+test('replaces an owned named hostname automatically after validating the new target', async () => {
+  const events = [];
+  let current = tunnelStatus({
+    mode: 'named', state: 'running', hostname: 'old.example.com', publicUrl: 'https://old.example.com',
+  });
+  const { controller } = dependencies({
+    dependencies: { getNamedSettings: () => ({
+      zoneId: 'zone-1', zoneName: 'example.com', hostname: 'old.example.com', desiredState: 'running',
+    }) },
+    provisioner: {
+      checkAvailability: async (zoneId, subdomain) => {
+        events.push(`check:${zoneId}:${subdomain}`);
+        return { hostname: 'new.example.com', status: 'available', suggestions: [] };
+      },
+      removeNamed: async () => { events.push('remove-old'); return { removed: true, warnings: [] }; },
+      prepareNamed: async ({ zoneId, subdomain }) => {
+        events.push(`prepare:${zoneId}:${subdomain}`);
+        return { hostname: 'new.example.com', tunnelToken: 'replacement-token' };
+      },
+    },
+    tunnelManager: {
+      status: () => ({ ...current }),
+      stop: async () => { events.push('stop-old'); current = tunnelStatus(); return { ...current }; },
+      startNamed: async ({ hostname, tunnelToken }) => {
+        events.push(`start:${hostname}:${tunnelToken}`);
+        current = tunnelStatus({ mode: 'named', state: 'running', hostname, publicUrl: `https://${hostname}` });
+        return { ...current };
+      },
+    },
+  });
+
+  assert.equal((await controller.startNamed({ zoneId: 'zone-1', subdomain: 'new' })).hostname, 'new.example.com');
+  assert.deepEqual(events, [
+    'check:zone-1:new', 'stop-old', 'remove-old', 'prepare:zone-1:new',
+    'start:new.example.com:replacement-token',
+  ]);
+});
+
+test('keeps the owned named hostname when the replacement target is unavailable', async () => {
+  const events = [];
+  const { controller } = dependencies({
+    dependencies: { getNamedSettings: () => ({
+      zoneId: 'zone-1', zoneName: 'example.com', hostname: 'old.example.com', desiredState: 'running',
+    }) },
+    status: tunnelStatus({
+      mode: 'named', state: 'running', hostname: 'old.example.com', publicUrl: 'https://old.example.com',
+    }),
+    provisioner: {
+      checkAvailability: async () => ({
+        hostname: 'taken.example.com', status: 'conflict', suggestions: ['taken-2'],
+      }),
+      removeNamed: async () => { events.push('remove-old'); return { removed: true, warnings: [] }; },
+      prepareNamed: async () => { events.push('prepare'); return {}; },
+    },
+    tunnelManager: {
+      stop: async () => { events.push('stop-old'); return tunnelStatus(); },
+    },
+  });
+
+  await assert.rejects(
+    controller.startNamed({ zoneId: 'zone-1', subdomain: 'taken' }),
+    (error) => error.code === 'HOSTNAME_CONFLICT' && error.status === 409,
+  );
+  assert.deepEqual(events, []);
 });
 
 test('creates a local pairing QR only for a running public tunnel and never exposes its fragment to logs', async () => {

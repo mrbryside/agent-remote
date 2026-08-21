@@ -83,6 +83,12 @@ export function createConversationRegistry({ providers = [] } = {}) {
       return resolved.provider.setMode(resolved.handle, modeId);
     },
 
+    async controlGoal(session, action) {
+      const resolved = await resolve(session);
+      if (!resolved?.provider.controlGoal) throw new Error('This session does not support goal controls');
+      return resolved.provider.controlGoal(resolved.handle, action);
+    },
+
     async removeQueuedInput(session, queueId) {
       const resolved = await resolve(session);
       if (!resolved?.provider.removeQueuedInput) throw new Error('This session does not support queued input');

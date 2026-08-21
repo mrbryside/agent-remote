@@ -158,11 +158,28 @@ test('Grok provider maps a managed tmux process to messages and subagents', asyn
   assert.equal(toolGroup.title, 'Listed 1 dir, Read 2 files');
   assert.deepEqual(toolGroup.tools.map((tool) => tool.subject), ['project', 'package.json', 'README.md']);
   assert.deepEqual(toolGroup.tools[0].locations, ['/tmp/project']);
-  await registry.sendSessionInput({
+  const session = {
     cwd: data.cwd, command: `grok --leader --session-id ${data.parentId}`,
     conversationThreadId: data.parentId,
-  }, 'hello from phone');
+  };
+  await registry.sendSessionInput(session, 'hello from phone');
   assert.equal(data.prompts[0].text, 'hello from phone');
+  await registry.controlGoal(session, 'pause');
+  assert.equal(data.prompts[1].text, '/goal pause');
+
+  data.acpClient.append(data.parentId, {
+    timestamp: 8, params: { update: {
+      sessionUpdate: 'user_message_chunk', content: { type: 'text', text: '/goal clear' },
+    } },
+  });
+  data.acpClient.append(data.parentId, {
+    timestamp: 8.1, params: { update: {
+      sessionUpdate: 'goal_updated', goal_id: '', objective: '', status: 'cleared', phase: 'idle',
+    } },
+  });
+  const cleared = await registry.read(session);
+  assert.ok(!cleared.items.some((item) => item.type === 'goal'));
+  assert.ok(!cleared.items.some((item) => item.type === 'message' && item.text.includes('/goal clear')));
 });
 
 test('Grok provider returns a bounded recent history window for mobile', async () => {

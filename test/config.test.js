@@ -38,6 +38,20 @@ test('uses an ephemeral remote port with an ephemeral local port', { concurrency
   assert.equal(config.remotePort, 0);
 });
 
+test('requires local bearer authentication when the workspace listener is exposed off loopback', { concurrency: false }, () => {
+  assert.throws(
+    () => loadConfig({ env: { PATH: '', HOST: '0.0.0.0' } }),
+    /TERMINAL_TOKEN.*HOST.*loopback/i,
+  );
+  assert.throws(
+    () => loadConfig({ env: { PATH: '', HOST: '192.0.2.10', TERMINAL_TOKEN: '  ' } }),
+    /TERMINAL_TOKEN.*HOST.*loopback/i,
+  );
+  assert.equal(loadConfig({ env: { PATH: '', HOST: '0.0.0.0', TERMINAL_TOKEN: 'secret' } }).host, '0.0.0.0');
+  assert.equal(loadConfig({ env: { PATH: '', HOST: '127.0.0.2' } }).host, '127.0.0.2');
+  assert.equal(loadConfig({ env: { PATH: '', HOST: '::1' } }).host, '::1');
+});
+
 test('rejects invalid remote listener configuration', { concurrency: false }, () => {
   assert.throws(
     () => loadConfig({ env: { PATH: '', REMOTE_HOST: '0.0.0.0' } }),

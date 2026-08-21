@@ -101,11 +101,25 @@ function safeDevice(device) {
   };
 }
 
-export function createRemoteGateway({ auth, getPublicUrl, allowInsecurePublicOrigin = false } = {}) {
+export function createRemoteGateway({
+  auth,
+  getPublicUrl,
+  allowInsecurePublicOrigin = false,
+  now = Date.now,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+} = {}) {
   if (!auth || typeof auth.authenticate !== 'function') throw new TypeError('auth.authenticate is required');
   if (typeof getPublicUrl !== 'function') throw new TypeError('getPublicUrl is required');
+  if (typeof now !== 'function' || typeof setTimer !== 'function' || typeof clearTimer !== 'function') {
+    throw new TypeError('now, setTimer, and clearTimer must be functions');
+  }
 
   const socketsByDevice = new Map();
+  const socketsBySession = new Map();
+  const streamsByDevice = new Map();
+  const streamsBySession = new Map();
+  const sessionExpiryTimers = new Map();
 
   function expectedOrigin() {
     return publicOrigin(getPublicUrl, allowInsecurePublicOrigin);
@@ -124,7 +138,63 @@ export function createRemoteGateway({ auth, getPublicUrl, allowInsecurePublicOri
     const session = auth.authenticate(request);
     if (!session?.deviceId) return undefined;
     request.remoteDeviceId = session.deviceId;
+    request.remoteSessionId = session.sessionId;
+    request.remoteSessionExpiresAt = session.expiresAt;
     return session;
+  }
+
+  function addConnection(map, key, connection) {
+    if (!key) return;
+    let connections = map.get(key);
+    if (!connections) {
+      connections = new Set();
+      map.set(key, connections);
+    }
+    connections.add(connection);
+  }
+
+  function removeConnection(map, key, connection) {
+    const connections = key && map.get(key);
+    if (!connections) return;
+    connections.delete(connection);
+    if (connections.size === 0) map.delete(key);
+  }
+
+  function clearSessionExpiryIfIdle(sessionId) {
+    if (!sessionId || socketsBySession.has(sessionId) || streamsBySession.has(sessionId)) return;
+    const timer = sessionExpiryTimers.get(sessionId);
+    if (timer) clearTimer(timer);
+    sessionExpiryTimers.delete(sessionId);
+  }
+
+  function closeStreams(streams) {
+    if (!streams) return;
+    for (const closeStream of [...streams]) {
+      Promise.resolve(closeStream()).catch(() => {});
+    }
+  }
+
+  function closeSessionConnections(sessionId, code = 4003, reason = 'Session expired') {
+    const timer = sessionExpiryTimers.get(sessionId);
+    if (timer) clearTimer(timer);
+    sessionExpiryTimers.delete(sessionId);
+    const sockets = socketsBySession.get(sessionId);
+    if (sockets) {
+      for (const socket of [...sockets]) {
+        if (socket.readyState < WebSocket.CLOSING) socket.close(code, reason);
+      }
+    }
+    closeStreams(streamsBySession.get(sessionId));
+  }
+
+  function ensureSessionExpiry(sessionId, expiresAt) {
+    if (!sessionId || !Number.isFinite(expiresAt) || sessionExpiryTimers.has(sessionId)) return;
+    const timer = setTimer(
+      () => closeSessionConnections(sessionId, 4003, 'Session expired'),
+      Math.max(0, expiresAt - now()),
+    );
+    timer?.unref?.();
+    sessionExpiryTimers.set(sessionId, timer);
   }
 
   async function handleAuthRequest(request, response, origin) {
@@ -160,7 +230,10 @@ export function createRemoteGateway({ auth, getPublicUrl, allowInsecurePublicOri
       }
       if (request.method === 'DELETE' && pathname === '/remote-auth/session') {
         const sessionId = auth.sessionIdFromRequest(request);
-        if (sessionId) auth.logout(sessionId);
+        if (sessionId) {
+          auth.logout(sessionId);
+          closeSessionConnections(sessionId, 4003, 'Logged out');
+        }
         return sendJson(response, 200, { authenticated: false }, { 'set-cookie': auth.clearSessionCookie() });
       }
       return sendJson(response, 404, { error: 'Not found' });
@@ -172,26 +245,44 @@ export function createRemoteGateway({ auth, getPublicUrl, allowInsecurePublicOri
   function trackSocket(socket, request) {
     const deviceId = request?.remoteDeviceId;
     if (!deviceId) return;
-    let sockets = socketsByDevice.get(deviceId);
-    if (!sockets) {
-      sockets = new Set();
-      socketsByDevice.set(deviceId, sockets);
-    }
-    sockets.add(socket);
+    const sessionId = request.remoteSessionId;
+    addConnection(socketsByDevice, deviceId, socket);
+    addConnection(socketsBySession, sessionId, socket);
+    ensureSessionExpiry(sessionId, request.remoteSessionExpiresAt);
     const remove = () => {
-      sockets.delete(socket);
-      if (sockets.size === 0) socketsByDevice.delete(deviceId);
+      removeConnection(socketsByDevice, deviceId, socket);
+      removeConnection(socketsBySession, sessionId, socket);
+      clearSessionExpiryIfIdle(sessionId);
     };
     socket.once('close', remove);
     socket.once('error', remove);
   }
 
-  function closeDeviceSockets(deviceId) {
+  function trackStream(closeStream, request) {
+    const deviceId = request?.remoteDeviceId;
+    if (!deviceId || typeof closeStream !== 'function') return () => {};
+    const sessionId = request.remoteSessionId;
+    addConnection(streamsByDevice, deviceId, closeStream);
+    addConnection(streamsBySession, sessionId, closeStream);
+    ensureSessionExpiry(sessionId, request.remoteSessionExpiresAt);
+    let tracked = true;
+    return () => {
+      if (!tracked) return;
+      tracked = false;
+      removeConnection(streamsByDevice, deviceId, closeStream);
+      removeConnection(streamsBySession, sessionId, closeStream);
+      clearSessionExpiryIfIdle(sessionId);
+    };
+  }
+
+  function closeDeviceConnections(deviceId) {
     const sockets = socketsByDevice.get(deviceId);
-    if (!sockets) return;
-    for (const socket of [...sockets]) {
-      if (socket.readyState < WebSocket.CLOSING) socket.close(4003, 'Device revoked');
+    if (sockets) {
+      for (const socket of [...sockets]) {
+        if (socket.readyState < WebSocket.CLOSING) socket.close(4003, 'Device revoked');
+      }
     }
+    closeStreams(streamsByDevice.get(deviceId));
   }
 
   return {
@@ -207,9 +298,13 @@ export function createRemoteGateway({ auth, getPublicUrl, allowInsecurePublicOri
       if ((request.method === 'GET' || request.method === 'HEAD') && await sendEntryAsset(response, request.method, pathname)) {
         return;
       }
+      if ((request.method === 'GET' || request.method === 'HEAD') && pathname === '/pair') {
+        await sendEntryAsset(response, request.method, '/remote-entry.html');
+        return;
+      }
       const session = authenticate(request);
       if (!session) {
-        if ((request.method === 'GET' || request.method === 'HEAD') && (pathname === '/' || pathname === '/pair')) {
+        if ((request.method === 'GET' || request.method === 'HEAD') && pathname === '/') {
           await sendEntryAsset(response, request.method, '/remote-entry.html');
           return;
         }
@@ -230,10 +325,18 @@ export function createRemoteGateway({ auth, getPublicUrl, allowInsecurePublicOri
     },
 
     trackSocket,
-    closeDeviceSockets,
+    trackStream,
+    closeDeviceConnections,
     close() {
-      for (const deviceId of [...socketsByDevice.keys()]) closeDeviceSockets(deviceId);
+      for (const deviceId of new Set([...socketsByDevice.keys(), ...streamsByDevice.keys()])) {
+        closeDeviceConnections(deviceId);
+      }
+      for (const timer of sessionExpiryTimers.values()) clearTimer(timer);
       socketsByDevice.clear();
+      socketsBySession.clear();
+      streamsByDevice.clear();
+      streamsBySession.clear();
+      sessionExpiryTimers.clear();
     },
   };
 }

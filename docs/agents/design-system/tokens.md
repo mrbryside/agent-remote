@@ -47,12 +47,32 @@ keyboard resize event arrives. Keep the document non-scrollable at compact
 widths and preserve this focus path when changing the composer or viewport
 layout.
 
+At compact widths the unfocused composer collapses to one centered row:
+attachment, one-line input, and send. Focusing the input expands the existing
+multi-line composer and reveals mode/model controls without replacing the
+composer node. Context usage is the composer's bottom progress edge; its tiny
+numeric value stays offset to the left of the send button. Mode and model
+buttons have no vertical dividers, align their chevrons to the text center, and
+size to their labels; only the model label may ellipsize, and only after the
+toolbar's remaining width is exhausted.
+
 When a compact conversation changes sessions, keep its header and composer
 mounted and visible. The busy surface belongs inside
 `.mobile-conversation-scroll-shell` and may cover only message history; make
 the composer inert until the first snapshot arrives instead of replacing or
 hiding the entire conversation surface. This keeps navigation spatially stable
 and still prevents the terminal from flashing during provider discovery.
+Keep the compact header dense: its resting height is 44px, with 30px controls
+centered vertically so navigation remains visible without consuming chat space.
+
+Browser, Plan, and Agents share one compact activity dock in normal document
+flow above the composer. Its hidden-state affordance uses a tab/panel glyph,
+never the workspace hamburger, and its labels do not repeat counts that are
+already visible inside the corresponding sheet. The Goal row belongs at the
+bottom of the queue/steer dock with a restrained status accent and borderless
+pause, resume, clear, and detail actions; do not render Goal as a chat card.
+Activity sheets use content-fit height up to the shared viewport maximum and
+group agents into `In progress` and `Success` sections.
 
 Scrollbar colors use the semantic `--color-scrollbar-thumb`, `--color-scrollbar-thumb-hover`, and `--color-scrollbar-thumb-active` tokens. `public/styles.css` applies one cross-browser 6px scrollbar contract to every scroll surface: transparent, borderless tracks and corners; rounded low-contrast thumbs; and no arrow buttons. Do not hide a component scrollbar or add a component-specific track frame.
 
@@ -86,6 +106,9 @@ group cannot shift its status column. A child Tool detail may scroll
 horizontally for long code, command output, or a diff, but it must not create a
 second vertical scrollbar inside the group. Standalone Tool details may apply a
 bounded vertical scroll only to the content surface that actually needs it.
+Search Tools summarize the pattern, scope, and result count in their disclosure
+row. Expanded matches are a padded, continuous result list with subtle row
+dividers; do not wrap the Search panel or each match in another card frame.
 
 ## Consumption rules
 

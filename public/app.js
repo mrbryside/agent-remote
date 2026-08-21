@@ -34,10 +34,12 @@ const graphicsSheetBackdrop = document.querySelector('#graphics-sheet-backdrop')
 const graphicsSheetHandle = document.querySelector('#graphics-sheet-handle');
 const graphicsMobileAgentsButton = document.querySelector('#graphics-mobile-agents');
 const graphicsMobileReopenButton = document.querySelector('#graphics-mobile-reopen');
+const graphicsPaneToggleButton = document.querySelector('#toggle-graphics-pane');
 const graphicsResizer = document.querySelector('#graphics-resizer');
 const sidebarResizer = document.querySelector('#sidebar-resizer');
 const workspace = document.querySelector('.workspace');
 const sidebar = document.querySelector('.sidebar');
+const sidebarBackdrop = document.querySelector('#sidebar-backdrop');
 const sidebarEdgeTrigger = document.querySelector('#sidebar-edge-trigger');
 const toggleSidebarButton = document.querySelector('#toggle-sidebar');
 const openSidebarButton = document.querySelector('#open-sidebar');
@@ -105,6 +107,7 @@ let currentFolder = '';
 let firstPromptBuffer = '';
 let firstPromptSession = null;
 let refreshGeneration = 0;
+let workspaceEventSource;
 let splitGeneration = 0;
 const graphicsOpenGenerations = new Map();
 let renderedSidebarSignature = '';
@@ -118,6 +121,7 @@ const graphicsPanes = new Map();
 const serverRendererKeys = new Set();
 const terminalRuntimes = new Map();
 const localSessionActivity = new Map();
+const knownSessionIncarnations = new Map();
 const activitySyncTimers = new Map();
 const workingSessionNames = new Set();
 const conversationLifecycleObservedAt = new Map();
@@ -130,8 +134,8 @@ const mobileConversation = createMobileConversationView({
   api,
   apiUrl,
   media: compactSidebarMedia,
-  async send(sessionName, text, attachmentIds = [], fileMentions = []) {
-    const id = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  async send(sessionName, text, attachmentIds = [], fileMentions = [], requestId) {
+    const id = requestId || crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     markSessionActive(sessionName, true);
     return api(`/api/conversations/${encodeURIComponent(sessionName)}/input`, {
       method: 'POST',
@@ -151,7 +155,7 @@ const mobileConversation = createMobileConversationView({
     const params = new URLSearchParams({ path });
     return api(`/api/conversations/${encodeURIComponent(sessionName)}/files?${params}`);
   },
-  async uploadAttachment(sessionName, file, onProgress = () => {}) {
+  async uploadAttachment(sessionName, file, onProgress = () => {}, { signal } = {}) {
     const uploadId = crypto.randomUUID?.() || '10000000-1000-4000-8000-100000000000'.replace(
       /[018]/g,
       (digit) => (Number(digit) ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> Number(digit) / 4).toString(16),
@@ -162,6 +166,7 @@ const mobileConversation = createMobileConversationView({
     if (!file.size) throw new Error(`${file.name || 'Attachment'} is empty`);
     try {
       while (offset < file.size) {
+        if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
         const chunkEnd = Math.min(file.size, offset + chunkBytes);
         let payload;
         for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -177,16 +182,20 @@ const mobileConversation = createMobileConversationView({
                 'x-upload-total': String(file.size),
               },
               body: file.slice(offset, chunkEnd),
+              signal,
             });
             payload = await response.json().catch(() => ({}));
           } catch (error) {
+            if (signal?.aborted || error?.name === 'AbortError') throw error;
             if (attempt === 2) throw error;
             await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+            if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
             continue;
           }
           if (response.ok || (response.status === 409 && Number(payload.nextOffset) > offset)) break;
           if (response.status >= 500 && attempt < 2) {
             await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+            if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError');
             continue;
           }
           throw new Error(payload.error || `Upload failed (${response.status})`);
@@ -216,6 +225,11 @@ const mobileConversation = createMobileConversationView({
   async setMode(sessionName, modeId) {
     return api(`/api/conversations/${encodeURIComponent(sessionName)}/mode`, {
       method: 'POST', body: JSON.stringify({ modeId }),
+    });
+  },
+  async controlGoal(sessionName, action) {
+    return api(`/api/conversations/${encodeURIComponent(sessionName)}/goal`, {
+      method: 'POST', body: JSON.stringify({ action }),
     });
   },
   async removeQueuedInput(sessionName, queueId) {
@@ -1064,6 +1078,7 @@ function setSidebarCollapsed(collapsed, { persist = true } = {}) {
   // Keeping an invisible hover strip here steals edge taps and makes the
   // sidebar appear accidentally on hybrid/fine-pointer mobile viewports.
   sidebarEdgeTrigger.hidden = !collapsed || compactSidebarMedia.matches;
+  sidebarBackdrop.hidden = collapsed || !compactSidebarMedia.matches;
   openSidebarButton.hidden = !collapsed;
   openSidebarButton.setAttribute('aria-expanded', String(!collapsed));
   if (persist) localStorage.setItem(SIDEBAR_STORAGE_KEY, String(collapsed));
@@ -1112,7 +1127,8 @@ function updateGraphicsSplit() {
   const activePane = activeGraphicsPane();
   const mobile = compactSidebarMedia.matches;
   const nativeMobile = mobile && mobileConversation.isVisibleFor(activeSession);
-  const splitVisible = Boolean(activePane?.revealed && !(mobile && activePane.mobileHidden));
+  const paneHidden = mobile ? activePane?.mobileHidden : activePane?.desktopHidden;
+  const splitVisible = Boolean(activePane?.revealed && !paneHidden);
   for (const pane of graphicsPanes.values()) {
     const visible = pane === activePane && splitVisible;
     pane.host.hidden = !visible;
@@ -1124,6 +1140,10 @@ function updateGraphicsSplit() {
   graphicsSplit.hidden = !splitVisible;
   graphicsSheetBackdrop.hidden = !mobile || !splitVisible;
   graphicsResizer.hidden = graphicsSplit.hidden || mobile;
+  graphicsPaneToggleButton.hidden = mobile || !activePane?.revealed;
+  graphicsPaneToggleButton.setAttribute('aria-expanded', String(splitVisible));
+  graphicsPaneToggleButton.setAttribute('aria-label', splitVisible ? 'Hide browser pane' : 'Show browser pane');
+  graphicsPaneToggleButton.title = splitVisible ? 'Hide browser pane' : 'Show browser pane';
   graphicsMobileReopenButton.hidden = !mobile || nativeMobile || !activePane?.revealed || !activePane.mobileHidden;
   mobileConversation.setBrowserAvailable(activeSession, Boolean(activePane?.revealed));
   graphicsSplit.dataset.state = activePane?.state || 'disconnected';
@@ -1151,18 +1171,25 @@ function showGraphicsSheet(name = activeSession) {
   updateGraphicsSplit();
 }
 
+function toggleDesktopGraphicsPane(name = activeSession) {
+  const pane = graphicsPanes.get(graphicsPaneKey(name));
+  if (!pane || compactSidebarMedia.matches) return;
+  pane.desktopHidden = !pane.desktopHidden;
+  updateGraphicsSplit();
+}
+
 function setGraphicsPaneState(pane, state) {
   pane.state = state;
   if (pane === activeGraphicsPane()) graphicsSplit.dataset.state = state;
 }
 
-function setGraphicsLoading(pane, state = 'loading') {
+function setGraphicsLoading(pane, state = 'loading', detail) {
   if (!pane.loading) return;
   pane.loading.hidden = false;
   pane.loading.dataset.state = state;
   pane.loadingTitle.textContent = state === 'error' ? 'Could not open browser' : 'Opening terminal-browser';
   pane.loadingDetail.textContent = state === 'error'
-    ? 'Close this pane and try again.'
+    ? detail || 'Close this pane and try again.'
     : 'Waiting for the first browser frame…';
   pane.terminalLayer.dataset.surface = 'hidden';
   pane.surface.dataset.ready = 'false';
@@ -1178,6 +1205,7 @@ function disposeGraphicsPane(key, { closeRemote = true } = {}) {
   graphicsPanes.delete(key);
   if (closeRemote) serverRendererKeys.delete(key);
   pane.disposed = true;
+  clearTimeout(pane.replacementTimer);
   pane.resizeObserver?.disconnect();
   if (pane.resizeAnimationFrame) cancelAnimationFrame(pane.resizeAnimationFrame);
   if (pane.pointerAnimationFrame) cancelAnimationFrame(pane.pointerAnimationFrame);
@@ -1214,12 +1242,30 @@ function openGraphicsSplit(argv, transport = 'direct', sessionName = activeSessi
     connect();
     return;
   }
-  if (previousSocket && previousSocket.readyState < WebSocket.CLOSED) {
-    previousSocket.addEventListener('close', connect, { once: true });
-    setTimeout(connect, 1_000);
+  if (!previousSocket || previousSocket.readyState === WebSocket.CLOSED) {
+    disposeGraphicsPane(key, { closeRemote: false });
+    queueMicrotask(connect);
+    return;
   }
-  disposeGraphicsPane(key);
-  if (!previousSocket || previousSocket.readyState === WebSocket.CLOSED) queueMicrotask(connect);
+
+  // Keep the existing pane mounted as an opaque opening cover while the old
+  // browser process unregisters. Removing it first exposes the terminal for a
+  // paint and can also start the replacement before terminal-browser finishes
+  // cleaning up its profile.
+  previous.replacing = true;
+  setGraphicsLoading(previous);
+  const finishReplacement = () => {
+    if (openGeneration !== graphicsOpenGenerations.get(key) || graphicsPanes.get(key) !== previous) return;
+    previous.replacing = false;
+    disposeGraphicsPane(key, { closeRemote: false });
+    connect();
+  };
+  previous.replacementTimer = setTimeout(finishReplacement, 2_100);
+  if (previousSocket.readyState === WebSocket.OPEN) {
+    previousSocket.send(JSON.stringify({ type: 'close' }));
+  } else if (previousSocket.readyState < WebSocket.CLOSING) {
+    previousSocket.close(1000, 'Replacing browser pane');
+  }
 }
 
 function browserPointerPosition(canvas, event, remoteViewport) {
@@ -1264,7 +1310,15 @@ function legacyBrowserFrameData(data) {
 
 async function decodeBrowserFrame(data) {
   const blob = new Blob([data], { type: 'image/jpeg' });
-  if (typeof createImageBitmap === 'function') return createImageBitmap(blob);
+  if (typeof createImageBitmap === 'function') {
+    try {
+      return await createImageBitmap(blob);
+    } catch {
+      // Some iOS/Safari builds expose createImageBitmap but intermittently
+      // reject JPEG blobs received from a WebSocket. Fall through to the
+      // native image decoder instead of leaving the opening cover forever.
+    }
+  }
   const url = URL.createObjectURL(blob);
   try {
     return await new Promise((resolve, reject) => {
@@ -1294,9 +1348,11 @@ function queueBrowserFrame(pane, incoming) {
   const viewportGeneration = Number(message.viewportGeneration) || 0;
   if (viewportGeneration < pane.frameViewportGeneration ||
       (sequence && sequence <= pane.displayedFrameSequence)) return;
-  if (pane.requestedViewport &&
-      (Math.abs(Number(message.width) - pane.requestedViewport.width) > 2 ||
-       Math.abs(Number(message.height) - pane.requestedViewport.height) > 2)) return;
+  // A browser renderer can be watched by the local desktop and a remote phone
+  // at the same time. They necessarily request different viewport sizes. The
+  // server's newest frame is still authoritative and includes its coordinate
+  // space for pointer mapping, so never discard it merely because another
+  // viewer most recently owned the shared Chrome viewport.
   pane.pendingFrame = message;
   if (pane.decodingFrame) return;
   pane.decodingFrame = true;
@@ -1308,8 +1364,19 @@ function queueBrowserFrame(pane, incoming) {
       try {
         decoded = await decodeBrowserFrame(next.data);
       } catch {
+        pane.frameDecodeFailures += 1;
+        if (pane.frameDecodeFailures >= 3) {
+          setGraphicsLoading(pane, 'error', 'This browser could not decode the live frame.');
+        } else {
+          setTimeout(() => {
+            if (!pane.disposed && pane.socket?.readyState === WebSocket.OPEN) {
+              pane.socket.send(JSON.stringify({ type: 'frame-request' }));
+            }
+          }, pane.frameDecodeFailures * 150);
+        }
         continue;
       }
+      pane.frameDecodeFailures = 0;
       if (pane.disposed || browserFrameInvalidatesViewport(pane.pendingFrame, next)) {
         decoded.close?.();
         continue;
@@ -1513,7 +1580,7 @@ function renderBrowserTabs(pane, tabs) {
 
       const close = document.createElement('button');
       close.type = 'button';
-      close.className = 'browser-tab-close';
+      close.className = 'browser-tab-close close-button';
       close.textContent = '×';
       close.addEventListener('click', () => {
         if (pane.socket?.readyState === WebSocket.OPEN) {
@@ -1543,15 +1610,17 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
   const generation = ++splitGeneration;
   const sessionName = graphicsPaneSessionName(key);
   const launchCommand = Array.isArray(argv) ? argv[0]?.split('/').at(-1) : undefined;
+  const protectBrowserOpening = launchCommand === 'terminal-browser' || transport === 'restore';
   const host = document.createElement('div');
   host.className = 'graphics-terminal-instance';
   host.dataset.session = sessionName ?? '__shell__';
   host.dataset.outputMessages = '0';
   const terminalLayer = document.createElement('div');
   terminalLayer.className = 'graphics-terminal-transport';
+  if (protectBrowserOpening) terminalLayer.dataset.surface = 'hidden';
   const loading = document.createElement('div');
   loading.className = 'graphics-loading';
-  loading.hidden = true;
+  loading.hidden = !protectBrowserOpening;
   loading.setAttribute('role', 'status');
   loading.setAttribute('aria-live', 'polite');
   const loadingSpinner = document.createElement('span');
@@ -1634,6 +1703,7 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
   inspectorTitle.textContent = 'Chrome DevTools';
   const inspectorClose = document.createElement('button');
   inspectorClose.type = 'button';
+  inspectorClose.className = 'close-button';
   inspectorClose.textContent = '×';
   inspectorClose.title = 'Close Chrome DevTools';
   inspectorClose.setAttribute('aria-label', 'Close Chrome DevTools');
@@ -1660,7 +1730,7 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
   });
   nextTerminal.loadAddon(nextFitAddon);
   nextTerminal.loadAddon(nextImageAddon);
-  const revealImmediately = launchCommand === 'terminal-browser' || transport === 'restore';
+  const revealImmediately = protectBrowserOpening;
   const pane = {
     key,
     generation,
@@ -1670,7 +1740,7 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
     socket: undefined,
     state: 'connecting',
     revealed: revealImmediately,
-    suppressTerminalPreview: launchCommand === 'terminal-browser',
+    suppressTerminalPreview: protectBrowserOpening,
     transport,
     images: 0,
     buffer: '',
@@ -1698,6 +1768,7 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
     recording: undefined,
     pendingFrame: undefined,
     decodingFrame: false,
+    frameDecodeFailures: 0,
     frameViewport: undefined,
     frameViewportGeneration: 0,
     displayedFrameSequence: 0,
@@ -1705,7 +1776,8 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
     cursor: 'default',
     lastViewportRequest: '',
     requestedViewport: undefined,
-    mobileHidden: false,
+    mobileHidden: transport === 'restore' && compactSidebarMedia.matches,
+    desktopHidden: false,
     pointerAnimationFrame: undefined,
     pendingPointerMove: undefined,
     resizeAnimationFrame: undefined,
@@ -1910,6 +1982,12 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
       }
       requestAnimationFrame(fitTerminals);
     }
+    if (message.type === 'renderer-state') {
+      if (message.state === 'starting') setGraphicsLoading(pane);
+      if (message.state === 'failed') {
+        setGraphicsLoading(pane, 'error', message.message || 'terminal-browser could not start.');
+      }
+    }
     if (message.type === 'frame' && typeof message.data === 'string') queueBrowserFrame(pane, message);
     if (message.type === 'cursor' && browserCursorValues.has(message.value)) {
       pane.cursor = message.value;
@@ -1940,11 +2018,15 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
     }
     if (message.type === 'closed') {
       serverRendererKeys.delete(key);
+      if (pane.replacing) return;
       disposeGraphicsPane(key, { closeRemote: false });
     }
   });
   nextSocket.addEventListener('close', () => {
-    if (!pane.disposed && graphicsPanes.get(key) === pane) setGraphicsPaneState(pane, 'disconnected');
+    if (!pane.disposed && graphicsPanes.get(key) === pane) {
+      setGraphicsPaneState(pane, 'disconnected');
+      if (!pane.replacing && !pane.surfaceReady && pane.suppressTerminalPreview) setGraphicsLoading(pane, 'error');
+    }
   });
   nextSocket.addEventListener('error', () => nextSocket.close());
   requestAnimationFrame(() => requestAnimationFrame(fitTerminals));
@@ -1978,10 +2060,21 @@ function selectedSession() {
   return sessions.find((session) => session.name === activeSession);
 }
 
+function commandUsesNativeConversation(command) {
+  const source = String(command || '').trim();
+  const executableMatch = source.match(/^(?:"([^"]+)"|'([^']+)'|([^\s]+))/);
+  const executable = (executableMatch?.[1] || executableMatch?.[2] || executableMatch?.[3] || '')
+    .split('/')
+    .pop();
+  return executable === 'grok' && /(?:^|\s)--leader(?:\s|$)/.test(source) &&
+    /(?:^|\s)--session-id(?:=|\s+)\S+/.test(source);
+}
+
 function sessionUsesNativeConversation(session) {
   if (!session) return false;
   const project = projects.find((item) => item.id === session.projectId);
   return Boolean(session.nativeConversation || session.conversationThreadId ||
+    commandUsesNativeConversation(session.command) ||
     agents.find((agent) => agent.id === project?.agentId)?.providerId === 'grok');
 }
 
@@ -1989,7 +2082,7 @@ function showSessionLoading(session, copy = 'Opening the project folder and star
   const project = projects.find((item) => item.id === session?.projectId);
   const nativeGrok = sessionUsesNativeConversation(session);
   sessionLoading.dataset.native = String(nativeGrok);
-  sessionLoadingKicker.textContent = nativeGrok ? '' : project?.name || 'Starting chat';
+  sessionLoadingKicker.textContent = nativeGrok ? 'Agent chat' : project?.name || 'Starting chat';
   // Grok launches behind one uninterrupted, stable cover. Keep the same copy
   // from optimistic creation through ACP readiness so no intermediate
   // Connecting/Opening state is visible.
@@ -2025,6 +2118,58 @@ function hasPendingMutations() {
 
 function invalidateWorkspaceRefresh() {
   refreshGeneration += 1;
+}
+
+function sessionIncarnation(session) {
+  if (!session || session.pending) return '';
+  if (session.createdAt !== undefined && session.createdAt !== null) {
+    return `created:${session.createdAt}`;
+  }
+  return session.conversationThreadId ? `thread:${session.conversationThreadId}` : '';
+}
+
+function discardSessionArtifacts(name, { closeBrowser = true } = {}) {
+  if (!name) return;
+  knownSessionIncarnations.delete(name);
+  mobileConversation.invalidate(name);
+  removeTerminalSnapshot(name);
+  disposeTerminalRuntime(name);
+  if (closeBrowser) closeGraphicsSplit(name);
+}
+
+function evictDeletedSessions(names) {
+  const deleted = new Set(names.filter((name) => typeof name === 'string' && name));
+  if (!deleted.size) return false;
+  const before = sessions.length;
+  const activeDeleted = Boolean(activeSession && deleted.has(activeSession));
+  sessions = sessions.filter((session) => !deleted.has(session.name));
+  for (const name of deleted) discardSessionArtifacts(name);
+  if (activeDeleted) {
+    activeSession = null;
+    localStorage.removeItem(ACTIVE_SESSION_STORAGE_KEY);
+    disconnectTerminal();
+  }
+  if (sessions.length !== before || activeDeleted) {
+    renderLocalWorkspace();
+  } else {
+    syncSidebarSelection();
+    setView();
+  }
+  return sessions.length !== before;
+}
+
+function handleWorkspaceChange(event) {
+  let payload;
+  try { payload = JSON.parse(event.data); } catch { return; }
+  invalidateWorkspaceRefresh();
+  evictDeletedSessions(Array.isArray(payload.deleted) ? payload.deleted : []);
+  if (!hasPendingMutations()) refreshWorkspace().catch(() => {});
+}
+
+function connectWorkspaceEvents() {
+  if (typeof EventSource !== 'function' || workspaceEventSource) return;
+  workspaceEventSource = new EventSource(apiUrl('/api/workspace/stream'));
+  workspaceEventSource.addEventListener('workspace', handleWorkspaceChange);
 }
 
 function renderLocalWorkspace() {
@@ -2115,7 +2260,7 @@ function sessionRow(session) {
 
   const close = document.createElement('button');
   close.type = 'button';
-  close.className = 'session-close';
+  close.className = 'session-close close-button close-button--destructive';
   close.textContent = '×';
   close.addEventListener('click', () => deleteSession(session));
   const activity = document.createElement('span');
@@ -2163,8 +2308,7 @@ async function deleteSession(session) {
   const originalIndex = sessions.findIndex((item) => item.name === current.name);
   pendingSessionDeletes.set(current.name, { session: current, originalIndex });
   sessions = sessions.filter((item) => item.name !== current.name);
-  closeGraphicsSplit(current.name);
-  disposeTerminalRuntime(current.name);
+  discardSessionArtifacts(current.name);
   if (activeSession === current.name) selectSession(null);
   renderLocalWorkspace();
 
@@ -2197,8 +2341,7 @@ async function clearProjectChats(project) {
   const removedNames = new Set(sessions.filter((session) => session.projectId === project.id).map((session) => session.name));
   sessions = sessions.filter((session) => session.projectId !== project.id);
   for (const session of snapshot) {
-    closeGraphicsSplit(session.name);
-    disposeTerminalRuntime(session.name);
+    discardSessionArtifacts(session.name);
   }
   if (activeSession && removedNames.has(activeSession)) selectSession(null);
   renderLocalWorkspace();
@@ -2235,8 +2378,7 @@ async function deleteProject(project) {
   projects = projects.filter((item) => item.id !== project.id);
   sessions = sessions.filter((session) => session.projectId !== project.id);
   for (const session of projectSessions) {
-    closeGraphicsSplit(session.name);
-    disposeTerminalRuntime(session.name);
+    discardSessionArtifacts(session.name);
   }
   if (activeSession && removedNames.has(activeSession)) selectSession(null);
   if (activeProjectId === project.id) {
@@ -2316,14 +2458,17 @@ function projectGroup(project) {
   label.className = 'project-name';
   label.textContent = project.name;
   select.append(icon, label);
-  select.addEventListener('click', () => selectProject(project.id));
+  select.addEventListener('click', (event) => {
+    selectProject(project.id);
+    if (event.detail !== 0) select.blur();
+  });
 
   const actions = document.createElement('div');
   actions.className = 'project-actions';
   actions.append(
     projectAction(chatActionIcon(), `New chat in ${project.name}`, () => createChat(project.id), 'project-new-chat'),
     projectAction('✎', `Edit ${project.name}`, () => openProjectDialog(project)),
-    projectAction('×', `Delete project ${project.name}`, () => deleteProject(project), 'project-delete'),
+    projectAction('×', `Delete project ${project.name}`, () => deleteProject(project), 'project-delete close-button close-button--destructive'),
   );
   header.append(select, actions);
 
@@ -2643,6 +2788,20 @@ async function refreshWorkspace() {
         lastActiveAt: Math.max(sessionActivityTime(session), localSessionActivity.get(session.name) || 0),
       })),
   ];
+  const nextSessions = new Map(sessions
+    .filter((session) => !session.pending)
+    .map((session) => [session.name, sessionIncarnation(session)]));
+  for (const [name, incarnation] of knownSessionIncarnations) {
+    const nextIncarnation = nextSessions.get(name);
+    if (nextIncarnation === undefined ||
+        (incarnation && nextIncarnation && nextIncarnation !== incarnation)) {
+      discardSessionArtifacts(name);
+    }
+  }
+  knownSessionIncarnations.clear();
+  for (const [name, incarnation] of nextSessions) {
+    if (incarnation) knownSessionIncarnations.set(name, incarnation);
+  }
   syncConversationLifecycleStatuses(sessions, requestStartedAt);
   if (activeProjectId && !projects.some((project) => project.id === activeProjectId)) {
     activeProjectId = null;
@@ -2741,6 +2900,7 @@ async function createChat(projectId = activeProjectId) {
     }
 
     pendingSessionCreates.delete(temporaryName);
+    discardSessionArtifacts(payload.session.name);
     sessions = sessions.filter((session) => session === optimisticSession ||
       (session.name !== temporaryName && session.name !== payload.session.name));
     promotePendingSession(temporaryName, optimisticSession, payload.session);
@@ -2989,6 +3149,7 @@ terminalElement.addEventListener('pointercancel', (event) => finishTerminalTouch
 closeGraphicsSplitButton.addEventListener('click', () => {
   closeGraphicsSplit();
 });
+graphicsPaneToggleButton.addEventListener('click', () => toggleDesktopGraphicsPane());
 graphicsSheetBackdrop.addEventListener('click', () => hideGraphicsSheet());
 graphicsMobileReopenButton.addEventListener('click', () => showGraphicsSheet());
 graphicsMobileAgentsButton.addEventListener('click', () => {
@@ -3020,6 +3181,7 @@ toggleSidebarButton.addEventListener('click', () => {
   setSidebarCollapsed(true);
 });
 openSidebarButton.addEventListener('click', () => setSidebarCollapsed(false));
+sidebarBackdrop.addEventListener('click', () => setSidebarCollapsed(true, { persist: false }));
 sidebarEdgeTrigger.addEventListener('pointerenter', showSidebarPeek);
 sidebarEdgeTrigger.addEventListener('pointerleave', scheduleSidebarPeekClose);
 sidebar.addEventListener('pointerenter', () => clearTimeout(sidebarPeekCloseTimer));
@@ -3037,19 +3199,52 @@ compactSidebarMedia.addEventListener('change', () => {
   updateGraphicsSplit();
 });
 syncSidebarForViewport();
+let visualViewportFrame;
+
 function syncVisualViewport() {
   if (!window.visualViewport) return;
   const viewport = window.visualViewport;
   const root = document.documentElement;
-  root.style.setProperty('--visual-viewport-height', `${Math.max(1, Math.round(viewport.height))}px`);
-  root.style.setProperty('--visual-viewport-width', `${Math.max(1, Math.round(viewport.width))}px`);
-  root.style.setProperty('--visual-viewport-offset-top', `${Math.max(0, Math.round(viewport.offsetTop))}px`);
-  root.style.setProperty('--visual-viewport-offset-left', `${Math.max(0, Math.round(viewport.offsetLeft))}px`);
-  root.dataset.visualKeyboard = String(window.innerHeight - viewport.height - viewport.offsetTop > 120);
-  requestAnimationFrame(resize);
+  const height = Math.max(1, viewport.height);
+  const width = Math.max(1, viewport.width);
+  const offsetTop = Math.max(0, viewport.offsetTop);
+  const offsetLeft = Math.max(0, viewport.offsetLeft);
+  const insetBottom = Math.max(0, window.innerHeight - height - offsetTop);
+  const insetRight = Math.max(0, window.innerWidth - width - offsetLeft);
+  const keyboard = insetBottom > 120;
+  // Keep Safari's fractional animation frames. Rounding every visualViewport
+  // sample made the fixed mobile surface move in visible one-pixel steps.
+  root.style.setProperty('--visual-viewport-height', `${height}px`);
+  root.style.setProperty('--visual-viewport-width', `${width}px`);
+  root.style.setProperty('--visual-viewport-offset-top', `${offsetTop}px`);
+  root.style.setProperty('--visual-viewport-offset-left', `${offsetLeft}px`);
+  // The native mobile conversation remains a full-layout-viewport canvas.
+  // Only its content insets follow the visual viewport. This prevents iOS
+  // Safari from exposing the page underneath while the keyboard animates.
+  root.style.setProperty('--visual-viewport-inset-top', `${offsetTop}px`);
+  root.style.setProperty('--visual-viewport-inset-right', `${insetRight}px`);
+  root.style.setProperty('--visual-viewport-layout-inset-bottom', `${insetBottom}px`);
+  root.style.setProperty('--visual-viewport-inset-bottom', `${insetBottom}px`);
+  root.style.setProperty('--visual-viewport-inset-left', `${offsetLeft}px`);
+  root.dataset.visualKeyboard = String(keyboard);
+  document.dispatchEvent(new CustomEvent('agent-remote:visual-viewport', {
+    detail: { height, width, offsetTop, offsetLeft, insetBottom, insetRight, keyboard },
+  }));
+  resize();
 }
-window.visualViewport?.addEventListener('resize', syncVisualViewport);
-window.visualViewport?.addEventListener('scroll', syncVisualViewport);
+function scheduleVisualViewportSync() {
+  if (visualViewportFrame) return;
+  visualViewportFrame = requestAnimationFrame(() => {
+    visualViewportFrame = undefined;
+    syncVisualViewport();
+  });
+}
+window.visualViewport?.addEventListener('resize', scheduleVisualViewportSync);
+window.visualViewport?.addEventListener('scroll', scheduleVisualViewportSync);
+// Some engines update the layout viewport before (or without) a matching
+// visualViewport notification, especially during rotation and browser chrome
+// changes. Reconcile both coordinate spaces on the regular resize event too.
+window.addEventListener('resize', scheduleVisualViewportSync);
 syncVisualViewport();
 requestAnimationFrame(() => requestAnimationFrame(() => {
   delete document.documentElement.dataset.sidebarBooting;
@@ -3063,10 +3258,14 @@ const poller = setInterval(() => {
 }, 3000);
 window.addEventListener('beforeunload', () => {
   compactSidebarMedia.removeEventListener('change', syncSidebarForViewport);
-  window.visualViewport?.removeEventListener('resize', syncVisualViewport);
-  window.visualViewport?.removeEventListener('scroll', syncVisualViewport);
+  window.visualViewport?.removeEventListener('resize', scheduleVisualViewportSync);
+  window.visualViewport?.removeEventListener('scroll', scheduleVisualViewportSync);
+  window.removeEventListener('resize', scheduleVisualViewportSync);
+  cancelAnimationFrame(visualViewportFrame);
   observer.disconnect();
   clearInterval(poller);
+  workspaceEventSource?.close();
+  workspaceEventSource = undefined;
   mobileConversation.destroy();
   for (const runtime of terminalRuntimes.values()) {
     persistTerminalSnapshot(runtime);
@@ -3086,6 +3285,7 @@ window.addEventListener('beforeunload', () => {
 
 restoreCachedActiveSession();
 void bootstrapRemoteControl();
+connectWorkspaceEvents();
 refreshWorkspace().catch((error) => {
   delete document.documentElement.dataset.restoringSession;
   setStatus('disconnected', error.message);

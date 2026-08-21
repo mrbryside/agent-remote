@@ -42,6 +42,12 @@ copy while readiness is delayed. Pending chat creation and the promoted managed 
 reuse that same uninterrupted cover. Other catalog agents and standalone
 terminal commands retain the bounded quiet-window reveal path.
 
+The native mobile boot cover and desktop startup cover share the same `Agent chat`
+composition: orbit mark, `Preparing chat…` heading, and animated loading
+indicator. Mobile hides its conversation header, activity docks, and composer
+until the first complete snapshot replaces that cover, so startup presents the
+same centered page at both responsive sizes.
+
 ## State ownership
 
 | State | Owner |
@@ -52,6 +58,7 @@ terminal commands retain the bounded quiet-window reveal path.
 | Mounted terminal caches during one page lifetime | `public/app.js` runtime maps |
 | Agent message/tool/subagent history | provider-owned files, read through `src/conversations/` |
 | Live mobile token/lifecycle delivery | session-scoped `/conversation-ws`, reconciled by provider snapshots |
+| Active Grok goal and elapsed metrics | provider ACP Goal updates, projected into the conversation snapshot |
 | Managed Grok TUI/ACP coordination | leader socket derived from the configured SQLite path |
 | Browser renderer/tab state | keyed renderer in `src/server.js` |
 | Named-tunnel metadata and paired-device audit rows | SQLite via `src/remote/store.js` |
@@ -60,6 +67,44 @@ terminal commands retain the bounded quiet-window reveal path.
 | Remote browser private key | that browser profile's IndexedDB |
 
 Do not replace a durable owner with polling or DOM state. UI updates may be optimistic, but reconciliation must use the server response without stealing selection from a newer user action.
+
+## Mobile goal controls
+
+Grok Goal updates are provider state, not chat messages. The Grok adapter keeps a
+single current Goal item keyed by the provider Goal ID, updates its status and
+metrics from ACP events, and removes it when the provider reports `cleared`.
+Slash-command echoes used to control a Goal are not rendered as user messages.
+
+The compact client places the active Goal as a persistent row at the bottom of
+the queue/steer dock. It may pause, resume, or clear the Goal through
+`POST /api/conversations/:session/goal`; the registry validates that the
+selected provider supports the operation before dispatching the corresponding
+provider command. Clearing is terminal for that Goal row: it disappears after
+the authoritative snapshot confirms removal. Goal state must not be inferred
+from the terminal screen or duplicated as a timeline card.
+
+## Cross-device workspace synchronization
+
+`GET /api/workspace/stream` is the low-latency invalidation channel for project
+and chat mutations. Both the local listener and an authenticated Remote client
+may subscribe. The server emits monotonically increasing workspace revisions,
+an optional list of deleted session names, and a mutation type; the stream is
+not an alternate project store and never carries an authoritative workspace
+snapshot.
+
+On an event, `public/app.js` immediately evicts explicitly deleted sessions and
+returns an affected client to the empty workspace before reconciling projects
+and sessions from the normal HTTP APIs. Polling remains a recovery path only.
+Every mounted terminal, native conversation cache, terminal snapshot, and
+browser split belongs to a session incarnation, not merely its tmux name. The
+incarnation uses the persisted chat creation time, falling back to the provider
+thread ID. When a deleted name is reused, the old incarnation must be disposed
+before the replacement is mounted; otherwise another device can resurrect the
+deleted terminal or message history until reload.
+
+Keep workspace mutation broadcasts next to the successful server-side write.
+Bulk project/session deletion must include every removed session name so other
+clients can synchronously clear their selection and runtime artifacts.
 
 ## Startup and shutdown order
 

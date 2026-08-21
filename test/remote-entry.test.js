@@ -7,6 +7,8 @@ import {
   challengePayload,
   createPersistedCredential,
   extractPairingSecret,
+  getOrCreatePersistedCredential,
+  inferBrowserDeviceName,
   logout,
   pairDevice,
   reauthenticateDevice,
@@ -78,22 +80,20 @@ function fakeCrypto(calls) {
   };
 }
 
-test('remote entry has a locked state, pairing form, one pairing action, and no local administration controls', async () => {
+test('remote entry auto-pairs without asking for a device name or exposing local administration controls', async () => {
   const [html, js, css] = await Promise.all([
     readFile(new URL('remote-entry.html', publicDir), 'utf8'),
     readFile(new URL('remote-entry.js', publicDir), 'utf8'),
     readFile(new URL('remote-entry.css', publicDir), 'utf8'),
   ]);
   assert.match(html, /Remote access is locked/);
-  assert.match(html, /This device is not paired/);
-  assert.match(html, /for="device-name"/);
-  assert.match(html, />Pair this device</);
-  assert.match(html, /Connecting securely…/);
+  assert.match(html, /This browser is not paired/);
+  assert.doesNotMatch(html, /device-name|pair-form|Pair this device/);
+  assert.doesNotMatch(html, /entry-message|id="connecting"/);
   assert.doesNotMatch(html, /cloudflare|quick tunnel|remote modal|tauri/i);
   assert.match(js, /history\.replaceState/);
+  assert.match(css, /\.entry-card\s*\{[^}]*border:\s*0;/s);
   assert.match(css, /prefers-reduced-motion/);
-  assert.match(css, /--entry-button-surface:\s*transparent/);
-  assert.match(css, /button\s*\{[^}]*border:\s*1px solid var\(--entry-button-border\)[^}]*background:\s*var\(--entry-button-surface\)/s);
 });
 
 test('creates a P-256 credential with a non-extractable stored private key and signs after an IndexedDB round trip', async () => {
@@ -110,6 +110,9 @@ test('creates a P-256 credential with a non-extractable stored private key and s
   assert.ok(calls.some((call) => call.method === 'verify'));
   const restored = await restoreCredential({ indexedDB });
   assert.equal(restored.privateKey.extractable, false);
+  const reused = await getOrCreatePersistedCredential({ crypto: fakeCrypto(calls), indexedDB });
+  assert.equal(reused.privateKey.extractable, false);
+  assert.equal(calls.filter((call) => call.method === 'generateKey').length, 1);
 });
 
 test('uses canonical base64url and exact challenge payloads', () => {
@@ -118,6 +121,14 @@ test('uses canonical base64url and exact challenge payloads', () => {
     new TextDecoder().decode(challengePayload({ challengeId: 'id', challenge: 'nonce' }, 'https://term.example.test')),
     'agent-remote:v1:id:nonce:https://term.example.test',
   );
+});
+
+test('infers stable browser device names for automatic pairing', () => {
+  assert.equal(inferBrowserDeviceName({
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Version/18.6 Mobile/15E148 Safari/604.1',
+    platform: 'iPhone',
+  }), 'iPhone · Safari');
+  assert.equal(inferBrowserDeviceName({ userAgent: '', platform: '' }), 'Paired device');
 });
 
 test('removes the pairing fragment before the pair request and recognises missing or expired pairing links', () => {
@@ -145,9 +156,9 @@ test('pairs only after the credential is ready, silently signs a returning chall
     if (path === '/remote-auth/session') return { ok: true, json: async () => ({ authenticated: false }) };
     throw new Error(`Unexpected path: ${path}`);
   };
-  await pairDevice({ secret: 'secret', deviceName: 'Laptop', credential, fetchFn, location, indexedDB });
+  await pairDevice({ secret: 'secret', deviceName: 'Test device', credential, fetchFn, location, indexedDB });
   assert.deepEqual(JSON.parse(requests[0].options.body), {
-    secret: 'secret', deviceName: 'Laptop', publicKeyJwk: credential.publicKeyJwk,
+    secret: 'secret', deviceName: 'Test device', publicKeyJwk: credential.publicKeyJwk,
   });
   assert.equal(requests[1].redirect, '/');
 
@@ -196,7 +207,7 @@ test('gateway serves the three entry assets before authentication and forwards a
     fetchGateway('/'), fetchGateway('/pair'), fetchGateway('/remote-entry.js'), fetchGateway('/remote-entry.css'), fetchGateway('/app.js'),
   ]);
   assert.match(entry.body, /Remote access is locked/);
-  assert.match(pair.body, /Pair this device/);
+  assert.match(pair.body, /Remote access is locked/);
   assert.match(script.headers['content-type'], /^text\/javascript/);
   assert.match(styles.headers['content-type'], /^text\/css/);
   assert.equal(application.status, 401);

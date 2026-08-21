@@ -8,6 +8,24 @@ function element(tag, className, text) {
   return node;
 }
 
+function emptyConversationNode() {
+  const section = element('section', 'mobile-conversation-empty');
+  section.setAttribute('aria-label', 'Empty conversation');
+  section.__mobileItemSignature = 'empty-conversation';
+
+  const orbit = element('div', 'empty-orbit mobile-conversation-empty-orbit');
+  orbit.setAttribute('aria-hidden', 'true');
+  orbit.append(element('span'), element('i'));
+
+  section.append(
+    orbit,
+    element('span', 'empty-kicker', 'New conversation'),
+    element('h2', '', 'What should we build next?'),
+    element('p', '', 'Send a message below to start this chat.'),
+  );
+  return section;
+}
+
 function statusLabel(status) {
   if (status === 'calling') return 'Calling';
   if (status === 'working' || status === 'running') return 'Running';
@@ -37,6 +55,7 @@ function duration(value) {
 
 export function createMobileConversationView({
   api, apiUrl, media, send, cancelTurn, uploadAttachment, searchFiles, readFile, setModel, setMode,
+  controlGoal,
   removeQueuedInput, steerQueuedInput, reorderQueuedInputs, respondPermission, respondQuestion,
   respondPlanReview,
   onVisibilityChange, onStatusChange = () => {}, onBrowserOpen = () => {},
@@ -71,6 +90,7 @@ export function createMobileConversationView({
   const context = document.querySelector('#mobile-conversation-context');
   const contextProgress = document.querySelector('#mobile-conversation-context-progress');
   const contextValue = document.querySelector('#mobile-conversation-context-value');
+  composer.dataset.expanded = 'false';
   let sessionName;
   let threadId;
   let parentId;
@@ -89,6 +109,9 @@ export function createMobileConversationView({
   let lastConversation;
   let queueMutationPending = false;
   let queueRenderSignature = '';
+  let goalMutationPending = false;
+  const hiddenGoalIds = new Set();
+  const optimisticQueuedInputs = new Map();
   let rootThreadId;
   let rootConversation;
   let sheet;
@@ -118,6 +141,7 @@ export function createMobileConversationView({
   let modelBusy = false;
   let modelOptionsSignature = '';
   let controlBusy = false;
+  let submittingMessage = false;
   let cancellingTurn = false;
   let interactionMotionKey = '';
   let attachments = [];
@@ -135,6 +159,11 @@ export function createMobileConversationView({
   // those layout-driven events must not look like the reader scrolled away.
   let submittedTurnFollow = false;
   let tailSnapFrame;
+  let mainScrollGeometryLock;
+  let mainScrollGeometryUnlockTimer;
+  let mainScrollGeometryFrame;
+  let readerScrollGesture = false;
+  let readerScrollGestureTimer;
   let fileSheet;
   let fileSheetPanel;
   let fileSheetTitle;
@@ -228,6 +257,72 @@ export function createMobileConversationView({
     });
   }
 
+  function captureMainScrollAnchor() {
+    const bottom = distanceFromBottom();
+    // `followStreamTail` records the reader's intent. A browser may move the
+    // scroll container to expose the focused textarea before pointerdown, so
+    // geometry at that instant alone is not a trustworthy bottom signal.
+    return { bottom, top: messages.scrollTop, atBottom: bottom <= 48 || followStreamTail };
+  }
+
+  function applyMainScrollGeometryLock() {
+    const anchor = mainScrollGeometryLock;
+    if (!anchor) return;
+    const maxScrollTop = Math.max(0, messages.scrollHeight - messages.clientHeight);
+    const target = anchor.atBottom
+      ? maxScrollTop
+      : Math.min(anchor.top, maxScrollTop);
+    if (Math.abs(messages.scrollTop - target) > .5) messages.scrollTop = target;
+    if (anchor.atBottom) followStreamTail = true;
+    updateJumpToLatest();
+  }
+
+  function scheduleMainScrollGeometryLock() {
+    if (!mainScrollGeometryLock || mainScrollGeometryFrame) return;
+    mainScrollGeometryFrame = requestAnimationFrame(() => {
+      mainScrollGeometryFrame = undefined;
+      applyMainScrollGeometryLock();
+      // Native focus scrolling does not resize either observed element. Keep
+      // the anchor authoritative on every animation frame for this short
+      // transition window so WebKit/Chromium cannot insert a shifted frame.
+      if (mainScrollGeometryLock) scheduleMainScrollGeometryLock();
+    });
+  }
+
+  function holdMainScrollGeometry({ recapture = false, settle = 260 } = {}) {
+    if (!mainScrollGeometryLock || recapture) {
+      mainScrollGeometryLock = captureMainScrollAnchor();
+    }
+    clearTimeout(mainScrollGeometryUnlockTimer);
+    mainScrollGeometryUnlockTimer = setTimeout(() => {
+      applyMainScrollGeometryLock();
+      mainScrollGeometryLock = undefined;
+      mainScrollGeometryUnlockTimer = undefined;
+    }, settle);
+    // Force the post-mutation layout to reconcile in the same task, then keep
+    // correcting before paint while the composer/visual viewport animates.
+    applyMainScrollGeometryLock();
+    scheduleMainScrollGeometryLock();
+  }
+
+  function releaseMainScrollGeometryLock() {
+    clearTimeout(mainScrollGeometryUnlockTimer);
+    mainScrollGeometryUnlockTimer = undefined;
+    cancelAnimationFrame(mainScrollGeometryFrame);
+    mainScrollGeometryFrame = undefined;
+    mainScrollGeometryLock = undefined;
+  }
+
+  const mainScrollGeometryObserver = new ResizeObserver(() => {
+    if (!mainScrollGeometryLock) return;
+    // ResizeObserver runs after layout and before paint, which keeps both the
+    // collapsed/expanded composer transition and iOS keyboard transition from
+    // exposing an intermediate shifted chat frame.
+    holdMainScrollGeometry({ settle: 96 });
+  });
+  mainScrollGeometryObserver.observe(composer);
+  mainScrollGeometryObserver.observe(scrollShell);
+
   function scrollIdentity(viewport) {
     const owner = viewport.closest('[data-message-id], [data-event-id]');
     if (!owner) return undefined;
@@ -293,10 +388,13 @@ export function createMobileConversationView({
     const option = control?.options?.find((model) => model.id === modelId);
     closeModelList();
     const unchanged = control.currentId === modelId && (!effortId || option?.currentEffortId === effortId);
-    if (!option || unchanged || !sessionName || modelBusy) return;
+    if (!option || unchanged || !sessionName || modelBusy || controlBusy) return;
     modelBusy = true;
-    modelButton.disabled = true;
-    modelLabel.textContent = 'Switching…';
+    if (lastConversation) {
+      renderModelControls(lastConversation);
+      renderChoiceControls(lastConversation);
+    }
+    updateComposerAction();
     try {
       await setModel(sessionName, modelId, effortId);
       renderedSignature = '';
@@ -306,7 +404,11 @@ export function createMobileConversationView({
       state.dataset.state = 'error';
     } finally {
       modelBusy = false;
-      if (lastConversation) renderModelControls(lastConversation);
+      if (lastConversation) {
+        renderModelControls(lastConversation);
+        renderChoiceControls(lastConversation);
+      }
+      updateComposerAction();
     }
   }
 
@@ -343,8 +445,11 @@ export function createMobileConversationView({
         );
         button.addEventListener('click', () => {
           if (!option.efforts?.length) return void chooseModel(option.id);
+          const keepComposerFocused = document.activeElement === input;
           paintEffortOptions(option);
-          modelList.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+          if (!keepComposerFocused) {
+            modelList.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+          }
         });
         group.append(button);
       }
@@ -363,8 +468,11 @@ export function createMobileConversationView({
     backButton.addEventListener('click', () => {
       const control = lastConversation?.controls?.model;
       if (!control) return;
+      const keepComposerFocused = document.activeElement === input;
       paintModelOptions(control);
-      modelList.querySelector(`[data-model-id="${CSS.escape(option.id)}"]`)?.focus({ preventScroll: true });
+      if (!keepComposerFocused) {
+        modelList.querySelector(`[data-model-id="${CSS.escape(option.id)}"]`)?.focus({ preventScroll: true });
+      }
     });
     const copy = element('span');
     copy.append(element('small', '', 'Choose effort'), element('strong', '', option.label));
@@ -399,10 +507,11 @@ export function createMobileConversationView({
     modelButton.hidden = false;
     // Grok applies a selection made during an active turn immediately before
     // the next queued prompt. Keep the control usable while text streams.
-    modelButton.disabled = modelBusy;
+    modelButton.disabled = modelBusy || controlBusy;
+    modelButton.setAttribute('aria-busy', String(modelBusy));
     const currentEffort = current.efforts?.find((effort) => effort.id === current.currentEffortId);
     const currentLabel = [current.label, currentEffort?.label?.replace(/ Effort$/i, '')].filter(Boolean).join(' · ');
-    if (!modelBusy) modelLabel.textContent = currentLabel;
+    modelLabel.textContent = modelBusy ? 'Switching…' : currentLabel;
     modelButton.setAttribute('aria-label', `Choose model, ${currentLabel}`);
 
     const nextSignature = JSON.stringify({ currentId: control.currentId, options });
@@ -434,8 +543,9 @@ export function createMobileConversationView({
       return;
     }
     button.hidden = false;
-    button.disabled = controlBusy;
-    label.textContent = current.label;
+    button.disabled = controlBusy || modelBusy;
+    button.setAttribute('aria-busy', String(controlBusy));
+    label.textContent = controlBusy ? 'Switching…' : current.label;
     button.setAttribute('aria-label', `Choose ${key}, ${current.label}`);
     const fragment = document.createDocumentFragment();
     for (const option of options) {
@@ -446,8 +556,13 @@ export function createMobileConversationView({
       choice.append(element('strong', '', option.label), element('small', '', option.description || ''));
       choice.addEventListener('click', async () => {
         closeAuxiliaryLists();
-        if (option.id === control.currentId || controlBusy || !sessionName) return;
+        if (option.id === control.currentId || controlBusy || modelBusy || !sessionName) return;
         controlBusy = true;
+        if (lastConversation) {
+          renderModelControls(lastConversation);
+          renderChoiceControls(lastConversation);
+        }
+        updateComposerAction();
         try {
           await change(sessionName, option.id);
           renderedSignature = '';
@@ -457,7 +572,11 @@ export function createMobileConversationView({
           state.dataset.state = 'error';
         } finally {
           controlBusy = false;
-          if (lastConversation) renderChoiceControls(lastConversation);
+          if (lastConversation) {
+            renderModelControls(lastConversation);
+            renderChoiceControls(lastConversation);
+          }
+          updateComposerAction();
         }
       });
       fragment.append(choice);
@@ -687,16 +806,67 @@ export function createMobileConversationView({
     return /^(?: {0,3}(?:[-+*]|\d+[.)])\s| {0,3}#{1,6}\s| {0,3}>\s)/.test(combinedLastLine);
   }
 
-  function reparseStreamingMarkdown(content, nextText) {
+  function morphStreamingMarkdownNode(current, fresh) {
+    if (current.nodeType !== fresh.nodeType) {
+      current.replaceWith(fresh);
+      return fresh;
+    }
+    if (current.nodeType === Node.TEXT_NODE) {
+      if (current.data !== fresh.data) current.data = fresh.data;
+      return current;
+    }
+    if (current.nodeType !== Node.ELEMENT_NODE || current.tagName !== fresh.tagName ||
+        current.className !== fresh.className || current.matches('.mobile-markdown-copy') ||
+        (current.matches('button') && current.textContent !== fresh.textContent)) {
+      current.replaceWith(fresh);
+      return fresh;
+    }
+    syncAttributes(current, fresh);
+    const currentChildren = [...current.childNodes];
+    const freshChildren = [...fresh.childNodes];
+    const sharedLength = Math.min(currentChildren.length, freshChildren.length);
+    for (let index = 0; index < sharedLength; index += 1) {
+      morphStreamingMarkdownNode(currentChildren[index], freshChildren[index]);
+    }
+    for (let index = sharedLength; index < freshChildren.length; index += 1) {
+      current.append(freshChildren[index]);
+    }
+    for (let index = sharedLength; index < currentChildren.length; index += 1) {
+      currentChildren[index].remove();
+    }
+    return current;
+  }
+
+  function morphStreamingMarkdown(content, fresh, { streaming = true, rawText } = {}) {
     const scroll = captureStreamScroll(content);
+    const currentChildren = [...content.childNodes];
+    const freshChildren = [...fresh.childNodes];
+    const sharedLength = Math.min(currentChildren.length, freshChildren.length);
+    for (let index = 0; index < sharedLength; index += 1) {
+      morphStreamingMarkdownNode(currentChildren[index], freshChildren[index]);
+    }
+    for (let index = sharedLength; index < freshChildren.length; index += 1) {
+      content.append(freshChildren[index]);
+    }
+    for (let index = sharedLength; index < currentChildren.length; index += 1) {
+      currentChildren[index].remove();
+    }
+    if (streaming) {
+      content.dataset.streaming = 'true';
+      content.__mobileRawText = rawText;
+    } else {
+      syncAttributes(content, fresh);
+      delete content.__mobileRawText;
+    }
+    restoreStreamScroll(content, scroll);
+    return content;
+  }
+
+  function reparseStreamingMarkdown(content, nextText) {
     const fresh = markdownNode(nextText, {
       onFileReference: (reference) => void openFileReference(reference),
     });
-    content.replaceChildren(...fresh.childNodes);
-    content.dataset.streaming = 'true';
-    content.__mobileRawText = nextText;
-    restoreStreamScroll(content, scroll);
-    return content;
+    return morphStreamingMarkdown(content, fresh, { streaming: true, rawText: nextText });
   }
 
   function appendStreamingMarkdown(content, nextText) {
@@ -709,7 +879,8 @@ export function createMobileConversationView({
     const previousLastLine = previousText.slice(previousText.lastIndexOf('\n') + 1);
     const openingFenceCompleted = previousFences % 2 === 1 &&
       /^(?:```|~~~)/.test(previousLastLine) && suffix.includes('\n');
-    if (previousFences !== nextFences || openingFenceCompleted ||
+    const trailingBlockBreak = /(?:\n[ \t]*\n| {2,}\n|\\\n)$/.test(previousText);
+    if (previousFences !== nextFences || openingFenceCompleted || trailingBlockBreak ||
         (nextFences % 2 === 0 && streamNeedsMarkdownParse(previousText, suffix))) {
       return reparseStreamingMarkdown(content, nextText);
     }
@@ -717,10 +888,22 @@ export function createMobileConversationView({
     if (openCode) {
       openCode.append(document.createTextNode(suffix));
     } else {
-      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+      // marked/DOMPurify retain serializer whitespace after the final block,
+      // e.g. `<p>I</p>\n`. Walking the whole root selected that trailing text
+      // node, so the next compact delta produced `<p>I</p>\n'm ready...` and
+      // appeared on a separate line until an authoritative refresh reparsed
+      // the message. Walk the final rendered block instead; it is the visual
+      // tail that an incremental prose token belongs to.
+      const tail = content.lastElementChild || content;
+      const walker = document.createTreeWalker(tail, NodeFilter.SHOW_TEXT);
       let lastText;
       for (let node = walker.nextNode(); node; node = walker.nextNode()) lastText = node;
-      if (lastText) lastText.data += suffix;
+      const insideInlineMarkup = lastText?.parentElement?.closest(
+        'strong, em, del, a, code, .mobile-file-reference',
+      );
+      if (insideInlineMarkup) return reparseStreamingMarkdown(content, nextText);
+      const collapsedBoundary = /\s$/.test(previousText) && !/^\s/.test(suffix) ? ' ' : '';
+      if (lastText) lastText.data += `${collapsedBoundary}${suffix}`;
       else content.append(document.createTextNode(suffix));
     }
     content.__mobileRawText = nextText;
@@ -840,10 +1023,12 @@ export function createMobileConversationView({
     const copy = element('span');
     copy.append(sheetTitle, sheetMeta);
     sheetState = element('span', 'mobile-subagent-sheet-state');
-    sheetBrowser = element('button', 'mobile-subagent-sheet-browser', 'Browser');
+    sheetBrowser = element('button', 'mobile-subagent-sheet-browser', '↗');
     sheetBrowser.type = 'button';
+    sheetBrowser.setAttribute('aria-label', 'Open browser');
+    sheetBrowser.title = 'Open browser';
     sheetBrowser.hidden = !browserAvailable;
-    sheetClose = element('button', 'mobile-subagent-sheet-close', '×');
+    sheetClose = element('button', 'mobile-subagent-sheet-close close-button', '×');
     sheetClose.type = 'button';
     sheetClose.setAttribute('aria-label', 'Close activity');
     const actions = element('span', 'mobile-subagent-sheet-actions');
@@ -895,7 +1080,7 @@ export function createMobileConversationView({
     });
     const finishDrag = (event) => {
       if (!sheetPointer || event.pointerId !== sheetPointer.id) return;
-      const shouldClose = sheetPointer.distance > 96;
+      const shouldClose = sheetPointer.distance > 54;
       sheetPointer = undefined;
       delete sheetPanel.dataset.dragging;
       sheetPanel.style.removeProperty('--mobile-sheet-drag');
@@ -908,38 +1093,57 @@ export function createMobileConversationView({
   function renderSubagentList(conversation = rootConversation) {
     if (!sheet || !conversation) return;
     const items = subagents(conversation);
-    const running = items.filter((item) => ['calling', 'running'].includes(subagentState(item))).length;
-    sheetTitle.textContent = running ? `${running} agent${running === 1 ? '' : 's'} running` : 'Subagents';
-    sheetMeta.textContent = `${items.length} agent${items.length === 1 ? '' : 's'}`;
+    const running = items.filter((item) => ['calling', 'running'].includes(subagentState(item)));
+    const completed = items.filter((item) => !['calling', 'running'].includes(subagentState(item)));
+    sheetTitle.textContent = 'Subagents';
+    sheetMeta.textContent = items.length ? `${items.length} total` : 'No agents';
     sheetState.textContent = '';
     sheetList.replaceChildren();
-    for (const item of items) {
-      const lifecycleState = subagentState(item);
-      const row = element(item.threadId ? 'button' : 'article', 'mobile-subagent-row');
-      row.dataset.state = lifecycleState;
-      if (item.threadId) {
-        row.type = 'button';
-        row.dataset.threadId = item.threadId;
-        row.addEventListener('click', () => openChild(item.threadId));
-      } else row.setAttribute('aria-label', `${item.title || 'Subagent'} · ${statusLabel(lifecycleState)}`);
-      const copy = element('span');
-      copy.append(
-        element('strong', '', item.title || 'Subagent'),
-        element('small', '', [item.role || 'Subagent', item.model, item.capabilityMode]
-          .filter(Boolean).join(' · ')),
-      );
-      const status = element('span', 'mobile-subagent-status', statusLabel(lifecycleState));
-      status.dataset.state = lifecycleState;
-      row.append(copy, status, element('i', '', item.threadId ? '›' : '…'));
-      sheetList.append(row);
+    const appendGroup = (label, group, state) => {
+      if (!group.length) return;
+      const section = element('section', 'mobile-subagent-group');
+      const heading = element('h3', '', label);
+      heading.dataset.state = state;
+      section.append(heading);
+      for (const item of group) {
+        const lifecycleState = subagentState(item);
+        const row = element(item.threadId ? 'button' : 'article', 'mobile-subagent-row');
+        row.dataset.state = lifecycleState;
+        if (item.threadId) {
+          row.type = 'button';
+          row.dataset.threadId = item.threadId;
+          row.addEventListener('click', () => openChild(item.threadId));
+        } else row.setAttribute('aria-label', `${item.title || 'Subagent'} · ${label}`);
+        const copy = element('span');
+        copy.append(
+          element('strong', '', item.title || 'Subagent'),
+          element('small', '', [item.role || 'Subagent', item.model, item.capabilityMode]
+            .filter(Boolean).join(' · ')),
+        );
+        const status = element('span', 'mobile-subagent-status', label);
+        status.dataset.state = state;
+        row.append(copy, status, element('i', '', item.threadId ? '›' : ''));
+        section.append(row);
+      }
+      sheetList.append(section);
+    };
+    appendGroup('In progress', running, 'running');
+    appendGroup('Success', completed, 'completed');
+    if (!items.length) {
+      sheetList.append(element('p', 'mobile-subagent-empty', 'No subagents yet.'));
     }
-    if (!items.length) sheetList.append(element('p', 'mobile-subagent-empty', 'No subagents yet.'));
   }
 
   function renderSubagentPill(conversation) {
     if (!subagentPillHost) {
       subagentPillHost = element('div', 'mobile-subagent-pill-host');
-      scrollShell.append(subagentPillHost);
+      scrollShell.after(subagentPillHost);
+    }
+    if (!rootConversation || root.dataset.booting === 'true') {
+      subagentPillHost.replaceChildren();
+      subagentPillHost.hidden = true;
+      activityToggle.hidden = true;
+      return;
     }
     const items = subagents(conversation);
     const plan = visiblePlan(conversation);
@@ -977,24 +1181,22 @@ export function createMobileConversationView({
     }
     if (items.length) {
       const running = items.filter((item) => ['calling', 'running'].includes(subagentState(item))).length;
-      const label = running ? `${running} agent${running === 1 ? '' : 's'} running`
-        : `${items.length} agent${items.length === 1 ? '' : 's'} done`;
+      const label = 'Agents';
       const pill = element('button', 'mobile-subagent-pill');
       pill.type = 'button';
       pill.dataset.state = running ? 'running' : 'completed';
-      pill.setAttribute('aria-label', `${label}. View subagents`);
-      pill.append(element('i'), element('span', '', label), element('small', '', `${items.length}`));
+      pill.setAttribute('aria-label', `${label}. ${running ? 'In progress' : 'Success'}. View subagents`);
+      pill.append(element('i'), element('span', '', label));
       pill.addEventListener('click', () => openSheet());
       cluster.append(pill);
     }
-    const dismiss = element('button', 'mobile-activity-pill-dismiss', '×');
+    const dismiss = element('button', 'mobile-activity-pill-dismiss', '⌄');
     dismiss.type = 'button';
     dismiss.setAttribute('aria-label', 'Hide activity');
     dismiss.addEventListener('click', () => {
       pillDismissed = true;
       subagentPillHost.hidden = true;
       activityToggle.hidden = false;
-      activityToggle.focus({ preventScroll: true });
     });
     cluster.append(dismiss);
     subagentPillHost.replaceChildren(cluster);
@@ -1319,7 +1521,7 @@ export function createMobileConversationView({
     fileSheetTitle = element('strong', '', 'File');
     fileSheetMeta = element('small');
     copy.append(fileSheetTitle, fileSheetMeta);
-    fileSheetClose = element('button', 'mobile-file-sheet-close', '×');
+    fileSheetClose = element('button', 'mobile-file-sheet-close close-button', '×');
     fileSheetClose.type = 'button';
     fileSheetClose.setAttribute('aria-label', 'Close file preview');
     fileSheetClose.addEventListener('click', closeFileSheet);
@@ -1397,7 +1599,6 @@ export function createMobileConversationView({
 
   function searchMatchesNode(matches) {
     const section = element('section', 'mobile-event-matches');
-    section.append(element('small', '', `${matches.length} ${matches.length === 1 ? 'match' : 'matches'}`));
     const list = element('div');
     for (const match of matches) {
       const button = element('button');
@@ -1413,6 +1614,33 @@ export function createMobileConversationView({
     }
     section.append(list);
     return section;
+  }
+
+  function parsedToolInput(item) {
+    if (!item?.input) return {};
+    if (typeof item.input === 'object' && !Array.isArray(item.input)) return item.input;
+    try {
+      const input = JSON.parse(item.input);
+      return input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function searchToolTitle(item) {
+    if (item?.type !== 'tool' || (item.kind !== 'search' && !item.matches?.length)) return undefined;
+    const input = parsedToolInput(item);
+    const matchPaths = [...new Set((item.matches || []).map((match) => match.path).filter(Boolean))];
+    const scope = input.target_file || input.file_path || input.path || input.target_directory ||
+      (matchPaths.length === 1 ? matchPaths[0] : matchPaths.length > 1 ? `${matchPaths.length} files` : '');
+    const pattern = input.pattern || input.query || input.regex || item.subject || 'pattern';
+    const reportedCount = Number(String(item.output || '').match(/\b(?:Found\s+)?(\d+)\s+matches?\b/i)?.[1]);
+    const count = Number.isFinite(reportedCount) && reportedCount >= 0 ? reportedCount : item.matches?.length;
+    return [
+      `Search ${pattern}`,
+      scope ? `in ${scope}` : '',
+      Number.isFinite(count) ? `(${count} ${count === 1 ? 'match' : 'matches'})` : '',
+    ].filter(Boolean).join(' ');
   }
 
   function detail(panel, label, value, className = '') {
@@ -1652,7 +1880,7 @@ export function createMobileConversationView({
     card.dataset.state = item.status || 'pending';
     const header = element('header', 'mobile-question-header');
     const copy = element('span');
-    copy.append(element('small', '', 'Grok needs permission'), element('strong', '', item.title || 'Permission required'));
+    copy.append(element('strong', '', item.title || 'Permission required'));
     const status = element('span', 'mobile-question-status', statusLabel(item.status));
     status.dataset.state = item.status || 'pending';
     header.append(copy, status);
@@ -1687,9 +1915,10 @@ export function createMobileConversationView({
     const copy = element('span');
     copy.append(element('small', '', item.type === 'thought' ? 'Reasoning' : item.kind || item.type));
     const heading = element('span', 'mobile-event-heading');
+    const searchTitle = searchToolTitle(item);
     heading.append(element('strong', '', item.type === 'thought'
       ? thinking ? 'Thinking…' : 'Thought'
-      : item.title || 'Event'));
+      : searchTitle || item.title || 'Event'));
     if (item.type === 'tool' && item.diffs?.length) {
       const totals = item.diffs.reduce((summary, change) => {
         const parts = changeParts(change);
@@ -1761,7 +1990,7 @@ export function createMobileConversationView({
     card.dataset.state = submitting ? 'working' : item.status || 'pending';
     const header = element('header', 'mobile-question-header');
     const copy = element('span');
-    copy.append(element('small', '', 'Grok needs your input'), element('strong', '', item.title || 'Question'));
+    copy.append(element('strong', '', item.title || 'Question'));
     const status = element('span', 'mobile-question-status', submitting ? 'Sending…' : statusLabel(item.status));
     status.dataset.state = submitting ? 'working' : item.status || 'pending';
     header.append(copy, status);
@@ -2205,9 +2434,10 @@ export function createMobileConversationView({
     } else item.append(element('span', '', attachment.name?.split('.').pop()?.toUpperCase() || 'FILE'));
     item.append(element('small', '', attachment.name || 'Attachment'));
     if (removable) {
-      const remove = element('button', '', '×');
+      const remove = element('button', 'close-button close-button--destructive', '×');
       remove.type = 'button';
       remove.setAttribute('aria-label', `Remove ${attachment.name}`);
+      remove.addEventListener('pointerdown', retainComposerInputFocus);
       remove.addEventListener('click', () => {
         attachments = attachments.filter((value) => value.id !== attachment.id);
         renderAttachmentTray();
@@ -2224,26 +2454,37 @@ export function createMobileConversationView({
     item.setAttribute('role', upload.status === 'error' ? 'alert' : 'status');
     item.append(element('strong', '', upload.status === 'error'
       ? 'Upload failed'
+      : upload.status === 'cancelling' ? 'Cancelling…'
       : `${Math.round(upload.progress * 100)}%`));
     item.append(element('small', '', upload.status === 'error'
       ? `${upload.name}: ${upload.error}`
       : upload.name));
-    if (upload.status === 'uploading') {
+    if (upload.status === 'uploading' || upload.status === 'cancelling') {
       const progress = document.createElement('progress');
       progress.max = 1;
       progress.value = upload.progress;
       progress.setAttribute('aria-label', `Uploading ${upload.name}`);
       item.append(progress);
+    }
+    const action = element('button', 'close-button', '×');
+    action.type = 'button';
+    action.addEventListener('pointerdown', retainComposerInputFocus);
+    if (upload.status === 'uploading' || upload.status === 'cancelling') {
+      action.setAttribute('aria-label', `Cancel upload ${upload.name}`);
+      action.disabled = upload.status === 'cancelling';
+      action.addEventListener('click', () => {
+        upload.status = 'cancelling';
+        upload.controller?.abort();
+        renderAttachmentTray();
+      });
     } else {
-      const dismiss = element('button', '', '×');
-      dismiss.type = 'button';
-      dismiss.setAttribute('aria-label', `Dismiss upload error for ${upload.name}`);
-      dismiss.addEventListener('click', () => {
+      action.setAttribute('aria-label', `Dismiss upload error for ${upload.name}`);
+      action.addEventListener('click', () => {
         attachmentUploads.delete(upload.id);
         renderAttachmentTray();
       });
-      item.append(dismiss);
     }
+    item.append(action);
     return item;
   }
 
@@ -2318,6 +2559,10 @@ export function createMobileConversationView({
     return [...queue.querySelectorAll('.mobile-conversation-queue-item')];
   }
 
+  function updateQueueOverflow(count = queueRows().length) {
+    queue.dataset.scrollable = String(count > 5);
+  }
+
   function queueOrder() {
     return queueRows().map((row) => row.dataset.queueId);
   }
@@ -2345,7 +2590,7 @@ export function createMobileConversationView({
     const rows = new Map(queueRows().map((row) => [row.dataset.queueId, row]));
     for (const id of queueIds) {
       const row = rows.get(id);
-      if (row) queue.append(row);
+      if (row) queue.insertBefore(row, queue.querySelector('.mobile-conversation-goal'));
     }
     animateQueuePositions(previous);
   }
@@ -2380,7 +2625,7 @@ export function createMobileConversationView({
         return event.clientY < rect.top + rect.height / 2;
       });
       if (next) queue.insertBefore(row, next);
-      else queue.append(row);
+      else queue.insertBefore(row, queue.querySelector('.mobile-conversation-goal'));
       animateQueuePositions(previous);
       event.preventDefault();
     };
@@ -2449,7 +2694,8 @@ export function createMobileConversationView({
       const result = await action();
       row.remove();
       const remaining = queueRows().length;
-      if (!remaining) queue.hidden = true;
+      updateQueueOverflow(remaining);
+      if (!remaining && !queue.querySelector('.mobile-conversation-goal')) queue.hidden = true;
       onSuccess?.(result);
     } catch (error) {
       exitAnimation?.cancel();
@@ -2463,13 +2709,127 @@ export function createMobileConversationView({
     }
   }
 
+  function reconcileOptimisticQueue(conversation) {
+    if (!optimisticQueuedInputs.size) return;
+    const authoritativeIds = new Set((conversation.queue || []).map((entry) => entry.id));
+    const userMessages = (conversation.items || []).filter((item) =>
+      item.type === 'message' && item.role === 'user');
+    for (const [id, entry] of optimisticQueuedInputs) {
+      const delivered = userMessages.some((item) => entry.text && item.text.includes(entry.text));
+      if (authoritativeIds.has(id) || delivered) optimisticQueuedInputs.delete(id);
+    }
+  }
+
+  function goalElapsed(milliseconds) {
+    const seconds = Math.max(0, Math.round((Number(milliseconds) || 0) / 1_000));
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    return `${minutes}m ${seconds % 60}s`;
+  }
+
+  async function runGoalAction(row, goal, action) {
+    if (goalMutationPending || typeof controlGoal !== 'function') return;
+    goalMutationPending = true;
+    row.dataset.busy = 'true';
+    for (const button of row.querySelectorAll('button')) button.disabled = true;
+    try {
+      await controlGoal(sessionName, action);
+      if (action === 'clear') {
+        hiddenGoalIds.add(goal.id);
+        queueRenderSignature = '';
+        if (lastConversation) renderQueue(lastConversation);
+      } else {
+        row.dataset.pendingAction = action;
+        void refresh();
+      }
+    } catch (error) {
+      state.textContent = error.message || 'Goal action failed';
+      state.dataset.state = 'error';
+      for (const button of row.querySelectorAll('button')) button.disabled = false;
+    } finally {
+      goalMutationPending = false;
+      row.dataset.busy = 'false';
+    }
+  }
+
+  function goalQueueNode(goal) {
+    const paused = ['paused', 'user_paused'].includes(goal.status);
+    const completed = goal.status === 'completed';
+    const row = element('article', 'mobile-conversation-goal');
+    row.dataset.goalId = goal.id;
+    row.dataset.state = completed ? 'completed' : paused ? 'paused' : 'working';
+
+    const summary = element('div', 'mobile-conversation-goal-summary');
+    const icon = element('i', 'mobile-conversation-goal-icon');
+    icon.setAttribute('aria-hidden', 'true');
+    const copy = element('div', 'mobile-conversation-goal-copy');
+    copy.append(
+      element('strong', '', completed ? 'Goal complete' : paused ? 'Goal paused' : 'Pursuing goal'),
+      element('span', '', goal.objective || 'Autonomous goal'),
+      element('small', '', `• ${goalElapsed(goal.metrics?.elapsedMs)}`),
+    );
+    const actions = element('div', 'mobile-conversation-goal-actions');
+    const remove = element('button', '', '⌫');
+    remove.type = 'button';
+    remove.setAttribute('aria-label', 'Delete goal');
+    remove.title = 'Stop and delete goal';
+    remove.addEventListener('click', () => void runGoalAction(row, goal, 'clear'));
+    const pause = element('button', '', paused ? '▶' : 'Ⅱ');
+    pause.type = 'button';
+    pause.hidden = completed;
+    pause.setAttribute('aria-label', paused ? 'Resume goal' : 'Pause goal');
+    pause.title = paused ? 'Resume goal' : 'Pause goal';
+    pause.addEventListener('click', () => void runGoalAction(row, goal, paused ? 'resume' : 'pause'));
+    const expand = element('button', '', '⌗');
+    expand.type = 'button';
+    expand.setAttribute('aria-label', 'Show goal details');
+    expand.setAttribute('aria-expanded', String(expandedItems.has(goal.id)));
+    actions.append(remove, pause, expand);
+    summary.append(icon, copy, actions);
+
+    const details = element('div', 'mobile-conversation-goal-details');
+    details.hidden = !expandedItems.has(goal.id);
+    const progress = goal.progress?.total
+      ? `${metric(goal.progress.completed)} / ${metric(goal.progress.total)} deliverables`
+      : 'No deliverables reported';
+    details.append(
+      element('span', '', goal.phase || statusLabel(goal.status)),
+      element('span', '', progress),
+      element('span', '', `${compactMetric(goal.metrics?.tokensUsed)} tokens`),
+      ...(goal.lastEvent ? [element('span', '', goal.lastEvent.replaceAll('_', ' '))] : []),
+    );
+    expand.addEventListener('click', () => {
+      const open = details.hidden;
+      details.hidden = !open;
+      expand.setAttribute('aria-expanded', String(open));
+      expand.setAttribute('aria-label', open ? 'Hide goal details' : 'Show goal details');
+      if (open) expandedItems.add(goal.id);
+      else expandedItems.delete(goal.id);
+    });
+    row.append(summary, details);
+    return row;
+  }
+
   function renderQueue(conversation) {
-    const entries = Array.isArray(conversation.queue) ? conversation.queue : [];
-    const nextSignature = `${sessionName}:${JSON.stringify(entries)}`;
+    const authoritative = Array.isArray(conversation.queue) ? conversation.queue : [];
+    const authoritativeIds = new Set(authoritative.map((entry) => entry.id));
+    const entries = [
+      ...authoritative,
+      ...[...optimisticQueuedInputs.values()].filter((entry) => !authoritativeIds.has(entry.id)),
+    ];
+    const goals = (conversation.items || []).filter((item) => item.type === 'goal' && item.objective);
+    const activeGoalIds = new Set(goals.map((goal) => goal.id));
+    for (const hiddenId of hiddenGoalIds) {
+      if (!activeGoalIds.has(hiddenId)) hiddenGoalIds.delete(hiddenId);
+    }
+    const goal = [...goals].reverse().find((item) => !hiddenGoalIds.has(item.id));
+    const nextSignature = `${sessionName}:${JSON.stringify(entries)}:${JSON.stringify(goal || null)}`;
     if (nextSignature === queueRenderSignature) return;
     queueRenderSignature = nextSignature;
-    queue.hidden = entries.length === 0;
-    if (!entries.length) {
+    queue.hidden = entries.length === 0 && !goal;
+    queue.dataset.hasGoal = String(Boolean(goal));
+    updateQueueOverflow(entries.length);
+    if (!entries.length && !goal) {
       queue.replaceChildren();
       return;
     }
@@ -2477,10 +2837,12 @@ export function createMobileConversationView({
     for (const entry of entries) {
       const row = element('article', 'mobile-conversation-queue-item');
       row.dataset.queueId = entry.id;
+      row.dataset.pending = String(entry.optimistic === true);
+      row.toggleAttribute('aria-busy', entry.optimistic === true);
       row.append(element('span', 'mobile-conversation-queue-icon', '↳'));
       const handle = element('button', 'mobile-conversation-queue-handle', '⋯');
       handle.type = 'button';
-      handle.disabled = entries.length < 2;
+      handle.disabled = entries.length < 2 || entry.optimistic === true;
       handle.setAttribute('aria-label', `Reorder queued message: ${entry.text}`);
       handle.title = 'Drag to reorder';
       setupQueueReorder(row, handle);
@@ -2491,6 +2853,7 @@ export function createMobileConversationView({
       const actions = element('div', 'mobile-conversation-queue-actions');
       const steer = element('button', '', '↪ Steer');
       steer.type = 'button';
+      steer.disabled = entry.optimistic === true;
       steer.addEventListener('click', () => runQueueAction(
         row, () => steerQueuedInput(sessionName, entry.id), 'Steer failed',
         { onSuccess: () => {
@@ -2510,6 +2873,7 @@ export function createMobileConversationView({
       ));
       const remove = element('button', 'mobile-conversation-queue-delete', '⌫');
       remove.type = 'button';
+      remove.disabled = entry.optimistic === true;
       remove.setAttribute('aria-label', 'Delete queued message');
       remove.addEventListener('click', () => runQueueAction(
         row, () => removeQueuedInput(sessionName, entry.id), 'Delete failed',
@@ -2518,7 +2882,9 @@ export function createMobileConversationView({
       row.append(copy, actions, handle);
       fragment.append(row);
     }
+    if (goal) fragment.append(goalQueueNode(goal));
     queue.replaceChildren(fragment);
+    updateQueueOverflow(entries.length);
   }
 
   function renderInteraction(conversation, isRoot) {
@@ -2604,6 +2970,7 @@ export function createMobileConversationView({
     if (suppressPendingInteractions && pendingInteraction(item)) return document.createDocumentFragment();
     if (['question', 'permission', 'plan_review'].includes(item.type)) return document.createDocumentFragment();
     if (item.type === 'plan') return document.createDocumentFragment();
+    if (item.type === 'goal') return document.createDocumentFragment();
     if (item.type === 'turn') return document.createDocumentFragment();
     if (item.type === 'subagent') return document.createDocumentFragment();
     return eventNode(item);
@@ -2617,6 +2984,7 @@ export function createMobileConversationView({
       return node.dataset.pending ? undefined : `message:${node.dataset.messageId}`;
     }
     if (node.matches('.mobile-question-card')) return `question:${node.dataset.questionId}`;
+    if (node.matches('.mobile-conversation-empty')) return 'conversation:empty';
     if (node.matches('.mobile-conversation-loading')) return 'loading';
     if (node.matches('.mobile-history-earlier')) return 'history:earlier';
     return undefined;
@@ -2700,11 +3068,17 @@ export function createMobileConversationView({
         syncAttributes(current, fresh);
         const currentContent = current.querySelector(':scope > .mobile-message-content[data-streaming="true"]');
         const freshContent = fresh.querySelector(':scope > .mobile-message-content[data-streaming="true"]');
+        const freshSettledContent = fresh.querySelector(':scope > .mobile-message-content:not([data-streaming="true"])');
         const previousText = currentContent?.__mobileRawText;
         const nextText = freshContent?.__mobileRawText;
         if (currentContent && freshContent && typeof previousText === 'string' &&
             typeof nextText === 'string' && nextText.startsWith(previousText)) {
           appendStreamingMarkdown(currentContent, nextText);
+        } else if (currentContent && freshSettledContent) {
+          // A completed turn should be visually identical to the last streamed
+          // frame. Morph once into the authoritative Markdown instead of
+          // replacing the entire message and flashing its layout.
+          morphStreamingMarkdown(currentContent, freshSettledContent, { streaming: false });
         } else {
           current.replaceChildren(...fresh.childNodes);
         }
@@ -2741,6 +3115,7 @@ export function createMobileConversationView({
       ? followStreamTail || submittedTurnFollow
       : atBottom;
     const hadPendingMessage = Boolean(pendingMessage);
+    reconcileOptimisticQueue(conversation);
     const streamScroll = captureStreamScroll(targetMessages);
     const signature = JSON.stringify({
       thread: conversation.thread,
@@ -2750,11 +3125,13 @@ export function createMobileConversationView({
       controls: conversation.controls,
       context: conversation.context,
       queue: conversation.queue,
+      optimisticQueue: [...optimisticQueuedInputs.values()],
       pending: pendingMessage,
       attachments,
       uploadingAttachments,
       questions: questionStateVersion,
       planReviews: [...pendingPlanReviews.entries()],
+      submittingMessage,
       cancellingTurn,
     });
     if (signature === renderedSignature) return;
@@ -2844,7 +3221,7 @@ export function createMobileConversationView({
       }
       fragment.append(pending);
     }
-    if (!fragment.childNodes.length) fragment.append(element('div', 'mobile-conversation-loading', 'No messages yet'));
+    if (!fragment.childNodes.length) fragment.append(emptyConversationNode());
     reconcileTimeline(targetMessages, [...fragment.childNodes]);
     restoreStreamScroll(targetMessages, streamScroll);
     if (historyPrependAnchor?.sessionName === sessionName) {
@@ -2920,6 +3297,17 @@ export function createMobileConversationView({
     updateComposerAction();
   }
 
+  function setComposerExpanded(expanded) {
+    const next = Boolean(expanded);
+    if (composer.dataset.expanded === String(next)) return;
+    holdMainScrollGeometry({ settle: 160 });
+    composer.dataset.expanded = String(next);
+    applyMainScrollGeometryLock();
+    scheduleMainScrollGeometryLock();
+    if (next) requestAnimationFrame(autoSizeInput);
+    else closeAllLists();
+  }
+
   function updateComposerAction() {
     // The provider lifecycle is the only authority for whether a turn can be
     // stopped. A locally accepted message is only a delivery receipt: treating
@@ -2929,20 +3317,27 @@ export function createMobileConversationView({
     const turnActive = lastConversation?.activity?.active === true;
     if (!turnActive) cancellingTurn = false;
     const hasDraft = Boolean(input.value.trim() || attachments.length);
+    const switchingSettings = modelBusy || controlBusy;
     const stopAction = turnActive && !hasDraft;
     const waitingAction = pendingDelivery && !turnActive && !hasDraft;
-    const action = cancellingTurn ? 'stopping' : stopAction ? 'stop' : waitingAction ? 'waiting' : 'send';
+    const action = switchingSettings ? 'switching'
+      : submittingMessage ? 'sending'
+        : cancellingTurn ? 'stopping' : stopAction ? 'stop' : waitingAction ? 'waiting' : 'send';
     sendButton.dataset.action = action;
     sendButton.textContent = action === 'send' ? '↑' : '';
     sendButton.setAttribute('aria-label', action === 'stop' ? 'Stop response'
       : action === 'stopping' ? 'Stopping response'
+        : action === 'switching' ? `Switching ${modelBusy ? 'model' : 'mode'}`
+          : action === 'sending' ? 'Sending message'
         : action === 'waiting' ? 'Waiting for response' : 'Send message');
-    sendButton.disabled = uploadingAttachments > 0 || action === 'stopping' || action === 'waiting' ||
+    sendButton.disabled = uploadingAttachments > 0 || action === 'switching' ||
+      action === 'sending' || action === 'stopping' || action === 'waiting' ||
       (action === 'send' && !hasDraft);
   }
 
   composer.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (modelBusy || controlBusy) return;
     if (sendButton.dataset.action === 'stop') {
       if (!sessionName || cancellingTurn) return;
       cancellingTurn = true;
@@ -2965,10 +3360,34 @@ export function createMobileConversationView({
     const sentAttachments = attachments.slice();
     const sentFileMentions = [...mentionedFiles].filter((path) => text.includes(`@${path}`));
     const pendingText = text || sentAttachments.map((attachment) => attachment.name).join(', ');
-    pendingMessage = {
-      text: pendingText, attachments: sentAttachments, fileMentions: sentFileMentions,
-      sentAt: Date.now(), status: 'sending',
-    };
+    const requestId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    submittingMessage = true;
+    updateComposerAction();
+    let sendRequest;
+    try {
+      sendRequest = Promise.resolve(send(
+        sessionName, text, sentAttachments.map((attachment) => attachment.id), sentFileMentions, requestId,
+      ));
+    } catch (error) {
+      sendRequest = Promise.reject(error);
+    }
+    // Attach a rejection observer immediately: the request starts before the
+    // first paint, while its authoritative error is still handled below.
+    sendRequest.catch(() => {});
+    const queueExpected = lastConversation?.activity?.active === true ||
+      Boolean(lastConversation?.queue?.length) || optimisticQueuedInputs.size > 0;
+    if (queueExpected) {
+      optimisticQueuedInputs.set(requestId, {
+        id: requestId, text: pendingText, createdAt: Date.now(),
+        attachments: sentAttachments, optimistic: true,
+      });
+      pendingMessage = undefined;
+    } else {
+      pendingMessage = {
+        text: pendingText, attachments: sentAttachments, fileMentions: sentFileMentions,
+        sentAt: Date.now(), status: 'sending',
+      };
+    }
     followStreamTail = true;
     submittedTurnFollow = true;
     input.value = '';
@@ -2977,17 +3396,43 @@ export function createMobileConversationView({
     closeSuggestions();
     renderAttachmentTray();
     autoSizeInput();
+    // Give Safari one compositor frame to paint the sending state before the
+    // potentially expensive history reconciliation. The request is already in
+    // flight, so this does not add transport latency.
+    await new Promise((resolve) => {
+      const fallback = setTimeout(resolve, 48);
+      requestAnimationFrame(() => {
+        clearTimeout(fallback);
+        resolve();
+      });
+    });
     renderedSignature = '';
     if (lastConversation) render(lastConversation);
     snapMessagesToLatest();
+    closeAllLists();
+    setComposerExpanded(false);
+    input.blur();
+    sendButton.blur();
     try {
-      const result = await send(
-        sessionName, text, sentAttachments.map((attachment) => attachment.id), sentFileMentions,
-      );
+      const result = await sendRequest;
       if (result?.queued) {
         pendingMessage = undefined;
         clearTimeout(pendingAcceptanceTimer);
+        const optimistic = optimisticQueuedInputs.get(requestId);
+        if (optimistic) {
+          optimisticQueuedInputs.delete(requestId);
+          optimistic.id = result.queueId || requestId;
+          optimistic.optimistic = false;
+          optimisticQueuedInputs.set(optimistic.id, optimistic);
+        }
       } else {
+        optimisticQueuedInputs.delete(requestId);
+        if (!pendingMessage) {
+          pendingMessage = {
+            text: pendingText, attachments: sentAttachments, fileMentions: sentFileMentions,
+            sentAt: Date.now(), status: 'accepted',
+          };
+        }
         if (pendingMessage?.text === pendingText) pendingMessage.status = 'accepted';
         schedulePendingAcceptanceFailure(pendingText);
       }
@@ -2999,6 +3444,7 @@ export function createMobileConversationView({
     } catch (error) {
       submittedTurnFollow = false;
       pendingMessage = undefined;
+      optimisticQueuedInputs.delete(requestId);
       attachments = [];
       uploadingAttachments = 0;
       renderAttachmentTray();
@@ -3013,51 +3459,71 @@ export function createMobileConversationView({
       if (lastConversation) render(lastConversation);
       state.textContent = error.message || 'Send failed';
       state.dataset.state = 'error';
-    } finally {
       input.focus({ preventScroll: true });
+    } finally {
+      submittingMessage = false;
+      updateComposerAction();
     }
   });
-  const focusComposerWithoutViewportScroll = () => {
-    if (document.activeElement === input) return;
-    // Safari otherwise performs its own layout-viewport scroll before the
-    // keyboard's visualViewport resize arrives, producing a large blank jump.
-    // Focusing during the initiating gesture keeps the keyboard user-activated
-    // while preventScroll makes the first painted frame use our viewport root.
-    input.focus({ preventScroll: true });
-  };
-  input.addEventListener('pointerdown', focusComposerWithoutViewportScroll, { capture: true });
-  input.addEventListener('touchstart', focusComposerWithoutViewportScroll, { capture: true, passive: true });
+  composer.addEventListener('focusin', () => {
+    setComposerExpanded(true);
+  });
+  composer.addEventListener('focusout', () => {
+    requestAnimationFrame(() => {
+      if (!composer.contains(document.activeElement) && modelList.hidden && modeList.hidden && suggestions.hidden) {
+        setComposerExpanded(false);
+      }
+    });
+  });
   input.addEventListener('input', () => {
     autoSizeInput();
     updateSuggestions();
   });
   input.addEventListener('click', updateSuggestions);
-  attachButton.addEventListener('click', () => fileInput.click());
+  attachButton.addEventListener('click', () => {
+    setComposerExpanded(true);
+    fileInput.click();
+  });
   fileInput.addEventListener('change', async () => {
     const files = [...fileInput.files].slice(0, Math.max(0, 8 - attachments.length));
     fileInput.value = '';
-    if (!files.length || !sessionName) return;
-    uploadingAttachments += files.length;
-    renderAttachmentTray();
-    autoSizeInput();
-    for (const file of files) {
-      const upload = {
+    if (!files.length || !sessionName) {
+      input.focus({ preventScroll: true });
+      return;
+    }
+    const pendingUploads = files.map((file) => ({
+      file,
+      upload: {
         id: crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         name: file.name || 'Attachment', progress: 0, status: 'uploading', error: '',
-      };
-      attachmentUploads.set(upload.id, upload);
-      renderAttachmentTray();
+        controller: new AbortController(),
+      },
+    }));
+    uploadingAttachments += pendingUploads.length;
+    for (const { upload } of pendingUploads) attachmentUploads.set(upload.id, upload);
+    setComposerExpanded(true);
+    renderAttachmentTray();
+    autoSizeInput();
+    // The native picker temporarily owns focus. Restore the composer while
+    // this trusted change event is still active so iOS opens the keyboard and
+    // the expanded attachment tray exposes upload progress immediately.
+    input.focus({ preventScroll: true });
+    for (const { file, upload } of pendingUploads) {
       try {
         attachments.push(await uploadAttachment(sessionName, file, (progress) => {
           upload.progress = progress;
           renderAttachmentTray();
-        }));
+        }, { signal: upload.controller.signal }));
         attachmentUploads.delete(upload.id);
       } catch (error) {
-        upload.status = 'error';
-        upload.error = error.message || 'Upload failed';
-        state.textContent = upload.error;
-        state.dataset.state = 'error';
+        if (upload.controller.signal.aborted || error?.name === 'AbortError') {
+          attachmentUploads.delete(upload.id);
+        } else {
+          upload.status = 'error';
+          upload.error = error.message || 'Upload failed';
+          state.textContent = upload.error;
+          state.dataset.state = 'error';
+        }
       } finally {
         uploadingAttachments -= 1;
         renderAttachmentTray();
@@ -3065,23 +3531,41 @@ export function createMobileConversationView({
       }
     }
   });
+  fileInput.addEventListener('cancel', () => input.focus({ preventScroll: true }));
+  function retainComposerInputFocus(event) {
+    if (document.activeElement !== input) return;
+    // Picker controls must remain usable without dismissing the iOS keyboard.
+    // Cancelling the pointer's default focus transfer keeps the textarea and
+    // selection intact; the buttons' click events still perform the choice.
+    event.preventDefault();
+  }
+  modelButton.addEventListener('pointerdown', retainComposerInputFocus);
+  modeButton.addEventListener('pointerdown', retainComposerInputFocus);
+  modelList.addEventListener('pointerdown', retainComposerInputFocus);
+  modeList.addEventListener('pointerdown', retainComposerInputFocus);
   modelButton.addEventListener('click', () => {
     if (modelButton.disabled) return;
+    const keepComposerFocused = document.activeElement === input;
     const opening = modelList.hidden;
     closeAuxiliaryLists();
     closeSuggestions();
     if (opening && lastConversation?.controls?.model) paintModelOptions(lastConversation.controls.model);
     modelList.hidden = !opening;
     modelButton.setAttribute('aria-expanded', String(opening));
-    if (opening) modelList.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+    if (opening && !keepComposerFocused) {
+      modelList.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+    }
   });
   function toggleAuxiliaryList(button, list) {
     if (button.disabled) return;
+    const keepComposerFocused = document.activeElement === input;
     const opening = list.hidden;
     closeAllLists();
     list.hidden = !opening;
     button.setAttribute('aria-expanded', String(opening));
-    if (opening) list.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+    if (opening && !keepComposerFocused) {
+      list.querySelector('[aria-selected="true"]')?.focus({ preventScroll: true });
+    }
   }
   modeButton.addEventListener('click', () => toggleAuxiliaryList(modeButton, modeList));
   menu.addEventListener('click', () => document.querySelector('#open-sidebar')?.click());
@@ -3128,18 +3612,52 @@ export function createMobileConversationView({
   input.addEventListener('keyup', (event) => {
     if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) updateSuggestions();
   });
+  const markReaderScrollGesture = () => {
+    readerScrollGesture = true;
+    clearTimeout(readerScrollGestureTimer);
+    readerScrollGestureTimer = setTimeout(() => { readerScrollGesture = false; }, 180);
+  };
   messages.addEventListener('scroll', () => {
     const atBottom = distanceFromBottom(messages) <= 48;
     if (atBottom) followStreamTail = true;
-    else if (!submittedTurnFollow) followStreamTail = false;
+    // Layout, focus, and visualViewport changes can all dispatch scroll without
+    // reader intent. Only an actual wheel/touch/pointer gesture may release the
+    // tail; this keeps a browser-created focus jump from becoming permanent.
+    else if (!submittedTurnFollow && readerScrollGesture) followStreamTail = false;
     updateJumpToLatest();
   }, { passive: true });
   const releaseSubmittedTailFollow = () => {
     submittedTurnFollow = false;
     followStreamTail = distanceFromBottom(messages) <= 48;
   };
-  messages.addEventListener('wheel', releaseSubmittedTailFollow, { passive: true });
-  messages.addEventListener('touchmove', releaseSubmittedTailFollow, { passive: true });
+  messages.addEventListener('wheel', (event) => {
+    markReaderScrollGesture();
+    releaseSubmittedTailFollow();
+    if (!event.deltaY || !(event.target instanceof Element)) return;
+    const canMove = (node) => event.deltaY > 0
+      ? node.scrollTop + node.clientHeight < node.scrollHeight - 1
+      : node.scrollTop > 1;
+    let node = event.target;
+    let exhaustedNestedScroller = false;
+    while (node && node !== messages) {
+      const overflowY = getComputedStyle(node).overflowY;
+      if (/^(auto|scroll)$/.test(overflowY) && node.scrollHeight > node.clientHeight + 1) {
+        if (canMove(node)) return;
+        exhaustedNestedScroller = true;
+      }
+      node = node.parentElement;
+    }
+    if (!exhaustedNestedScroller || !canMove(messages)) return;
+    // Chromium does not always chain a wheel gesture through two exhausted
+    // nested panes. Forward the remaining delta to the conversation so the
+    // pointer never has to leave an expanded tool to continue scrolling.
+    event.preventDefault();
+    messages.scrollTop += event.deltaY;
+  }, { passive: false, capture: true });
+  messages.addEventListener('touchmove', () => {
+    markReaderScrollGesture();
+    releaseSubmittedTailFollow();
+  }, { passive: true });
   jumpToLatest.addEventListener('click', () => {
     followStreamTail = true;
     messages.scrollTo({
@@ -3160,6 +3678,7 @@ export function createMobileConversationView({
     closeStream();
     closeFileSheet();
     closeAllLists();
+    setComposerExpanded(false);
     mentionedFiles.clear();
     threadId = undefined;
     renderedSignature = '';
@@ -3208,6 +3727,7 @@ export function createMobileConversationView({
       parentId = undefined;
       providerId = undefined;
       pendingMessage = undefined;
+      optimisticQueuedInputs.clear();
       cancellingTurn = false;
       historyPrependAnchor = undefined;
       interactionMotionKey = '';
@@ -3221,6 +3741,7 @@ export function createMobileConversationView({
       renderedSignature = '';
       modelOptionsSignature = '';
       closeAllLists();
+      setComposerExpanded(false);
       title.textContent = 'New Grok chat';
       meta.textContent = 'Starting ACP session';
       state.textContent = 'Connecting';
@@ -3241,8 +3762,23 @@ export function createMobileConversationView({
       setAvailable(true);
     },
     select(nextSessionName, { expected = false } = {}) {
+      const wasExpected = expectedConversation;
       expectedConversation = Boolean(expected);
-      if (sessionName === (nextSessionName || undefined)) return;
+      if (sessionName === (nextSessionName || undefined)) {
+        // Session metadata is hydrated independently from the initial list.
+        // If this same session is newly identified as Grok after an early 404,
+        // reclaim the opaque native surface synchronously instead of allowing
+        // a terminal frame to appear until the next workspace refresh.
+        if (expectedConversation && !wasExpected && media.matches && !available) {
+          generation += 1;
+          setBooting(true);
+          jumpToLatest.hidden = true;
+          messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Preparing chat…'));
+          setAvailable(true);
+          void refresh();
+        }
+        return;
+      }
       generation += 1;
       clearTimeout(refreshTimer);
       clearTimeout(foregroundResumeTimer);
@@ -3265,6 +3801,7 @@ export function createMobileConversationView({
       parentId = undefined;
       providerId = undefined;
       pendingMessage = undefined;
+      optimisticQueuedInputs.clear();
       cancellingTurn = false;
       interactionMotionKey = '';
       pendingPlanReviews.clear();
@@ -3279,6 +3816,7 @@ export function createMobileConversationView({
       renderedSignature = '';
       modelOptionsSignature = '';
       closeAllLists();
+      setComposerExpanded(false);
       interactionDock.hidden = true;
       root.dataset.interaction = 'false';
       interactionDock.replaceChildren();
@@ -3323,6 +3861,26 @@ export function createMobileConversationView({
       if (sheetBrowser) sheetBrowser.hidden = !browserAvailable;
       renderSubagentPill(rootConversation || { items: [] });
     },
+    invalidate(name) {
+      if (!name) return;
+      conversationCache.delete(name);
+      historyLimits.delete(name);
+      if (name !== sessionName) return;
+      generation += 1;
+      clearTimeout(refreshTimer);
+      closeStream();
+      threadId = undefined;
+      rootThreadId = undefined;
+      rootConversation = undefined;
+      lastConversation = undefined;
+      renderedSignature = '';
+      if (!media.matches) return;
+      setBooting(true);
+      jumpToLatest.hidden = true;
+      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Preparing chat…'));
+      setAvailable(true);
+      void refresh();
+    },
     openSubagents() {
       if (subagents(rootConversation || { items: [] }).length) openSheet();
     },
@@ -3332,6 +3890,9 @@ export function createMobileConversationView({
       clearTimeout(foregroundResumeTimer);
       clearTimeout(streamWatchdogTimer);
       clearTimeout(pendingAcceptanceTimer);
+      clearTimeout(readerScrollGestureTimer);
+      releaseMainScrollGeometryLock();
+      mainScrollGeometryObserver.disconnect();
       cancelAnimationFrame(tailSnapFrame);
       closeStream();
       document.removeEventListener('pointerdown', dismissModelList);

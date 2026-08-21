@@ -26,6 +26,7 @@
   --color-surface-hover: #242427;
   --color-surface-pressed: #29292d;
   --color-surface-selected: #2d2d30;
+  --color-sidebar-selection: #252528;
   --color-browser-canvas: #0f0f11;
 
   /* Borders */
@@ -61,6 +62,8 @@
   --color-button-danger-border-hover: var(--color-danger);
   --color-button-danger-text: var(--color-danger);
   --color-button-danger-text-hover: var(--color-danger-strong);
+  --color-close-button-hover: var(--color-accent);
+  --color-close-button-destructive-hover: var(--color-danger-strong);
 
   /* Status and intent */
   --color-accent: #64beac;

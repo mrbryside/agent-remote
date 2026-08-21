@@ -1,3 +1,7 @@
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { createRemoteAuth } from '../src/remote/auth.js';
 import { createRemoteController } from '../src/remote/controller.js';
@@ -5,6 +9,12 @@ import { createRemoteGateway } from '../src/remote/gateway.js';
 
 const localUrl = 'http://127.0.0.1:3100';
 const remoteUrl = 'http://127.0.0.1:3101';
+const terminalBrowserInstalled = spawnSync('terminal-browser', ['--version'], {
+  encoding: 'utf8',
+  timeout: 5_000,
+}).status === 0;
+const hostShim = join(homedir(), '.local', 'bin', 'terminal-browser');
+const terminalBrowserCommand = existsSync(hostShim) ? hostShim : 'terminal-browser';
 
 async function localApi(request, path, options = {}) {
   return request.fetch(`${localUrl}${path}`, {
@@ -20,14 +30,13 @@ async function startQuickAndCreatePairing(request) {
   return response.json();
 }
 
-async function pairInBrowser(page, request, name = 'Remote E2E device') {
+async function pairInBrowser(page, request) {
+  const before = (await (await localApi(request, '/api/remote/devices')).json()).devices;
   const pairing = await startQuickAndCreatePairing(request);
   await page.goto(pairing.pairUrl);
-  await expect(page.getByLabel(/device name/i)).toBeVisible();
-  await page.getByLabel(/device name/i).fill(name);
-  await page.getByRole('button', { name: /pair this device/i }).click();
   await expect(page.locator('#new-project')).toBeVisible();
-  return pairing;
+  const after = (await (await localApi(request, '/api/remote/devices')).json()).devices;
+  return { pairing, device: after.find((candidate) => !before.some(({ id }) => id === candidate.id)) };
 }
 
 async function clearRemoteCookies(context) {
@@ -82,19 +91,89 @@ test.describe('Remote gateway browser fixture', () => {
     expect(pairing.qrDataUrl).toMatch(/^data:image\/png;base64,/);
     expect(pairing.pairUrl).toMatch(/^http:\/\/127\.0\.0\.1:3101\/pair#/);
 
+    const before = (await (await localApi(request, '/api/remote/devices')).json()).devices;
     await page.goto(pairing.pairUrl);
-    await page.getByLabel(/device name/i).fill('Quick phone');
-    await page.getByRole('button', { name: /pair this device/i }).click();
     await expect(page.locator('#new-project')).toBeVisible();
     await expect(page.locator('#remote-button')).toBeHidden();
+    const firstDevices = (await (await localApi(request, '/api/remote/devices')).json()).devices;
+    const firstDevice = firstDevices.find((candidate) => !before.some(({ id }) => id === candidate.id));
+    expect(firstDevice.name).toMatch(/^Mac · (?:Chrome|Browser)$/);
+
+    const repeatedPairing = await startQuickAndCreatePairing(request);
+    await page.goto(repeatedPairing.pairUrl);
+    await expect(page.locator('#new-project')).toBeVisible();
+    const repeatedDevices = (await (await localApi(request, '/api/remote/devices')).json()).devices;
+    expect(repeatedDevices).toHaveLength(firstDevices.length);
+    expect(repeatedDevices.find((candidate) => candidate.id === firstDevice.id)).toMatchObject({
+      id: firstDevice.id, name: firstDevice.name, revokedAt: null,
+    });
 
     const admin = await request.get('/api/remote/status');
     expect(admin.status()).toBe(404);
     await expect(page.locator('#remote-dialog')).toBeHidden();
   });
 
+  test('remote iPhone and local desktop both receive the first browser frame from one shared renderer', async ({ page, browser, request }) => {
+    test.setTimeout(75_000);
+    test.skip(!terminalBrowserInstalled, 'terminal-browser is not installed');
+    await pairInBrowser(page, request);
+    const sessionLabel = `remote-browser-${Date.now()}`;
+    const created = await localApi(request, '/api/sessions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      data: { commandLine: "printf '__REMOTE_BROWSER_READY__\\r\\n'", name: sessionLabel, cwd: process.cwd() },
+    });
+    expect(created.status()).toBe(201);
+    const sessionName = (await created.json()).session.name;
+    const localContext = await browser.newContext({ baseURL: localUrl, viewport: { width: 1280, height: 800 } });
+    const localPage = await localContext.newPage();
+    try {
+      await localPage.goto('/');
+      await page.goto('/');
+      for (const target of [localPage, page]) {
+        await target.locator('.session-row').filter({ hasText: sessionLabel }).locator('.session-button').click();
+        await expect(target.locator('#status')).toHaveAttribute('data-state', 'connected');
+        await expect(target.locator('#terminal-title')).toHaveText(sessionLabel);
+      }
+
+      const split = await localApi(request, '/api/control/split', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        data: {
+          session: sessionName,
+          argv: [terminalBrowserCommand, 'open', `${localUrl}/health`],
+        },
+      });
+      expect(split.status()).toBe(202);
+      expect((await split.json()).delivered).toBeGreaterThanOrEqual(2);
+      for (const target of [localPage, page]) {
+        await expect(target.locator('#graphics-split')).toBeVisible({ timeout: 10_000 });
+        await expect(target.locator('.graphics-terminal-instance:not([hidden]) .graphics-loading'))
+          .toContainText('Opening terminal-browser');
+      }
+      // Change the remote observer to an iPhone viewport while both clients
+      // are attaching to the same renderer. This reproduces the production
+      // race without depending on a real Cloudflare hostname in CI.
+      await page.setViewportSize({ width: 390, height: 844 });
+
+      for (const target of [localPage, page]) {
+        const activeHost = target.locator('.graphics-terminal-instance:not([hidden])');
+        await expect(target.locator('#graphics-split')).toBeVisible({ timeout: 10_000 });
+        await expect(activeHost.locator('.graphics-terminal-transport')).toHaveCSS('visibility', 'hidden');
+        await expect.poll(() => activeHost.locator('.browser-frame').evaluate((canvas) =>
+          canvas.width > 0 && canvas.height > 0 &&
+          canvas.closest('.graphics-terminal-instance')?.querySelector('.browser-surface')?.dataset.ready === 'true',
+        ), { timeout: 60_000 }).toBe(true);
+        await expect(activeHost.locator('.graphics-loading')).toBeHidden();
+      }
+    } finally {
+      await localContext.close();
+      await localApi(request, `/api/sessions/${encodeURIComponent(sessionName)}`, { method: 'DELETE' }).catch(() => {});
+    }
+  });
+
   test('a returning IndexedDB credential silently signs a new challenge after its cookie is cleared', async ({ page, context, request }) => {
-    await pairInBrowser(page, request, 'Returning device');
+    await pairInBrowser(page, request);
     await clearRemoteCookies(context);
     await page.goto('/');
     await expect(page.locator('#new-project')).toBeVisible({ timeout: 10_000 });
@@ -102,7 +181,7 @@ test.describe('Remote gateway browser fixture', () => {
   });
 
   test('local revocation returns remote HTTP 401, closes an active WebSocket with 4003, and rejects key reuse', async ({ page, context, request }) => {
-    await pairInBrowser(page, request, 'Revoked device');
+    const { device } = await pairInBrowser(page, request);
     const socketResult = await page.evaluate(() => new Promise((resolve, reject) => {
       const socket = new WebSocket(`${location.origin.replace('http', 'ws')}/ws`);
       socket.addEventListener('open', () => resolve('open'), { once: true });
@@ -114,11 +193,11 @@ test.describe('Remote gateway browser fixture', () => {
       window.__remoteE2eSocket.addEventListener('close', (event) => resolve(event.code), { once: true });
     }));
 
-    const devices = await localApi(request, '/api/remote/devices');
-    const device = (await devices.json()).devices.find((candidate) => candidate.name === 'Revoked device');
     expect(device).toBeTruthy();
     expect((await localApi(request, `/api/remote/devices/${encodeURIComponent(device.id)}`, { method: 'DELETE' })).status()).toBe(200);
     await expect.poll(() => closed).toBe(4003);
+    const remainingDevices = (await (await localApi(request, '/api/remote/devices')).json()).devices;
+    expect(remainingDevices.some((candidate) => candidate.id === device.id)).toBe(false);
 
     expect((await request.get('/api/projects')).status()).toBe(401);
     await clearRemoteCookies(context);
@@ -130,22 +209,19 @@ test.describe('Remote gateway browser fixture', () => {
     const expired = await startQuickAndCreatePairing(request);
     await localApi(request, '/__remote-e2e/clock?advanceMs=120000', { method: 'POST' });
     await page.goto(expired.pairUrl);
-    await page.getByLabel(/device name/i).fill('Expired phone');
-    await page.getByRole('button', { name: /pair this device/i }).click();
     await expect(page.getByText(/expired or was already used/i)).toBeVisible();
 
     const activeContext = await browser.newContext({ baseURL: remoteUrl });
     const activePage = await activeContext.newPage();
-    const used = await pairInBrowser(activePage, request, 'Used QR phone');
-    const secret = new URL(used.pairUrl).hash.slice(1);
+    const used = await pairInBrowser(activePage, request);
+    const secret = new URL(used.pairing.pairUrl).hash.slice(1);
     const replay = await request.post('/remote-auth/pair', {
       headers: { Origin: remoteUrl, 'content-type': 'application/json' },
       data: { secret, deviceName: 'Replay', publicKeyJwk: {} },
     });
     expect(replay.status()).toBe(410);
 
-    const devices = await localApi(request, '/api/remote/devices');
-    const deviceId = (await devices.json()).devices.find((candidate) => candidate.name === 'Used QR phone').id;
+    const deviceId = used.device.id;
     const challenge = await request.post('/remote-auth/challenge', {
       headers: { Origin: remoteUrl, 'content-type': 'application/json' }, data: { deviceId },
     });
@@ -173,6 +249,34 @@ test.describe('Remote gateway browser fixture', () => {
     await activeContext.close();
   });
 
+  test('validated Cloudflare token stays masked and locked until it is removed', async ({ page }) => {
+    await page.goto(localUrl);
+    await page.locator('#remote-button').click();
+    const dialog = page.locator('#remote-dialog');
+    await dialog.getByRole('radio', { name: /custom domain/i }).check();
+    await dialog.getByRole('button', { name: /next: custom domain/i }).click();
+    const token = dialog.getByLabel(/cloudflare api token/i);
+    await token.fill('fixture-token');
+    await dialog.locator('#remote-token-form').getByRole('button', { name: /validate token/i }).click();
+    await expect(token).toHaveValue('••••••••••••');
+    await expect(token).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: /validate token/i })).toBeHidden();
+    await expect(dialog.getByRole('button', { name: /remove token/i })).toBeEnabled();
+
+    await dialog.getByRole('button', { name: /close remote access/i }).click();
+    await page.locator('#remote-button').click();
+    await dialog.getByRole('radio', { name: /custom domain/i }).check();
+    await dialog.getByRole('button', { name: /next: custom domain/i }).click();
+    await expect(token).toHaveValue('••••••••••••');
+    await expect(token).toBeDisabled();
+
+    await dialog.getByRole('button', { name: /remove token/i }).click();
+    await expect(token).toBeEnabled();
+    await expect(token).toHaveValue('');
+    await expect(dialog.getByRole('button', { name: /validate token/i })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: /remove token/i })).toBeDisabled();
+  });
+
   test('named fake flow validates a token, suggests conflicts, reuses owned DNS, stops/restarts, and preserves ownership warnings', async ({ browser, request }) => {
     test.setTimeout(30_000);
     const context = await browser.newContext({ baseURL: localUrl });
@@ -186,6 +290,10 @@ test.describe('Remote gateway browser fixture', () => {
     await dialog.getByRole('button', { name: /next: custom domain/i }).click();
     await dialog.getByLabel(/cloudflare api token/i).fill('fixture-token');
     await dialog.locator('#remote-token-form').getByRole('button', { name: /validate token/i }).click();
+    await expect(dialog.getByLabel(/cloudflare api token/i)).toHaveValue('••••••••••••');
+    await expect(dialog.getByLabel(/cloudflare api token/i)).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: /validate token/i })).toBeHidden();
+    await expect(dialog.getByRole('button', { name: /remove token/i })).toBeEnabled();
     await expect(dialog.locator('#remote-zone')).toHaveValue('example.test');
     await dialog.locator('#remote-subdomain').fill('taken');
     await expect(dialog.getByText(/already in use/i)).toBeVisible({ timeout: 5_000 });
@@ -194,7 +302,7 @@ test.describe('Remote gateway browser fixture', () => {
     await dialog.getByRole('button', { name: /connect custom domain/i }).click();
     await expect(dialog.getByLabel(/remote public url/i)).toHaveValue('http://taken-2.example.test');
 
-    await dialog.getByRole('button', { name: /^stop$/i }).click();
+    await dialog.getByRole('button', { name: /^stop remote$/i }).click();
     const namedStatus = await localApi(request, '/api/remote/status');
     expect((await namedStatus.json()).named).toMatchObject({ hostname: 'taken-2.example.test', desiredState: 'stopped' });
 
@@ -202,18 +310,23 @@ test.describe('Remote gateway browser fixture', () => {
     // path without any external DNS call; Stop does not remove its metadata.
     await dialog.getByRole('button', { name: /connect custom domain/i }).click();
     await expect(dialog.getByLabel(/remote public url/i)).toHaveValue('http://taken-2.example.test');
-    await dialog.getByRole('button', { name: /^stop$/i }).click();
+    await dialog.getByRole('button', { name: /^stop remote$/i }).click();
 
     await dialog.locator('#remote-subdomain').fill('warn');
     await page.waitForTimeout(400);
     await dialog.getByRole('button', { name: /connect custom domain/i }).click();
-    await dialog.getByRole('button', { name: /^stop$/i }).click();
+    await dialog.getByRole('button', { name: /^stop remote$/i }).click();
     // Stop intentionally leaves the owned DNS metadata present, so Remove is
     // still actionable and reports ownership warnings without deleting it.
     await expect(dialog.locator('#remote-remove')).toBeEnabled();
     page.once('dialog', (prompt) => prompt.accept());
     await dialog.locator('#remote-remove').click();
     await expect(dialog.getByText(/DNS changed outside agent-remote/i)).toBeVisible();
+    await dialog.getByRole('button', { name: /remove token/i }).click();
+    await expect(dialog.getByLabel(/cloudflare api token/i)).toBeEnabled();
+    await expect(dialog.getByLabel(/cloudflare api token/i)).toHaveValue('');
+    await expect(dialog.getByRole('button', { name: /validate token/i })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: /remove token/i })).toBeDisabled();
     await context.close();
   });
 });

@@ -24,7 +24,11 @@ and tabs. Server-internal renderer discovery uses a private graphics-routing
 marker so it can inspect all owned daemon processes without passing through the
 public session filter. Never expose that global view through a client route.
 
-Desktop control events use the selected terminal WebSocket. Native mobile conversations intentionally suspend that socket, so their dedicated conversation WebSocket also carries validated `open-graphics` control events. Both transports address the same session-keyed renderer. On phones the renderer is presented in a draggable 70%-viewport bottom sheet that slides up from below rather than a full-screen xterm layer. Dismissing the sheet only changes frontend visibility and keeps the renderer alive; a Browser activity pill reopens it. If subagents are also present, Browser and Subagents share one activity dock, and each sheet exposes a direct switch to the other so the two surfaces never stack.
+Desktop control events use the selected terminal WebSocket. Native mobile conversations intentionally suspend that socket, so their dedicated conversation WebSocket also carries validated `open-graphics` control events. Both transports address the same session-keyed renderer. On phones the renderer is presented in a draggable 70%-viewport bottom sheet that slides up from below rather than a full-screen xterm layer. A renderer restored while the page is already compact starts hidden so refresh never covers the mobile conversation; the Browser activity pill or bottom Browser button opens it explicitly. Dismissing the sheet only changes frontend visibility and keeps the renderer alive. If subagents are also present, Browser and Subagents share one activity dock, and each sheet exposes a direct switch to the other so the two surfaces never stack.
+
+On desktop a right-side-panel toggle in the main top bar hides or reveals the
+active session's browser split without closing its renderer. The toggle stays
+available while the split is hidden; it is not a renderer lifecycle control.
 
 The sheet's close button is different from dismissal: it closes the keyed
 renderer and unregisters the owning terminal-browser process, while dragging

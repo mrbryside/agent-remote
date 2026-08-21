@@ -52,9 +52,20 @@ function parseRemoteHost(value) {
   return value;
 }
 
+function isLoopbackHost(value) {
+  if (value === 'localhost' || value === '::1' || value === '[::1]') return true;
+  const octets = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value);
+  return Boolean(octets) && octets.slice(1).every((octet) => Number(octet) <= 255);
+}
+
 export function loadConfig(overrides = {}) {
   const env = overrides.env ?? process.env;
   const port = Number(overrides.port ?? env.PORT ?? 3000);
+  const host = overrides.host ?? env.HOST ?? '127.0.0.1';
+  const token = overrides.token ?? env.TERMINAL_TOKEN ?? '';
+  if (!isLoopbackHost(host) && (typeof token !== 'string' || !token.trim())) {
+    throw new Error('TERMINAL_TOKEN is required when HOST is not a loopback address');
+  }
   const remoteHost = parseRemoteHost(overrides.remoteHost ?? env.REMOTE_HOST ?? '127.0.0.1');
   const remotePort = parsePort(
     overrides.remotePort ?? env.REMOTE_PORT ?? (port === 0 ? 0 : port + 1),
@@ -79,7 +90,7 @@ export function loadConfig(overrides = {}) {
   );
 
   return {
-    host: overrides.host ?? env.HOST ?? '127.0.0.1',
+    host,
     port,
     remoteHost,
     remotePort,
@@ -88,7 +99,7 @@ export function loadConfig(overrides = {}) {
     pairingTtlMs: 120_000,
     challengeTtlMs: 60_000,
     remoteSessionTtlMs: 43_200_000,
-    token: overrides.token ?? env.TERMINAL_TOKEN ?? '',
+    token,
     allowedOrigins: overrides.allowedOrigins ?? (env.ALLOWED_ORIGINS ?? '')
       .split(',')
       .map((origin) => origin.trim())

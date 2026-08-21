@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { WebSocket } from 'ws';
 import { commandExists } from '../src/config.js';
-import { createTerminalServer } from '../src/server.js';
+import { createTerminalServer, selectRendererViewport } from '../src/server.js';
 
 async function withServer(options, run) {
   const stateRoot = mkdtempSync(join(tmpdir(), 'agent-remote-state-'));
@@ -50,6 +50,26 @@ function connect(url, path = '/ws', options) {
     socket.once('open', () => resolve(socket));
     socket.once('error', reject);
   });
+}
+
+async function readStreamUntil(reader, pattern, timeoutMs = 2_000) {
+  const decoder = new TextDecoder();
+  let source = '';
+  const deadline = Date.now() + timeoutMs;
+  while (!pattern.test(source)) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error(`Timed out waiting for ${pattern}`);
+    let timer;
+    const next = await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out waiting for ${pattern}`)), remaining);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    if (next.done) throw new Error(`Stream closed before ${pattern}`);
+    source += decoder.decode(next.value, { stream: true });
+  }
+  return source;
 }
 
 function remoteRequest(url, { method = 'GET', headers, body } = {}) {
@@ -117,8 +137,9 @@ async function waitForCondition(predicate, message, timeoutMs = 5000) {
 
 test('serves the frontend and health status', async () => {
   await withServer({}, async (url) => {
-    const [page, tokens, apiClient, remoteControl, mobileConversation, markdown, syntax, markedVendor, purifierVendor, highlightVendor, health] = await Promise.all([
+    const [page, manifest, tokens, apiClient, remoteControl, mobileConversation, markdown, syntax, markedVendor, purifierVendor, highlightVendor, health] = await Promise.all([
       fetch(url),
+      fetch(`${url}/manifest.webmanifest`),
       fetch(`${url}/tokens.css`),
       fetch(`${url}/api-client.js`),
       fetch(`${url}/remote-control.js`),
@@ -131,7 +152,13 @@ test('serves the frontend and health status', async () => {
       fetch(`${url}/health`),
     ]);
     assert.equal(page.status, 200);
-    assert.match(await page.text(), /Interactive terminal/);
+    const pageHtml = await page.text();
+    assert.match(pageHtml, /Interactive terminal/);
+    assert.match(pageHtml, /apple-mobile-web-app-status-bar-style" content="black"/);
+    assert.doesNotMatch(pageHtml, /apple-mobile-web-app-status-bar-style" content="black-translucent"/);
+    assert.equal(manifest.status, 200);
+    assert.match(manifest.headers.get('content-type'), /^application\/manifest\+json/);
+    assert.equal((await manifest.json()).orientation, 'portrait-primary');
     assert.equal(tokens.status, 200);
     assert.match(tokens.headers.get('content-type'), /^text\/css/);
     assert.match(await tokens.text(), /--color-terminal-background:\s*#141416/);
@@ -163,6 +190,7 @@ test('serves a provider-neutral mobile conversation only for a managed session',
   const planReviews = [];
   const modelChanges = [];
   const modeChanges = [];
+  const goalActions = [];
   const cancellations = [];
   const queueActions = [];
   let initializing = false;
@@ -211,6 +239,7 @@ test('serves a provider-neutral mobile conversation only for a managed session',
       accepted: true, modelId, effortId: (modelChanges.push({ session, modelId, effortId }), effortId),
     }),
     setMode: async (session, modeId) => ({ accepted: true, modeId: (modeChanges.push({ session, modeId }), modeId) }),
+    controlGoal: async (session, action) => ({ accepted: true, action: (goalActions.push({ session, action }), action) }),
     cancel: async (session) => (cancellations.push(session), { accepted: true, active: true }),
     removeQueuedInput: async (session, queueId) => (queueActions.push({ action: 'remove', session, queueId }), { accepted: true }),
     steerQueuedInput: async (session, queueId) => (queueActions.push({ action: 'steer', session, queueId }), { accepted: true }),
@@ -320,6 +349,14 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     assert.deepEqual(await modeResponse.json(), { accepted: true, modeId: 'alwaysApprove' });
     assert.deepEqual(modeChanges.map(({ session, modeId }) => ({ name: session.name, modeId })), [
       { name: 'ar-mobile', modeId: 'alwaysApprove' },
+    ]);
+    const goalResponse = await fetch(`${url}/api/conversations/ar-mobile/goal`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'pause' }),
+    });
+    assert.equal(goalResponse.status, 202);
+    assert.deepEqual(await goalResponse.json(), { accepted: true, action: 'pause' });
+    assert.deepEqual(goalActions.map(({ session, action }) => ({ name: session.name, action })), [
+      { name: 'ar-mobile', action: 'pause' },
     ]);
     const cancelResponse = await fetch(`${url}/api/conversations/ar-mobile/cancel`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
@@ -682,6 +719,7 @@ test('local Remote administration routes require same-origin JSON mutations and 
   const calls = [];
   const controller = {
     status: async () => ({ supported: true, tunnel: { mode: 'none', state: 'stopped' } }),
+    tunnelStatus: () => ({ mode: 'none', state: 'stopped' }),
     setCloudflareToken: async (token) => { calls.push(['token', token]); return { configured: true, zones: [{ id: 'zone-1' }] }; },
     removeCloudflareToken: async () => { calls.push(['remove-token']); return { configured: false }; },
     listZones: async () => ({ zones: [{ id: 'zone-1' }] }),
@@ -704,6 +742,9 @@ test('local Remote administration routes require same-origin JSON mutations and 
     });
     assert.deepEqual((await request('/api/remote/status')).json(), {
       supported: true, tunnel: { mode: 'none', state: 'stopped' },
+    });
+    assert.deepEqual((await request('/api/remote/tunnel-status')).json(), {
+      tunnel: { mode: 'none', state: 'stopped' },
     });
     assert.equal((await remoteRequest(`${url}/api/remote/tunnels/quick`, { method: 'POST' })).status, 403);
     assert.equal((await request('/api/remote/tunnels/quick', {
@@ -733,8 +774,12 @@ test('local Remote administration routes require same-origin JSON mutations and 
     assert.deepEqual((await request('/api/remote/devices')).json(), {
       devices: [{ id: 'device-1', name: 'Phone', createdAt: 10, lastUsedAt: null, revokedAt: null }],
     });
-    assert.deepEqual((await request('/api/remote/devices/device-1', { method: 'DELETE' })).json(), { revoked: true });
+    assert.deepEqual((await request('/api/remote/devices/device-1', { method: 'DELETE' })).json(), { removed: true });
     assert.equal((await request('/api/remote/devices/missing-device', { method: 'DELETE' })).status, 404);
+    app.remoteStore.registerDevice({ id: 'device-2', name: 'Phone', publicKeyJwk: {}, fingerprint: 'fingerprint-2', createdAt: 20 });
+    app.remoteStore.registerDevice({ id: 'device-3', name: 'Tablet', publicKeyJwk: {}, fingerprint: 'fingerprint-3', createdAt: 30 });
+    assert.deepEqual((await request('/api/remote/devices', { method: 'DELETE' })).json(), { removed: 2 });
+    assert.deepEqual((await request('/api/remote/devices')).json(), { devices: [] });
     assert.deepEqual(calls, [
       ['token', 'candidate'], ['remove-token'], ['named', { zoneId: 'zone-1', subdomain: 'term' }],
     ]);
@@ -827,6 +872,17 @@ test('remote auth routes pair, challenge, verify, logout, and apply their securi
     assert.deepEqual(authenticated.json(), {
       authenticated: true, deviceId: pairedPayload.device.id, expiresAt: pairedPayload.expiresAt,
     });
+
+    const workspace = await remoteRequest(`${addresses.remoteUrl}/`, {
+      headers: { ...headers, Cookie: cookie },
+    });
+    assert.equal(workspace.status, 200);
+    assert.equal(workspace.headers['cache-control'], 'no-store');
+    assert.equal(workspace.headers['referrer-policy'], 'no-referrer');
+    assert.equal(workspace.headers['x-frame-options'], 'DENY');
+    assert.match(workspace.headers['content-security-policy'], /script-src 'self'/);
+    assert.match(workspace.headers['content-security-policy'], /frame-ancestors 'none'/);
+    assert.doesNotMatch(workspace.text(), /<script(?:\s[^>]*)?>\s*[^<\s]/i);
 
     const challenge = await remoteRequest(`${addresses.remoteUrl}/remote-auth/challenge`, {
       method: 'POST',
@@ -986,6 +1042,74 @@ test('configures renderer PTYs for CSS-pixel viewport coordinates', async () => 
   });
 });
 
+test('starts internal renderers without waiting for the configured login shell', async () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agent-remote-renderer-shell-'));
+  const loginShell = join(fixture, 'slow-login-shell');
+  const invoked = join(fixture, 'invoked');
+  writeFileSync(loginShell, `#!/bin/sh\nprintf invoked > "${invoked}"\nsleep 30\n`);
+  chmodSync(loginShell, 0o755);
+  try {
+    await withServer({ shell: loginShell, shellArgs: ['--login'] }, async (url) => {
+      const socket = await connect(url, '/ws?mode=graphics&purpose=renderer&renderer=session%3Aclean-shell');
+      const output = waitForOutput(socket, '__CLEAN_RENDERER_SHELL__');
+      socket.send(JSON.stringify({
+        type: 'input',
+        data: "printf '__CLEAN_RENDERER_SHELL__\\r\\n'\r",
+      }));
+      assert.match(await output, /__CLEAN_RENDERER_SHELL__/);
+      assert.throws(() => readFileSync(invoked), /ENOENT/);
+      socket.close();
+    });
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('keeps one stable renderer viewport for desktop and phone observers', () => {
+  assert.deepEqual(selectRendererViewport([
+    { width: 390, height: 680 },
+    { width: 1180, height: 720 },
+  ]), { width: 1180, height: 720 });
+  assert.deepEqual(selectRendererViewport([
+    { width: 390, height: 680 },
+  ]), { width: 390, height: 680 });
+  assert.deepEqual(selectRendererViewport([], { width: 800, height: 600 }), { width: 800, height: 600 });
+});
+
+test('reports a terminal-browser discovery failure instead of loading forever', async () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agent-remote-renderer-launch-'));
+  const executable = join(fixture, 'terminal-browser');
+  const environmentOutput = join(fixture, 'environment');
+  writeFileSync(executable, `#!/bin/sh\nprintf %s \"$TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK\" > \"${environmentOutput}\"\n`);
+  chmodSync(executable, 0o755);
+  try {
+    await withServer({
+      listTerminalBrowsers: async () => [],
+      rendererDiscoveryAttempts: 2,
+      rendererDiscoveryIntervalMs: 1,
+    }, async (url) => {
+      const socket = await connect(url, '/ws?mode=graphics&purpose=renderer&renderer=session%3Adiscovery-failure');
+      const failed = waitForMessage(socket, (message) =>
+        message.type === 'renderer-state' && message.state === 'failed');
+      socket.send(JSON.stringify({
+        type: 'launch',
+        argv: [executable, 'open', 'https://example.com'],
+      }));
+      assert.deepEqual(await failed, {
+        type: 'renderer-state',
+        state: 'failed',
+        message: 'terminal-browser did not register a browser surface',
+      });
+      await waitForCondition(() => {
+        try { return readFileSync(environmentOutput, 'utf8') === '1'; } catch { return false; }
+      }, 'renderer launch did not bypass the terminal graphics probe');
+      socket.close();
+    });
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test('keeps a keyed renderer alive across websocket reconnects until explicitly closed', async () => {
   await withServer({}, async (url) => {
     const path = '/ws?mode=graphics&purpose=renderer&renderer=builtin%3Ashell';
@@ -1015,6 +1139,34 @@ test('keeps a keyed renderer alive across websocket reconnects until explicitly 
     const closed = await (await fetch(`${url}/api/renderers`)).json();
     assert.deepEqual(closed.renderers, []);
   });
+});
+
+test('launches a shared keyed renderer only once when desktop and remote clients attach together', async () => {
+  const outputDirectory = mkdtempSync(join(tmpdir(), 'agent-remote-shared-launch-'));
+  const outputFile = join(outputDirectory, 'launches');
+  try {
+    await withServer({}, async (url) => {
+      const path = '/ws?mode=graphics&purpose=renderer&renderer=session%3Ashared-launch';
+      const first = await connect(url, path);
+      const second = await connect(url, path);
+      const launch = JSON.stringify({
+        type: 'launch',
+        argv: ['/bin/sh', '-c', `printf x >> ${outputFile}`],
+      });
+      first.send(launch);
+      second.send(launch);
+      await waitForCondition(() => {
+        try { return readFileSync(outputFile, 'utf8').length > 0; } catch { return false; }
+      }, 'shared renderer did not launch');
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      assert.equal(readFileSync(outputFile, 'utf8'), 'x');
+      second.send(JSON.stringify({ type: 'close' }));
+      await new Promise((resolve) => second.once('close', resolve));
+      first.close();
+    });
+  } finally {
+    rmSync(outputDirectory, { recursive: true, force: true });
+  }
 });
 
 test('closes the browser automation daemon owned by a renderer', async () => {
@@ -1217,6 +1369,32 @@ test('web API browses folders and creates a selectable managed session', async (
     }
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('workspace stream publishes authoritative mutations without polling', async () => {
+  await withServer({
+    allowedCwdRoots: [process.cwd()],
+    agentDefinitions: [{ id: 'fixture', label: 'Fixture agent', command: 'exec /bin/sh' }],
+  }, async (url) => {
+    const stream = await fetch(`${url}/api/workspace/stream`);
+    assert.equal(stream.status, 200);
+    assert.match(stream.headers.get('content-type'), /text\/event-stream/);
+    const reader = stream.body.getReader();
+    try {
+      await readStreamUntil(reader, /event: ready/);
+      const created = await fetch(`${url}/api/projects`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Stream project', cwd: process.cwd(), agentId: 'fixture' }),
+      });
+      assert.equal(created.status, 201);
+      const source = await readStreamUntil(reader, /"type":"project-created"/);
+      assert.match(source, /event: workspace/);
+      assert.match(source, /"deleted":\[\]/);
+    } finally {
+      await reader.cancel();
+    }
+  });
 });
 
 test('project API persists settings and manages its own chats', async (context) => {

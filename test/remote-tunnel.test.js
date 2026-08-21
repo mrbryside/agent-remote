@@ -157,6 +157,31 @@ test('keeps named tokens in the child environment, uses the configured hostname,
   assert.equal(store.states.at(-1), 'stopped');
 });
 
+test('preserves the named desired state when the server closes but explicit Stop turns it off', async () => {
+  const closingFake = childSpawner();
+  const closingStore = settingsStore();
+  const closingManager = createTunnelManager({ spawn: closingFake.spawn, store: closingStore });
+
+  await closingManager.startNamed({ hostname: 'term.example.com', tunnelToken: 'close-token' });
+  await closingManager.close();
+  assert.deepEqual(closingFake.calls[0].child.kills, ['SIGTERM']);
+  assert.deepEqual(closingStore.states, ['running']);
+  assert.deepEqual(closingManager.status(), { mode: 'none', state: 'stopped' });
+
+  const stoppingFake = childSpawner();
+  const stoppingStore = settingsStore();
+  const stoppingManager = createTunnelManager({ spawn: stoppingFake.spawn, store: stoppingStore });
+
+  await stoppingManager.startNamed({ hostname: 'term.example.com', tunnelToken: 'stop-token' });
+  await stoppingManager.stop();
+  assert.deepEqual(stoppingStore.states, ['running', 'stopped']);
+
+  const idleStore = settingsStore();
+  const idleManager = createTunnelManager({ spawn: childSpawner().spawn, store: idleStore });
+  await idleManager.stop();
+  assert.deepEqual(idleStore.states, ['stopped']);
+});
+
 test('runs the executable fixture and leaves no Quick child behind after Stop', async () => {
   const root = mkdtempSync(join(tmpdir(), 'agent-remote-cloudflared-'));
   try {

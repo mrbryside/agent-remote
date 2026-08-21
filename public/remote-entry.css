@@ -1,15 +1,10 @@
 :root {
   color-scheme: dark;
   --entry-surface: #17171b;
-  --entry-surface-raised: #222228;
-  --entry-border: #3a3a43;
   --entry-text: #f3f2f6;
   --entry-muted: #aaa9b5;
   --entry-accent: #64beac;
   --entry-danger: #db858b;
-  --entry-button-surface: transparent;
-  --entry-button-border: #568f84;
-  --entry-button-border-hover: var(--entry-accent);
 }
 
 * { box-sizing: border-box; }
@@ -31,31 +26,18 @@ body {
 
 .entry-card {
   inline-size: min(100%, 440px);
-  padding: 32px;
-  border: 1px solid var(--entry-border);
-  border-radius: 16px;
-  background: var(--entry-surface-raised);
-  box-shadow: 0 18px 50px rgb(0 0 0 / 24%);
+  padding: 8px;
+  border: 0;
+  background: transparent;
 }
 
-.eyebrow { margin: 0 0 12px; color: var(--entry-accent); font-size: 12px; font-weight: 700; letter-spacing: .12em; }
-h1 { margin: 0; font-size: clamp(24px, 7vw, 32px); line-height: 1.15; }
-.entry-message { margin: 16px 0 0; color: var(--entry-muted); line-height: 1.55; }
-.entry-detail { margin: 16px 0 0; color: var(--entry-danger); line-height: 1.5; }
-
-form { display: grid; gap: 10px; margin-top: 24px; }
-label { font-size: 14px; font-weight: 700; }
-input, button { min-block-size: 44px; border-radius: 8px; font: inherit; }
-input { border: 1px solid var(--entry-border); padding: 0 12px; background: var(--entry-surface); color: var(--entry-text); }
-button { margin-top: 6px; border: 1px solid var(--entry-button-border); padding: 0 16px; background: var(--entry-button-surface); color: var(--entry-text); font-weight: 800; cursor: pointer; }
-button:hover { border-color: var(--entry-button-border-hover); }
-button:disabled { cursor: wait; opacity: .65; }
-input:focus-visible, button:focus-visible { outline: 3px solid var(--entry-accent); outline-offset: 3px; }
-.connecting { margin: 24px 0 0; color: var(--entry-accent); }
+.eyebrow { margin: 0 0 10px; color: var(--entry-accent); font-size: 11px; font-weight: 700; letter-spacing: .12em; }
+h1 { margin: 0; font-size: clamp(22px, 6vw, 28px); line-height: 1.2; }
+.entry-detail { max-inline-size: 52ch; margin: 10px 0 0; color: var(--entry-muted); font-size: 13px; line-height: 1.45; }
 
 @media (prefers-reduced-motion: no-preference) {
   .entry-card { animation: entry-arrive 180ms ease-out; }
   @keyframes entry-arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 }
 
-@media (max-width: 420px) { .entry-shell { padding: 16px; } .entry-card { padding: 24px; } }
+@media (max-width: 420px) { .entry-shell { padding: 20px; } .entry-card { padding: 4px; } }

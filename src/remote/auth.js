@@ -54,6 +54,31 @@ function sanitizeDeviceName(value) {
   return name;
 }
 
+function inferDeviceName(input) {
+  const headers = input?.request?.headers || {};
+  const userAgent = typeof headers['user-agent'] === 'string' ? headers['user-agent'] : '';
+  const platformHint = typeof headers['sec-ch-ua-platform'] === 'string'
+    ? headers['sec-ch-ua-platform'].replaceAll('"', '').trim()
+    : '';
+  let device = 'Paired device';
+  if (/iPhone/i.test(userAgent)) device = 'iPhone';
+  else if (/iPad/i.test(userAgent) || (/Macintosh/i.test(userAgent) && /Mobile/i.test(userAgent))) device = 'iPad';
+  else if (/Android/i.test(userAgent)) {
+    const model = /Android[^;)]*;\s*([^;)]+?)(?:\s+Build\/[^;)]*)?[;)]/i.exec(userAgent)?.[1]?.trim();
+    device = model && !/^(?:wv|mobile)$/i.test(model) ? model : 'Android device';
+  } else if (/Mac|macOS/i.test(platformHint) || /Macintosh|Mac OS X/i.test(userAgent)) device = 'Mac';
+  else if (/Windows/i.test(platformHint) || /Windows/i.test(userAgent)) device = 'Windows PC';
+  else if (/Chrome OS/i.test(platformHint) || /CrOS/i.test(userAgent)) device = 'Chromebook';
+  else if (/Linux/i.test(platformHint) || /Linux/i.test(userAgent)) device = 'Linux device';
+
+  let browser;
+  if (/EdgiOS|EdgA|Edg\//i.test(userAgent)) browser = 'Edge';
+  else if (/CriOS|Chrome\//i.test(userAgent)) browser = 'Chrome';
+  else if (/FxiOS|Firefox\//i.test(userAgent)) browser = 'Firefox';
+  else if (/Safari\//i.test(userAgent)) browser = 'Safari';
+  return browser ? `${device} · ${browser}` : device;
+}
+
 function cookieParts(sessionId, maxAge, secureCookies, cookieName = COOKIE_NAME) {
   const parts = [`${cookieName}=${sessionId}`, `Max-Age=${maxAge}`, 'Path=/', 'HttpOnly'];
   if (secureCookies) parts.push('Secure');
@@ -100,6 +125,7 @@ export function createRemoteAuth({
   const challenges = new Map();
   const sessions = new Map();
   const rateBuckets = new Map();
+  const revokedDeviceIds = new Set();
   let closed = false;
   const importKey = subtle.importKey?.bind(subtle) || webcrypto.subtle.importKey.bind(webcrypto.subtle);
   const verify = subtle.verify?.bind(subtle) || webcrypto.subtle.verify.bind(webcrypto.subtle);
@@ -133,7 +159,7 @@ export function createRemoteAuth({
   function activeOrError(deviceId) {
     const device = store.getActiveDevice(deviceId);
     if (device) return device;
-    if (store.listDevices().some((candidate) => candidate.id === deviceId && candidate.revokedAt !== null)) {
+    if (revokedDeviceIds.has(deviceId)) {
       throw remoteError('DEVICE_REVOKED', 'This device has been revoked', 403);
     }
     throw remoteError('REMOTE_UNAUTHORIZED', 'This device is not paired', 401);
@@ -186,6 +212,21 @@ export function createRemoteAuth({
     };
   }
 
+  function invalidateDevices(deviceIds) {
+    const revoked = new Set(deviceIds);
+    for (const deviceId of revoked) revokedDeviceIds.add(deviceId);
+    for (const [sessionId, session] of sessions) {
+      if (revoked.has(session.deviceId)) sessions.delete(sessionId);
+    }
+    for (const deviceId of revoked) onRevoke(deviceId);
+  }
+
+  function cancelPairing() {
+    const hadPairing = Boolean(pairing);
+    pairing = undefined;
+    return hadPairing;
+  }
+
   function sessionIdFromRequest(request) {
     const cookie = typeof request === 'string' ? request : request?.headers?.cookie;
     const sessionId = parseCookies(cookie)[cookieName];
@@ -233,12 +274,9 @@ export function createRemoteAuth({
       pairing = undefined;
       const canonical = canonicalPublicJwk(publicKeyJwk);
       const fingerprint = base64url(await sha256(encoder.encode(canonicalJwkJson(canonical))));
-      if (store.listDevices().some((device) => device.fingerprint === fingerprint)) {
-        throw new TypeError('A device with this public key is already paired');
-      }
-      const device = store.registerDevice({
+      const device = store.upsertDevice({
         id: randomUUID(),
-        name: sanitizeDeviceName(deviceName),
+        name: sanitizeDeviceName(deviceName == null ? inferDeviceName(request) : deviceName),
         publicKeyJwk: canonical,
         fingerprint,
         createdAt: currentTime(),
@@ -305,15 +343,28 @@ export function createRemoteAuth({
       return sessions.delete(sessionId);
     },
 
+    cancelPairing() {
+      requireOpen();
+      return cancelPairing();
+    },
+
     revokeDevice(deviceId) {
       requireOpen();
-      const revoked = store.revokeDevice(deviceId, currentTime());
-      if (!revoked) return false;
-      for (const [sessionId, session] of sessions) {
-        if (session.deviceId === deviceId) sessions.delete(sessionId);
-      }
-      onRevoke(deviceId);
+      cancelPairing();
+      const removed = store.deleteDevice(deviceId);
+      if (!removed) return false;
+      invalidateDevices([deviceId]);
       return true;
+    },
+
+    revokeAllDevices() {
+      requireOpen();
+      cancelPairing();
+      const deviceIds = store.listDevices().map((device) => device.id);
+      if (!deviceIds.length) return 0;
+      const removed = store.deleteAllDevices();
+      invalidateDevices(deviceIds);
+      return removed;
     },
 
     assertRateLimit,
@@ -329,10 +380,11 @@ export function createRemoteAuth({
     },
 
     close() {
-      pairing = undefined;
+      cancelPairing();
       challenges.clear();
       sessions.clear();
       rateBuckets.clear();
+      revokedDeviceIds.clear();
       closed = true;
     },
   };
