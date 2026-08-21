@@ -2,7 +2,7 @@
 
 Local persistent agent workspace with browser terminals, native mobile conversations, tmux, SQLite, Cloudflare Remote access, and a macOS Tauri wrapper.
 
-`Last documented commit: 1be12bfeefb36684a3b3fd5900c249eaa52b6ba7`
+`Last documented commit: bf75876a0228546c503b30300fcca4f170948fdc`
 
 ## Project structure
 
@@ -10,7 +10,7 @@ Local persistent agent workspace with browser terminals, native mobile conversat
 | --- | --- |
 | `bin/` | User-facing `agent-remote` CLI and terminal-browser routing shim. |
 | `desktop/` | Minimal loading document used by the Tauri webview. |
-| `public/` | Browser UI, mobile conversation surface, Remote UI, design tokens, and xterm/browser-pane controls. |
+| `public/` | Browser UI, mobile conversation surface, Remote UI, shared components/design tokens, and xterm/browser-pane controls. |
 | `scripts/` | Native dependency checks, terminal-browser shim setup, and Tauri sidecar preparation/smoke tests. |
 | `src/` | Node HTTP/WebSocket server, PTY/tmux lifecycle, configuration, directories, and project persistence. |
 | `src/conversations/` | Provider-neutral conversation registry plus Grok ACP, attachment, and project-file completion adapters. |
@@ -26,7 +26,7 @@ Only open the sections below when they are relevant to the current task.
 | If you want to know... | Go to |
 | --- | --- |
 | Runtime ownership, persistence, Remote security, browser rendering, or mobile providers | [Architecture](docs/agents/architecture/index.md) |
-| Colors, typography, spacing, layout, and motion tokens | [Design system](docs/agents/design-system/index.md) |
+| Shared UI components, colors, typography, spacing, layout, and motion tokens | [Design system](docs/agents/design-system/index.md) |
 | Setup, implementation guardrails, tests, desktop packaging, or safe handoff | [Workflows](docs/agents/workflows/index.md) |
 
 ## Maintenance note

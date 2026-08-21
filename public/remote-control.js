@@ -3,6 +3,8 @@ import { api } from './api-client.js';
 const POLL_MS = 3_000;
 const HOSTNAME_DELAY_MS = 350;
 const MASKED_TOKEN = '••••••••••••';
+const DEFAULT_LOADING_TITLE = 'Loading remote setup…';
+const DEFAULT_LOADING_COPY = 'Checking the active connection and paired devices.';
 
 function formatDate(value) {
   if (!value) return 'Never';
@@ -27,14 +29,41 @@ export async function bootstrapRemoteControl() {
   const dialog = document.querySelector('#remote-dialog');
   if (!button || !dialog) return;
 
+  function removeLocalRemoteControls() {
+    button.closest('.sidebar-footer')?.remove();
+    dialog.remove();
+    document.querySelector('#cloudflare-token-guide-dialog')?.remove();
+  }
+
   let runtime;
   try {
     runtime = await api('/api/runtime');
   } catch {
+    removeLocalRemoteControls();
     return;
   }
-  if (runtime.surface !== 'local') return;
+  if (runtime.surface !== 'local') {
+    removeLocalRemoteControls();
+    return;
+  }
 
+  const buttonLabels = {
+    loading: 'Remote',
+    running: 'Remote On',
+    starting: 'Remote Connecting',
+    stopping: 'Remote Stopping',
+    stopped: 'Remote Off',
+    error: 'Remote Error',
+    unavailable: 'Remote Unavailable',
+  };
+  function setRemoteButtonState(buttonState) {
+    button.dataset.state = buttonState;
+    button.title = buttonLabels[buttonState] || 'Remote';
+    button.setAttribute('aria-label', `Remote access: ${buttonState}`);
+    button.toggleAttribute('aria-busy', buttonState === 'loading');
+    setText(buttonLabel, buttonLabels[buttonState] || 'Remote');
+  }
+  setRemoteButtonState('loading');
   button.hidden = false;
   const state = {
     status: undefined,
@@ -50,11 +79,17 @@ export async function bootstrapRemoteControl() {
     deviceCount: 0,
     managingDevices: false,
     loading: false,
+    operation: undefined,
+    hostnameCheck: undefined,
   };
   const $ = (selector) => dialog.querySelector(selector);
   const alert = $('#remote-alert');
   const loading = $('#remote-loading');
+  const loadingTitle = $('#remote-loading-title');
+  const loadingCopy = $('#remote-loading-copy');
+  const runtimeStatus = $('#remote-runtime-status');
   const stateLabel = $('#remote-state');
+  const stateDetail = $('#remote-state-detail');
   const url = $('#remote-public-url');
   const cloudflared = $('#remote-cloudflared');
   const tokenForm = $('#remote-token-form');
@@ -75,8 +110,12 @@ export async function bootstrapRemoteControl() {
   const devices = $('#remote-devices');
   const clearDevices = $('#remote-clear-devices');
   const manageDevices = $('#remote-manage-devices');
+  const powerButton = $('#remote-power');
+  const powerHint = $('#remote-power-hint');
   const devicesPanel = $('#remote-devices-panel');
   const stepper = dialog.querySelector('.remote-stepper');
+  const devicesStepNumber = $('#remote-devices-step-number');
+  const pairKicker = $('#remote-pair-kicker');
   const connectionInputs = [...dialog.querySelectorAll('input[name="remote-connection-type"]')];
 
   function selectedZone() {
@@ -94,19 +133,179 @@ export async function bootstrapRemoteControl() {
     }
   }
 
+  function currentTunnel() {
+    return state.status?.tunnel || { mode: 'none', state: 'stopped' };
+  }
+
+  function savedConnectionChoice() {
+    const tunnel = currentTunnel();
+    if (tunnel.mode === 'named' || tunnel.mode === 'quick') return tunnel.mode;
+    return state.status?.named?.hostname ? 'named' : 'quick';
+  }
+
+  function savedNamedValues() {
+    const named = state.status?.named;
+    if (!named?.zoneName || !named?.hostname) return { zone: '', subdomain: '' };
+    const suffix = `.${named.zoneName}`;
+    return {
+      zone: named.zoneName,
+      subdomain: named.hostname.endsWith(suffix)
+        ? named.hostname.slice(0, -suffix.length)
+        : '',
+    };
+  }
+
+  function resetDraftFromStatus() {
+    const named = savedNamedValues();
+    state.connectionChoice = savedConnectionChoice();
+    zoneInput.value = named.zone;
+    subdomain.value = named.subdomain;
+    state.hostnameCheck = undefined;
+    suggestions.replaceChildren();
+    subdomainOptions.replaceChildren();
+    availability.removeAttribute('data-state');
+    setText(availability, named.zone && named.subdomain
+      ? 'Checking hostname…'
+      : 'Choose a zone and subdomain to check availability.');
+  }
+
+  function wizardSteps() {
+    return state.connectionChoice === 'named' ? [1, 2, 3] : [1, 3];
+  }
+
+  function hostnameKey() {
+    const zone = selectedZone();
+    const value = subdomain.value.trim().toLowerCase();
+    return zone && value ? `${zone.id}:${value}` : '';
+  }
+
+  function namedConfigurationReason() {
+    if (!state.status?.tokenConfigured) return 'Validate a Cloudflare API token in Domain first.';
+    if (!state.zones.length) return 'Load at least one Cloudflare zone in Domain first.';
+    if (!selectedZone()) return 'Choose a Cloudflare zone in Domain first.';
+    if (!subdomain.value.trim()) return 'Enter a subdomain in Domain first.';
+    if (!subdomain.checkValidity()) return 'Enter a valid lowercase subdomain in Domain first.';
+    const key = hostnameKey();
+    if (!state.hostnameCheck || state.hostnameCheck.key !== key) return 'Wait for the domain availability check to finish.';
+    if (state.hostnameCheck.state === 'checking') return 'Checking whether the Custom Domain is available.';
+    if (state.hostnameCheck.state === 'error') return 'Resolve the domain availability error before starting.';
+    if (state.hostnameCheck.result?.status === 'conflict') return 'Choose an available Custom Domain before starting.';
+    if (!['available', 'reusable'].includes(state.hostnameCheck.result?.status)) return 'Check the Custom Domain before starting.';
+    return '';
+  }
+
+  function startDisabledReason() {
+    if (state.loading || !state.status) return 'Remote setup is still loading.';
+    if (state.busy || state.operation) return 'A Remote action is already in progress.';
+    if (!state.status.supported) return state.status.cloudflared?.error || 'Remote access is unavailable on this Mac.';
+    if (!state.status.cloudflared?.available) return state.status.cloudflared?.error || 'Install or update cloudflared before starting.';
+    return state.connectionChoice === 'named' ? namedConfigurationReason() : '';
+  }
+
+  function shouldStopRemote() {
+    const tunnel = currentTunnel();
+    return ['starting', 'running', 'stopping'].includes(tunnel.state)
+      || (state.status?.named?.desiredState === 'running' && tunnel.mode === 'named');
+  }
+
+  function hasRestartRelevantChanges() {
+    const tunnel = currentTunnel();
+    if (!shouldStopRemote()) return false;
+    if (state.connectionChoice !== tunnel.mode) return true;
+    if (state.connectionChoice !== 'named') return false;
+    const zone = selectedZone();
+    const draftedHostname = zone && subdomain.value.trim()
+      ? `${subdomain.value.trim().toLowerCase()}.${zone.name.toLowerCase()}`
+      : '';
+    const savedHostname = (tunnel.hostname || state.status?.named?.hostname || '').toLowerCase();
+    const savedZone = (state.status?.named?.zoneName || '').toLowerCase();
+    return !zone
+      || zone.name.toLowerCase() !== savedZone
+      || draftedHostname !== savedHostname;
+  }
+
+  function updateDisabledReason() {
+    if (state.loading || state.busy || state.operation) return 'A Remote action is already in progress.';
+    return state.connectionChoice === 'named' ? namedConfigurationReason() : '';
+  }
+
+  function renderPowerButton() {
+    const tunnel = currentTunnel();
+    let label = 'Start Remote';
+    let reason = '';
+    let disabled = false;
+    if (state.operation === 'updating') {
+      label = 'Updating & Restarting…';
+      reason = 'Applying the new Remote configuration.';
+      disabled = true;
+    } else if (state.operation === 'starting' || tunnel.state === 'starting') {
+      label = 'Starting…';
+      reason = 'Remote access is starting.';
+      disabled = true;
+    } else if (state.operation === 'stopping' || tunnel.state === 'stopping') {
+      label = 'Stopping…';
+      reason = 'Remote access is stopping.';
+      disabled = true;
+    } else if (shouldStopRemote()) {
+      const updating = hasRestartRelevantChanges();
+      label = updating ? 'Update & Restart' : 'Stop Remote';
+      reason = updating
+        ? updateDisabledReason()
+        : state.busy || state.loading ? 'A Remote action is already in progress.' : '';
+      disabled = Boolean(reason);
+    } else {
+      reason = startDisabledReason();
+      disabled = Boolean(reason);
+    }
+    powerButton.textContent = label;
+    powerButton.disabled = disabled;
+    powerButton.dataset.action = label === 'Update & Restart'
+      ? 'update'
+      : label === 'Updating & Restarting…'
+        ? 'updating'
+        : label === 'Stop Remote'
+      ? 'stop'
+      : label === 'Stopping…'
+        ? 'stopping'
+        : label === 'Starting…' ? 'starting' : 'start';
+    powerHint.title = reason || (label === 'Stop Remote'
+      ? 'Stop the active Remote connection.'
+      : label === 'Update & Restart'
+        ? 'Apply the changed configuration and restart Remote access.'
+        : `Start Remote using ${state.connectionChoice === 'named' ? 'the Custom Domain' : 'a Random URL'}.`);
+    powerHint.tabIndex = disabled ? 0 : -1;
+    if (disabled) {
+      powerHint.setAttribute('aria-label', 'Start Remote unavailable');
+      powerHint.setAttribute('aria-description', reason);
+    } else {
+      powerHint.removeAttribute('aria-label');
+      powerHint.removeAttribute('aria-description');
+    }
+  }
+
   function renderWizard() {
+    const steps = wizardSteps();
+    if (!steps.includes(state.step)) state.step = 1;
     for (const panel of dialog.querySelectorAll('[data-remote-step]')) {
       panel.hidden = state.managingDevices || Number(panel.dataset.remoteStep) !== state.step;
     }
     devicesPanel.hidden = !state.managingDevices;
     stepper.hidden = state.managingDevices;
+    stepper.dataset.connection = state.connectionChoice;
+    for (const element of dialog.querySelectorAll('[data-remote-domain-only]')) {
+      element.hidden = state.connectionChoice !== 'named';
+    }
+    devicesStepNumber.textContent = state.connectionChoice === 'named' ? '3' : '2';
+    setText(pairKicker, `${state.connectionChoice === 'named' ? 3 : 2} · Pair devices`);
     manageDevices.textContent = state.managingDevices ? 'Setup' : 'Manage devices';
     manageDevices.setAttribute('aria-pressed', String(state.managingDevices));
-    const tunnel = state.status?.tunnel || { mode: 'none', state: 'stopped' };
+    const tunnel = currentTunnel();
     const activeChoice = tunnel.state === 'running'
       ? (tunnel.mode === 'named' ? 'named' : tunnel.mode === 'quick' ? 'quick' : '')
       : '';
     for (const input of connectionInputs) {
+      input.checked = input.value === state.connectionChoice;
+      input.disabled = state.busy;
       const label = input.closest('.remote-connection-choice');
       const active = input.value === activeChoice;
       label.dataset.active = String(active);
@@ -117,9 +316,9 @@ export async function bootstrapRemoteControl() {
       if (!state.managingDevices && target === state.step) stepButton.setAttribute('aria-current', 'step');
       else stepButton.removeAttribute('aria-current');
       const complete = target === 1
-        ? state.step > 1 || tunnel.state === 'running' || Boolean(state.status?.named?.hostname)
+        ? true
         : target === 2
-          ? (state.connectionChoice === 'quick' && tunnel.state === 'running') || Boolean(state.status?.named?.hostname)
+          ? !namedConfigurationReason()
           : state.deviceCount > 0;
       stepButton.dataset.complete = String(complete);
       stepButton.dataset.repeatable = String(target === 3 && complete);
@@ -129,36 +328,27 @@ export async function bootstrapRemoteControl() {
     }
     pairButton.textContent = state.deviceCount > 0 ? 'Create QR for another device' : 'Create QR code';
     const next = $('#remote-next');
-    const flowComplete = state.deviceCount > 0
-      && tunnel.state === 'running'
-      && activeChoice === state.connectionChoice;
-    next.hidden = state.managingDevices || state.step === 3 || flowComplete;
+    next.hidden = state.managingDevices || state.step === steps.at(-1);
     if (state.managingDevices) {
       setText($('#remote-step-caption'), 'Manage paired devices');
       return;
     }
     if (state.step === 1) {
-      for (const input of connectionInputs) {
-        input.checked = input.value === state.connectionChoice;
-        input.disabled = state.busy;
-      }
       if (state.connectionChoice === 'named') {
         next.textContent = 'Next: Custom Domain';
         next.disabled = state.busy;
       } else {
-        const runningQuick = tunnel.mode === 'quick' && tunnel.state === 'running';
-        next.textContent = runningQuick ? 'Next: Pair device' : 'Connect Random URL';
-        next.disabled = state.busy
-          || (!runningQuick && (!state.status?.supported || !state.status?.cloudflared?.available || ['starting', 'stopping'].includes(tunnel.state)));
+        next.textContent = 'Next: Pair devices';
+        next.disabled = state.busy;
       }
     } else if (state.step === 2) {
-      next.textContent = 'Next: Pair device';
-      next.disabled = state.busy || tunnel.state !== 'running';
+      next.textContent = 'Next: Pair devices';
+      next.disabled = state.busy;
     } else if (state.step === 3) {
       next.textContent = 'Done';
       next.disabled = state.busy;
     }
-    setText($('#remote-step-caption'), `Step ${state.step} of 3`);
+    setText($('#remote-step-caption'), `Step ${steps.indexOf(state.step) + 1} of ${steps.length}`);
   }
 
   async function ensureZones() {
@@ -173,8 +363,10 @@ export async function bootstrapRemoteControl() {
 
   async function setStep(step) {
     state.managingDevices = false;
-    state.step = Math.max(1, Math.min(3, Number(step) || 1));
+    const target = Number(step) || 1;
+    state.step = wizardSteps().includes(target) ? target : 1;
     if (state.step === 2) await ensureZones();
+    if (state.step === 2 && hostnameKey() && state.hostnameCheck?.key !== hostnameKey()) void checkAvailability();
     renderWizard();
     dialog.querySelector(`[data-remote-step="${state.step}"]`)?.focus?.();
   }
@@ -185,12 +377,21 @@ export async function bootstrapRemoteControl() {
     setText(alert, message);
   }
 
-  function setDialogLoading(next) {
+  function setDialogLoading(next, {
+    title = DEFAULT_LOADING_TITLE,
+    copy = DEFAULT_LOADING_COPY,
+  } = {}) {
     state.loading = Boolean(next);
     dialog.dataset.loading = String(state.loading);
     dialog.setAttribute('aria-busy', String(state.loading || state.busy));
+    setText(loadingTitle, title);
+    setText(loadingCopy, copy);
     loading.hidden = !state.loading;
+    powerHint.hidden = state.loading;
+    manageDevices.hidden = state.loading;
     manageDevices.disabled = state.loading;
+    if (state.status) renderStatus();
+    else renderPowerButton();
   }
 
   function setBusy(busy) {
@@ -203,9 +404,11 @@ export async function bootstrapRemoteControl() {
     if (!busy) {
       renderZones();
       renderStatus();
+    } else {
+      renderPowerButton();
+      renderWizard();
     }
     clearDevices.disabled = busy || state.deviceCount === 0;
-    renderWizard();
     schedulePolling();
   }
 
@@ -222,6 +425,7 @@ export async function bootstrapRemoteControl() {
     if (!zoneInput.value && state.zones.length === 1) zoneInput.value = state.zones[0].name;
     else if (selected && state.zones.some((zone) => zone.name === selected || zone.id === selected)) zoneInput.value = selected;
     zoneInput.disabled = state.busy || state.zones.length === 0;
+    renderPowerButton();
   }
 
   function renderTokenState() {
@@ -245,21 +449,32 @@ export async function bootstrapRemoteControl() {
     const tunnelState = tunnel.state || 'stopped';
     const reconnectNeedsAttention = tunnelState === 'stopped' && status.named?.desiredState === 'running';
     const buttonState = status.supported ? (reconnectNeedsAttention ? 'error' : tunnelState) : 'unavailable';
-    const buttonLabels = {
-      running: 'Remote On',
-      starting: 'Remote Connecting',
-      stopping: 'Remote Stopping',
-      stopped: 'Remote Off',
-      error: 'Remote Error',
-      unavailable: 'Remote Unavailable',
-    };
-    button.dataset.state = buttonState;
-    button.title = buttonLabels[buttonState] || 'Remote';
-    button.setAttribute('aria-label', `Remote access: ${buttonState}`);
-    setText(buttonLabel, buttonLabels[buttonState] || 'Remote');
-    setText(stateLabel, status.supported
-      ? `${tunnel.mode === 'none' ? 'Remote access' : tunnel.mode === 'quick' ? 'Quick Tunnel' : 'Custom Domain'}: ${tunnelState}`
-      : 'Remote access is unavailable on this Mac.');
+    setRemoteButtonState(buttonState);
+    runtimeStatus.dataset.state = buttonState;
+    if (!status.supported) {
+      setText(stateLabel, 'Remote unavailable');
+      setText(stateDetail, status.cloudflared?.error || 'Remote access is unavailable on this Mac.');
+    } else if (tunnelState === 'running') {
+      setText(stateLabel, 'Remote connected');
+      setText(stateDetail, tunnel.mode === 'named'
+        ? `Custom Domain ${tunnel.hostname || tunnel.publicUrl || ''} is live.`
+        : 'Random URL is live.');
+    } else if (tunnelState === 'starting') {
+      setText(stateLabel, 'Remote starting');
+      setText(stateDetail, `Opening ${tunnel.mode === 'named' ? 'the Custom Domain' : 'a Random URL'}.`);
+    } else if (tunnelState === 'stopping') {
+      setText(stateLabel, 'Remote stopping');
+      setText(stateDetail, 'Closing the public tunnel.');
+    } else if (buttonState === 'error' || tunnelState === 'error') {
+      setText(stateLabel, 'Remote needs attention');
+      setText(stateDetail, tunnel.error?.message || 'The saved Remote connection could not be started.');
+    } else {
+      const reason = startDisabledReason();
+      setText(stateLabel, 'Remote is off');
+      setText(stateDetail, reason
+        ? `Setup incomplete: ${reason}`
+        : `${state.connectionChoice === 'named' ? 'Custom Domain' : 'Random URL'} is configured and ready to start.`);
+    }
     url.value = tunnel.publicUrl || tunnel.hostname || '';
     url.closest('.remote-url-row').hidden = !url.value;
     const inspector = status.cloudflared || {};
@@ -270,17 +485,11 @@ export async function bootstrapRemoteControl() {
     } else setText(cloudflared, `cloudflared ${inspector.version || 'is ready'}.`);
     cloudflared.dataset.state = !status.supported || !inspector.available ? 'error' : 'ready';
 
-    const canConnect = Boolean(status.supported && inspector.available && !state.busy);
-    $('#remote-connect-domain').disabled = !canConnect || !selectedZone() || !subdomain.value.trim();
-    const stop = $('#remote-stop');
-    stop.hidden = !['starting', 'running', 'stopping', 'error'].includes(tunnelState)
-      && status.named?.desiredState !== 'running';
-    stop.disabled = state.busy || stop.hidden;
-    // Stop intentionally leaves an owned named tunnel and DNS record in place;
-    // removal remains available from persisted named metadata after the child
-    // has stopped.
-    $('#remote-remove').disabled = state.busy || !(tunnel.mode === 'named' || status.named?.hostname);
     pairButton.disabled = state.busy || tunnelState !== 'running' || !tunnel.publicUrl;
+    pairButton.title = pairButton.disabled && tunnelState !== 'running'
+      ? 'Start Remote before creating a pairing QR code.'
+      : '';
+    renderPowerButton();
     renderWizard();
   }
 
@@ -341,15 +550,20 @@ export async function bootstrapRemoteControl() {
       api('/api/remote/status'), api('/api/remote/devices'),
     ]);
     if (statusResult.status === 'fulfilled') state.status = statusResult.value;
-    else showAlert(errorMessage(statusResult.reason));
+    else {
+      setRemoteButtonState('error');
+      showAlert(errorMessage(statusResult.reason));
+    }
     if (devicesResult.status === 'fulfilled') renderDevices(devicesResult.value);
     else {
       renderDevices(undefined, devicesResult.reason);
       if (statusResult.status === 'fulfilled') showAlert(errorMessage(devicesResult.reason));
     }
     state.connectionChoice = state.status?.tunnel?.mode === 'named' || state.status?.named?.hostname ? 'named' : 'quick';
+    state.step = currentTunnel().state === 'running' ? wizardSteps().at(-1) : 1;
     if (state.status?.tokenConfigured) await ensureZones();
     preferredNamedValues();
+    if (state.connectionChoice === 'named' && hostnameKey()) await checkAvailability();
     renderStatus();
     renderWizard();
   }
@@ -392,6 +606,17 @@ export async function bootstrapRemoteControl() {
     renderCountdown();
     stopCountdown();
     state.countdownTimer = setInterval(renderCountdown, 1_000);
+  }
+
+  function resetPairingAfterStop() {
+    clearTimeout(state.hostnameTimer);
+    state.hostnameTimer = undefined;
+    stopCountdown();
+    state.expiresAt = undefined;
+    qr.hidden = true;
+    qr.removeAttribute('src');
+    renderCountdown();
+    renderWizard();
   }
 
   async function refreshStatus({ devices: includeDevices = false } = {}) {
@@ -440,16 +665,95 @@ export async function bootstrapRemoteControl() {
     }
   }
 
+  async function runWithDialogLoading(action, {
+    title = 'Opening Remote access…',
+    copy = 'Starting the public tunnel. Keep this window open.',
+  } = {}) {
+    setDialogLoading(true, { title, copy });
+    try {
+      await run(action);
+    } finally {
+      setDialogLoading(false);
+    }
+  }
+
+  async function startRemote({ restart = false } = {}) {
+    const reason = restart ? updateDisabledReason() : startDisabledReason();
+    if (reason) return;
+    state.operation = restart ? 'updating' : 'starting';
+    renderPowerButton();
+    try {
+      await runWithDialogLoading(async () => {
+        if (state.connectionChoice === 'quick') {
+          await api('/api/remote/tunnels/quick', { method: 'POST' });
+        } else {
+          const result = await checkAvailability();
+          if (!result || result.status === 'conflict') {
+            throw new Error('Choose an available hostname; agent-remote never overwrites an existing DNS record.');
+          }
+          const zone = selectedZone();
+          await api('/api/remote/tunnels/named', {
+            method: 'POST', body: JSON.stringify({ zoneId: zone.id, subdomain: subdomain.value.trim().toLowerCase() }),
+          });
+        }
+        state.step = wizardSteps().at(-1);
+        state.managingDevices = false;
+        showAlert(restart ? 'Remote configuration updated and restarted.' : 'Remote access started.', 'success');
+      }, restart ? {
+        title: 'Updating Remote access…',
+        copy: 'Applying the changed configuration and restarting the public tunnel.',
+      } : {});
+    } finally {
+      state.operation = undefined;
+      renderStatus();
+    }
+  }
+
+  async function stopRemote() {
+    state.operation = 'stopping';
+    setBusy(true);
+    setDialogLoading(true, {
+      title: 'Stopping Remote access…',
+      copy: 'Closing the public tunnel. Your selected setup will be kept.',
+    });
+    showAlert();
+    try {
+      await api('/api/remote/tunnels/stop', { method: 'POST' });
+      await refreshStatus({ devices: dialog.open });
+      resetPairingAfterStop();
+      showAlert('Remote access stopped. Your setup is ready to start again.', 'success');
+    } catch (error) {
+      showAlert(errorMessage(error));
+      await refreshStatus();
+    } finally {
+      state.operation = undefined;
+      setDialogLoading(false);
+      setBusy(false);
+    }
+  }
+
   async function checkAvailability() {
     const zone = selectedZone();
     const zoneId = zone?.id;
     const value = subdomain.value.trim().toLowerCase();
+    const key = zoneId && value ? `${zoneId}:${value}` : '';
     suggestions.replaceChildren();
     subdomainOptions.replaceChildren();
-    if (!zoneId || !value) { setText(availability, 'Choose a zone and subdomain to check availability.'); return undefined; }
+    if (!key) {
+      state.hostnameCheck = undefined;
+      availability.removeAttribute('data-state');
+      setText(availability, 'Choose a zone and subdomain to check availability.');
+      renderPowerButton();
+      return undefined;
+    }
+    state.hostnameCheck = { key, state: 'checking', result: undefined };
+    availability.dataset.state = 'checking';
     setText(availability, 'Checking hostname…');
+    renderPowerButton();
     try {
       const result = await api(`/api/remote/hostname-availability?zoneId=${encodeURIComponent(zoneId)}&subdomain=${encodeURIComponent(value)}`);
+      if (hostnameKey() !== key) return undefined;
+      state.hostnameCheck = { key, state: 'ready', result };
       availability.dataset.state = result.status;
       setText(availability, result.status === 'conflict'
         ? `${result.hostname} is already in use. agent-remote will not overwrite it.`
@@ -463,19 +767,28 @@ export async function bootstrapRemoteControl() {
         suggestionButton.type = 'button';
         suggestionButton.className = 'quiet-button remote-suggestion';
         suggestionButton.textContent = `Use ${suggestion}`;
-        suggestionButton.addEventListener('click', () => { subdomain.value = label; void checkAvailability(); });
+        suggestionButton.addEventListener('click', () => {
+          subdomain.value = label;
+          state.hostnameCheck = undefined;
+          void checkAvailability();
+        });
         suggestions.append(suggestionButton);
       }
+      renderStatus();
       return result;
     } catch (error) {
+      if (hostnameKey() !== key) return undefined;
+      state.hostnameCheck = { key, state: 'error', result: undefined };
       setText(availability, errorMessage(error));
       availability.dataset.state = 'error';
+      renderStatus();
       return undefined;
     }
   }
 
   function queueAvailability() {
     clearTimeout(state.hostnameTimer);
+    state.hostnameCheck = undefined;
     state.hostnameTimer = setTimeout(() => { void checkAvailability(); }, HOSTNAME_DELAY_MS);
     renderStatus();
   }
@@ -488,17 +801,20 @@ export async function bootstrapRemoteControl() {
 
   button.addEventListener('click', () => {
     state.previousFocus = document.activeElement;
-    state.step = 1;
+    resetDraftFromStatus();
+    state.step = currentTunnel().state === 'running' ? wizardSteps().at(-1) : 1;
     state.managingDevices = false;
     showAlert();
     dialog.showModal();
     dialog.querySelector('[data-remote-close]').focus();
     renderStatus();
     renderWizard();
+    if (state.connectionChoice === 'named' && hostnameKey()) void checkAvailability();
   });
   dialog.addEventListener('close', () => {
     if (tokenGuideDialog?.open) tokenGuideDialog.close();
     clearTimeout(state.hostnameTimer);
+    resetDraftFromStatus();
     stopCountdown();
     schedulePolling();
     state.previousFocus?.focus?.();
@@ -526,6 +842,7 @@ export async function bootstrapRemoteControl() {
   clearToken.addEventListener('click', () => void run(async () => {
     await api('/api/remote/cloudflare-token', { method: 'DELETE' });
     state.zones = [];
+    state.hostnameCheck = undefined;
     zoneInput.value = '';
     renderZones();
     showAlert('Cloudflare token removed from Keychain.', 'success');
@@ -537,24 +854,14 @@ export async function bootstrapRemoteControl() {
     input.addEventListener('change', () => {
       if (!input.checked) return;
       state.connectionChoice = input.value;
-      renderWizard();
+      if (state.connectionChoice === 'quick' && state.step === 2) state.step = 1;
+      renderStatus();
     });
   }
-  $('#remote-connect-domain').addEventListener('click', () => void run(async () => {
-    const result = await checkAvailability();
-    if (!result || result.status === 'conflict') throw new Error('Choose an available hostname; agent-remote never overwrites an existing DNS record.');
-    const zone = selectedZone();
-    await api('/api/remote/tunnels/named', {
-      method: 'POST', body: JSON.stringify({ zoneId: zone.id, subdomain: subdomain.value.trim().toLowerCase() }),
-    });
-  }));
-  $('#remote-stop').addEventListener('click', () => void run(async () => { await api('/api/remote/tunnels/stop', { method: 'POST' }); }));
-  $('#remote-remove').addEventListener('click', () => {
-    if (!confirm('Remove this Custom Domain? This deletes only resources agent-remote still proves it owns.')) return;
-    void run(async () => {
-      const result = await api('/api/remote/tunnels/named', { method: 'DELETE' });
-      showAlert(result.warnings?.length ? result.warnings.join(' ') : 'Custom Domain removed.', result.warnings?.length ? 'warning' : 'success');
-    });
+  powerButton.addEventListener('click', () => {
+    void (hasRestartRelevantChanges()
+      ? startRemote({ restart: true })
+      : shouldStopRemote() ? stopRemote() : startRemote());
   });
   $('#remote-copy-url').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(url.value); showAlert('Public URL copied.', 'success'); }
@@ -587,22 +894,17 @@ export async function bootstrapRemoteControl() {
   });
   $('#remote-next').addEventListener('click', () => {
     void (async () => {
-      if (state.step === 3) { dialog.close(); return; }
-      if (state.step === 1) {
-        if (state.connectionChoice === 'named') { await setStep(2); return; }
-        if (state.status?.tunnel?.mode !== 'quick' || state.status?.tunnel?.state !== 'running') {
-          await run(async () => { await api('/api/remote/tunnels/quick', { method: 'POST' }); });
-        }
-        if (state.status?.tunnel?.mode === 'quick' && state.status?.tunnel?.state === 'running') await setStep(3);
-        return;
-      }
-      await setStep(state.step + 1);
+      const steps = wizardSteps();
+      const nextStep = steps[steps.indexOf(state.step) + 1];
+      if (nextStep) await setStep(nextStep);
     })();
   });
   document.addEventListener('visibilitychange', () => {
     schedulePolling();
     if (document.visibilityState === 'visible') {
-      const refresh = dialog.open ? refreshStatus({ devices: true }) : refreshTunnelStatus();
+      const refresh = state.loading
+        ? setupPromise
+        : dialog.open ? refreshStatus({ devices: true }) : refreshTunnelStatus();
       void refresh;
     }
   });

@@ -94,7 +94,10 @@ test.describe('Remote gateway browser fixture', () => {
     const before = (await (await localApi(request, '/api/remote/devices')).json()).devices;
     await page.goto(pairing.pairUrl);
     await expect(page.locator('#new-project')).toBeVisible();
-    await expect(page.locator('#remote-button')).toBeHidden();
+    await expect(page.locator('#remote-button')).toHaveCount(0);
+    await expect(page.locator('#remote-dialog')).toHaveCount(0);
+    await expect(page.locator('#cloudflare-token-guide-dialog')).toHaveCount(0);
+    await expect(page.locator('.sidebar-footer')).toHaveCount(0);
     const firstDevices = (await (await localApi(request, '/api/remote/devices')).json()).devices;
     const firstDevice = firstDevices.find((candidate) => !before.some(({ id }) => id === candidate.id));
     expect(firstDevice.name).toMatch(/^Mac · (?:Chrome|Browser)$/);
@@ -110,7 +113,7 @@ test.describe('Remote gateway browser fixture', () => {
 
     const admin = await request.get('/api/remote/status');
     expect(admin.status()).toBe(404);
-    await expect(page.locator('#remote-dialog')).toBeHidden();
+    expect((await page.request.get('/remote-control.js')).status()).toBe(404);
   });
 
   test('remote iPhone and local desktop both receive the first browser frame from one shared renderer', async ({ page, browser, request }) => {
@@ -277,8 +280,9 @@ test.describe('Remote gateway browser fixture', () => {
     await expect(dialog.getByRole('button', { name: /remove token/i })).toBeDisabled();
   });
 
-  test('named fake flow validates a token, suggests conflicts, reuses owned DNS, stops/restarts, and preserves ownership warnings', async ({ browser, request }) => {
+  test('named fake flow validates a token, suggests conflicts, reuses owned DNS, and updates a running hostname', async ({ browser, request }) => {
     test.setTimeout(30_000);
+    await localApi(request, '/api/remote/tunnels/stop', { method: 'POST' });
     const context = await browser.newContext({ baseURL: localUrl });
     const page = await context.newPage();
     await page.goto('/');
@@ -287,6 +291,9 @@ test.describe('Remote gateway browser fixture', () => {
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText(/cloudflared/i)).toBeVisible();
     await dialog.getByRole('radio', { name: /custom domain/i }).check();
+    await expect(dialog.locator('#remote-power')).toBeDisabled();
+    await expect(dialog.locator('#remote-power-hint'))
+      .toHaveAttribute('title', 'Validate a Cloudflare API token in Domain first.');
     await dialog.getByRole('button', { name: /next: custom domain/i }).click();
     await dialog.getByLabel(/cloudflare api token/i).fill('fixture-token');
     await dialog.locator('#remote-token-form').getByRole('button', { name: /validate token/i }).click();
@@ -299,7 +306,7 @@ test.describe('Remote gateway browser fixture', () => {
     await expect(dialog.getByText(/already in use/i)).toBeVisible({ timeout: 5_000 });
     await expect(dialog.getByRole('button', { name: /use taken-2/i })).toBeVisible();
     await dialog.getByRole('button', { name: /use taken-2/i }).click();
-    await dialog.getByRole('button', { name: /connect custom domain/i }).click();
+    await dialog.getByRole('button', { name: /^start remote$/i }).click();
     await expect(dialog.getByLabel(/remote public url/i)).toHaveValue('http://taken-2.example.test');
 
     await dialog.getByRole('button', { name: /^stop remote$/i }).click();
@@ -308,20 +315,17 @@ test.describe('Remote gateway browser fixture', () => {
 
     // Starting the same owned record again exercises the persisted-DNS reuse
     // path without any external DNS call; Stop does not remove its metadata.
-    await dialog.getByRole('button', { name: /connect custom domain/i }).click();
+    await dialog.getByRole('button', { name: /^start remote$/i }).click();
     await expect(dialog.getByLabel(/remote public url/i)).toHaveValue('http://taken-2.example.test');
-    await dialog.getByRole('button', { name: /^stop remote$/i }).click();
-
+    await dialog.locator('[data-remote-step-target="2"]').click();
     await dialog.locator('#remote-subdomain').fill('warn');
     await page.waitForTimeout(400);
-    await dialog.getByRole('button', { name: /connect custom domain/i }).click();
+    await expect(dialog.getByRole('button', { name: /^update & restart$/i })).toBeEnabled();
+    await dialog.getByRole('button', { name: /^update & restart$/i }).click();
+    await expect(dialog.getByLabel(/remote public url/i)).toHaveValue('http://warn.example.test');
     await dialog.getByRole('button', { name: /^stop remote$/i }).click();
-    // Stop intentionally leaves the owned DNS metadata present, so Remove is
-    // still actionable and reports ownership warnings without deleting it.
-    await expect(dialog.locator('#remote-remove')).toBeEnabled();
-    page.once('dialog', (prompt) => prompt.accept());
-    await dialog.locator('#remote-remove').click();
-    await expect(dialog.getByText(/DNS changed outside agent-remote/i)).toBeVisible();
+    await dialog.locator('[data-remote-step-target="2"]').click();
+    await expect(dialog.locator('#remote-remove')).toHaveCount(0);
     await dialog.getByRole('button', { name: /remove token/i }).click();
     await expect(dialog.getByLabel(/cloudflare api token/i)).toBeEnabled();
     await expect(dialog.getByLabel(/cloudflare api token/i)).toHaveValue('');

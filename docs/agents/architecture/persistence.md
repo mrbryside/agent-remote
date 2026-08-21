@@ -11,8 +11,11 @@ The `projects` table stores display name, working directory, selected `agent_id`
 - SQLite is authoritative for project grouping and chat titles.
 - tmux is authoritative for whether a managed process still exists.
 - `localStorage` keeps UI preferences such as selection, expanded project IDs,
-  pane widths, and the per-session revision of a dismissed mobile Plan sheet.
-  A changed plan revision must surface the Plan pill again.
+  pane widths, the per-session revision of a dismissed mobile Plan sheet, and
+  the activity snapshot captured when the mobile activity dock is dismissed.
+  A changed plan revision must surface the Plan pill again. A new Browser event,
+  Plan revision, or Subagent ID must clear the matching activity dismissal;
+  hydrating the same snapshot after refresh must not clear it.
 - `sessionStorage` terminal snapshots are display acceleration only. They may be evicted and must never block a live PTY.
 - Browser terminal and native-conversation caches are page-lifetime acceleration
   only. Their keys include the persisted session incarnation (`createdAt`, with

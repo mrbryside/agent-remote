@@ -108,7 +108,7 @@ clients can synchronously clear their selection and runtime artifacts.
 
 ## Startup and shutdown order
 
-After both listeners are ready, direct Node startup emits a machine-readable readiness line and then restores only a persisted named tunnel whose desired state is `running`; a failed restore must not block local readiness. Quick Tunnels are never recreated because their URL changes.
+As soon as both listeners bind, the backend begins restoring a persisted named tunnel whose desired state is `running`, before unrelated terminal-browser startup cleanup and without waiting for the local UI to open. Direct Node startup emits its machine-readable readiness line independently; a slow or failed restore must not block local readiness. Quick Tunnels are never recreated because their URL changes.
 
 `app.close()` closes renderer and client sockets, closes the remote gateway and WebSocket servers, closes both HTTP listeners, stops its `cloudflared` child, then closes Remote auth/store and the project store. It never stops user-owned tmux sessions. Tauri follows the same boundary: Quit stops only a sidecar it owns, not a compatible backend it attached to.
 

@@ -1,6 +1,7 @@
 import { api, apiUrl } from './api-client.js';
 import { createMobileConversationView } from './mobile-conversation.js';
-import { bootstrapRemoteControl } from './remote-control.js';
+import { derivePromptTitle } from './prompt-title.js';
+import { createIcon, createIconButton } from './ui-components.js';
 
 const terminalElement = document.querySelector('#terminal');
 const statusElement = document.querySelector('#status');
@@ -24,6 +25,7 @@ const emptyProjectLabel = document.querySelector('#empty-project-label');
 const emptyTitle = document.querySelector('#empty-title');
 const emptyCopy = document.querySelector('#empty-copy');
 const sessionLoading = document.querySelector('#session-loading');
+const sessionLoadingOrbit = sessionLoading.querySelector('.session-loading-orbit');
 const sessionLoadingKicker = document.querySelector('#session-loading-kicker');
 const sessionLoadingTitle = document.querySelector('#session-loading-title');
 const sessionLoadingCopy = document.querySelector('#session-loading-copy');
@@ -43,6 +45,7 @@ const sidebarBackdrop = document.querySelector('#sidebar-backdrop');
 const sidebarEdgeTrigger = document.querySelector('#sidebar-edge-trigger');
 const toggleSidebarButton = document.querySelector('#toggle-sidebar');
 const openSidebarButton = document.querySelector('#open-sidebar');
+const mobileConversationMenuButton = document.querySelector('#mobile-conversation-menu');
 const token = new URLSearchParams(location.search).get('token');
 const SIDEBAR_STORAGE_KEY = 'agent-remote-sidebar-collapsed';
 const SIDEBAR_WIDTH_STORAGE_KEY = 'agent-remote-sidebar-width';
@@ -1030,7 +1033,13 @@ function connectTerminalRuntime(runtime) {
   nextSocket.addEventListener('error', () => nextSocket.close());
 }
 
-function fitTerminals() {
+let sidebarResizeTransitioning = false;
+let sidebarResizeFinishTimer;
+
+function fitTerminals(options) {
+  if (sidebarResizeTransitioning && options?.force !== true) {
+    return;
+  }
   const runtime = activeTerminalRuntime;
   if (runtime && activeSession === runtime.name && !terminalElement.hidden) {
     runtime.fitAddon.fit();
@@ -1069,10 +1078,31 @@ function fitTerminals() {
   }
 }
 
+function finishSidebarResizeTransition() {
+  if (!sidebarResizeTransitioning) return;
+  clearTimeout(sidebarResizeFinishTimer);
+  sidebarResizeFinishTimer = undefined;
+  sidebarResizeTransitioning = false;
+  requestAnimationFrame(() => fitTerminals({ force: true }));
+}
+
+function beginSidebarResizeTransition() {
+  clearTimeout(sidebarResizeFinishTimer);
+  sidebarResizeTransitioning = true;
+  // `transitionend` is authoritative. The timer covers interrupted transitions,
+  // background tabs, and engines that omit the event for grid tracks.
+  sidebarResizeFinishTimer = setTimeout(finishSidebarResizeTransition, 360);
+}
+
 function setSidebarCollapsed(collapsed, { persist = true } = {}) {
   clearTimeout(sidebarPeekCloseTimer);
   delete workspace.dataset.sidebarPeek;
-  workspace.dataset.sidebar = collapsed ? 'collapsed' : 'expanded';
+  const nextSidebarState = collapsed ? 'collapsed' : 'expanded';
+  const sidebarStateChanged = workspace.dataset.sidebar !== nextSidebarState;
+  const deferTerminalFit = sidebarStateChanged && !compactSidebarMedia.matches &&
+    document.documentElement.dataset.sidebarBooting !== 'true';
+  if (deferTerminalFit) beginSidebarResizeTransition();
+  workspace.dataset.sidebar = nextSidebarState;
   toggleSidebarButton.setAttribute('aria-expanded', String(!collapsed));
   // Compact/mobile navigation is explicit: the menu button opens the drawer.
   // Keeping an invisible hover strip here steals edge taps and makes the
@@ -1081,8 +1111,11 @@ function setSidebarCollapsed(collapsed, { persist = true } = {}) {
   sidebarBackdrop.hidden = collapsed || !compactSidebarMedia.matches;
   openSidebarButton.hidden = !collapsed;
   openSidebarButton.setAttribute('aria-expanded', String(!collapsed));
+  mobileConversationMenuButton.setAttribute('aria-expanded', String(!collapsed));
+  mobileConversationMenuButton.setAttribute('aria-label', collapsed ? 'Open projects' : 'Close projects');
+  mobileConversationMenuButton.title = collapsed ? 'Open projects' : 'Close projects';
   if (persist) localStorage.setItem(SIDEBAR_STORAGE_KEY, String(collapsed));
-  requestAnimationFrame(() => requestAnimationFrame(fitTerminals));
+  if (!deferTerminalFit) requestAnimationFrame(() => requestAnimationFrame(fitTerminals));
 }
 
 function syncSidebarForViewport() {
@@ -1578,10 +1611,10 @@ function renderBrowserTabs(pane, tabs) {
         }
       });
 
-      const close = document.createElement('button');
-      close.type = 'button';
-      close.className = 'browser-tab-close close-button';
-      close.textContent = '×';
+      const close = createIconButton({
+        className: 'browser-tab-close close-button', label: 'Close tab', glyph: '×',
+        variant: 'bare', size: 'xs',
+      });
       close.addEventListener('click', () => {
         if (pane.socket?.readyState === WebSocket.OPEN) {
           pane.socket.send(JSON.stringify({ type: 'tab-close', tab: Number(item.dataset.tabId) }));
@@ -1646,12 +1679,10 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
   const navigation = document.createElement('div');
   navigation.className = 'browser-navigation';
   const actionButton = (label, action, title) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'browser-action';
-    button.textContent = label;
-    button.title = title;
-    button.setAttribute('aria-label', title);
+    const button = createIconButton({
+      className: 'browser-action', label: title, title, glyph: label,
+      variant: 'ghost', size: 'xs',
+    });
     button.addEventListener('click', () => {
       if (pane.socket?.readyState === WebSocket.OPEN) {
         pane.socket.send(JSON.stringify({ type: 'browser-action', action }));
@@ -1662,12 +1693,9 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
   const tabs = document.createElement('div');
   tabs.className = 'browser-tabs';
   tabs.setAttribute('role', 'tablist');
-  const newTab = document.createElement('button');
-  newTab.type = 'button';
-  newTab.className = 'browser-new-tab';
-  newTab.textContent = '+';
-  newTab.title = 'New tab';
-  newTab.setAttribute('aria-label', 'New tab');
+  const newTab = createIconButton({
+    className: 'browser-new-tab', label: 'New tab', glyph: '+', variant: 'ghost', size: 'xs',
+  });
   const tools = document.createElement('div');
   tools.className = 'browser-tools';
   const inspectButton = document.createElement('button');
@@ -1701,12 +1729,10 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
   inspectorHeader.className = 'browser-inspector-header';
   const inspectorTitle = document.createElement('strong');
   inspectorTitle.textContent = 'Chrome DevTools';
-  const inspectorClose = document.createElement('button');
-  inspectorClose.type = 'button';
-  inspectorClose.className = 'close-button';
-  inspectorClose.textContent = '×';
-  inspectorClose.title = 'Close Chrome DevTools';
-  inspectorClose.setAttribute('aria-label', 'Close Chrome DevTools');
+  const inspectorClose = createIconButton({
+    className: 'close-button', label: 'Close Chrome DevTools', glyph: '×',
+    variant: 'bare', size: 'sm',
+  });
   inspectorHeader.append(inspectorTitle, inspectorClose);
   const devtoolsFrame = document.createElement('iframe');
   devtoolsFrame.className = 'browser-devtools-frame';
@@ -2082,6 +2108,11 @@ function showSessionLoading(session, copy = 'Opening the project folder and star
   const project = projects.find((item) => item.id === session?.projectId);
   const nativeGrok = sessionUsesNativeConversation(session);
   sessionLoading.dataset.native = String(nativeGrok);
+  sessionLoading.setAttribute('aria-label', nativeGrok ? 'Preparing chat' : 'Opening terminal');
+  sessionLoadingOrbit.hidden = nativeGrok;
+  sessionLoadingKicker.hidden = nativeGrok;
+  sessionLoadingTitle.hidden = nativeGrok;
+  sessionLoadingCopy.hidden = nativeGrok;
   sessionLoadingKicker.textContent = nativeGrok ? 'Agent chat' : project?.name || 'Starting chat';
   // Grok launches behind one uninterrupted, stable cover. Keep the same copy
   // from optimistic creation through ACP readiness so no intermediate
@@ -2252,16 +2283,14 @@ function sessionRow(session) {
   button.className = 'session-button';
   button.type = 'button';
   button.addEventListener('click', () => selectSession(session.name));
-  const dot = document.createElement('span');
-  dot.className = 'chat-dot';
   const name = document.createElement('span');
   name.className = 'session-name';
-  button.append(dot, name);
+  button.append(name);
 
-  const close = document.createElement('button');
-  close.type = 'button';
-  close.className = 'session-close close-button close-button--destructive';
-  close.textContent = '×';
+  const close = createIconButton({
+    className: 'session-close close-button close-button--destructive',
+    label: `Delete ${session.label || session.name}`, glyph: '×', variant: 'danger', size: 'sm',
+  });
   close.addEventListener('click', () => deleteSession(session));
   const activity = document.createElement('span');
   activity.className = 'session-activity';
@@ -2409,28 +2438,16 @@ async function deleteProject(project) {
   }
 }
 
-function chatActionIcon() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('aria-hidden', 'true');
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M5 5.5h14A1.5 1.5 0 0 1 20.5 7v8a1.5 1.5 0 0 1-1.5 1.5h-9l-5 3v-3.2A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z');
-  path.setAttribute('fill', 'none');
-  path.setAttribute('stroke', 'currentColor');
-  path.setAttribute('stroke-width', '1.8');
-  path.setAttribute('stroke-linejoin', 'round');
-  svg.append(path);
-  return svg;
-}
-
 function projectAction(content, title, action, className = '') {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = `project-action ${className}`.trim();
-  if (typeof content === 'string') button.textContent = content;
-  else button.append(content);
-  button.title = title;
-  button.setAttribute('aria-label', title);
+  const destructive = className.includes('project-delete');
+  const button = createIconButton({
+    className: `project-action ${className}`.trim(),
+    label: title,
+    title,
+    variant: destructive ? 'danger' : 'bare',
+    size: 'xs',
+    ...(typeof content === 'string' ? { glyph: content } : { icon: content }),
+  });
   button.addEventListener('click', (event) => {
     event.stopPropagation();
     Promise.resolve(action()).catch((error) => showNotice(error.message));
@@ -2466,7 +2483,7 @@ function projectGroup(project) {
   const actions = document.createElement('div');
   actions.className = 'project-actions';
   actions.append(
-    projectAction(chatActionIcon(), `New chat in ${project.name}`, () => createChat(project.id), 'project-new-chat'),
+    projectAction(createIcon('chat'), `New chat in ${project.name}`, () => createChat(project.id), 'project-new-chat'),
     projectAction('✎', `Edit ${project.name}`, () => openProjectDialog(project)),
     projectAction('×', `Delete project ${project.name}`, () => deleteProject(project), 'project-delete close-button close-button--destructive'),
   );
@@ -2986,19 +3003,8 @@ function projectNameFallback() {
   return currentFolder.split('/').filter(Boolean).at(-1) || 'Project';
 }
 
-function cleanPromptTitle(value) {
-  const title = value
-    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/[\x00-\x1f\x7f]/g, ' ')
-    .replace(/^\s*[>$❯›»]+\s*/, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return title.length > 64 ? `${title.slice(0, 61).trimEnd()}…` : title;
-}
-
 async function renameFromFirstPrompt(sessionName, prompt) {
-  const title = cleanPromptTitle(prompt);
+  const title = derivePromptTitle(prompt);
   const session = sessions.find((item) => item.name === sessionName);
   if (!title || !session?.autoTitle) return;
   session.autoTitle = false;
@@ -3033,7 +3039,7 @@ function captureFirstPrompt(data) {
     if (character === '\r' || character === '\n') {
       const submitted = firstPromptBuffer;
       firstPromptBuffer = '';
-      if (cleanPromptTitle(submitted)) renameFromFirstPrompt(session.name, submitted);
+      if (derivePromptTitle(submitted)) renameFromFirstPrompt(session.name, submitted);
       continue;
     }
     if (character === '\x7f' || character === '\b') {
@@ -3181,6 +3187,11 @@ toggleSidebarButton.addEventListener('click', () => {
   setSidebarCollapsed(true);
 });
 openSidebarButton.addEventListener('click', () => setSidebarCollapsed(false));
+workspace.addEventListener('transitionend', (event) => {
+  if (event.target === workspace && event.propertyName === 'grid-template-columns') {
+    finishSidebarResizeTransition();
+  }
+});
 sidebarBackdrop.addEventListener('click', () => setSidebarCollapsed(true, { persist: false }));
 sidebarEdgeTrigger.addEventListener('pointerenter', showSidebarPeek);
 sidebarEdgeTrigger.addEventListener('pointerleave', scheduleSidebarPeekClose);
@@ -3224,7 +3235,10 @@ function syncVisualViewport() {
   root.style.setProperty('--visual-viewport-inset-top', `${offsetTop}px`);
   root.style.setProperty('--visual-viewport-inset-right', `${insetRight}px`);
   root.style.setProperty('--visual-viewport-layout-inset-bottom', `${insetBottom}px`);
-  root.style.setProperty('--visual-viewport-inset-bottom', `${insetBottom}px`);
+  // iOS can report browser/home-indicator chrome as a small bottom inset even
+  // when no keyboard is present. Keep that space in the opaque canvas only;
+  // inset controls upward exclusively for an actual keyboard.
+  root.style.setProperty('--visual-viewport-inset-bottom', `${keyboard ? insetBottom : 0}px`);
   root.style.setProperty('--visual-viewport-inset-left', `${offsetLeft}px`);
   root.dataset.visualKeyboard = String(keyboard);
   document.dispatchEvent(new CustomEvent('agent-remote:visual-viewport', {
@@ -3284,7 +3298,9 @@ window.addEventListener('beforeunload', () => {
 });
 
 restoreCachedActiveSession();
-void bootstrapRemoteControl();
+if (document.querySelector('#remote-button')) {
+  void import('./remote-control.js').then(({ bootstrapRemoteControl }) => bootstrapRemoteControl());
+}
 connectWorkspaceEvents();
 refreshWorkspace().catch((error) => {
   delete document.documentElement.dataset.restoringSession;

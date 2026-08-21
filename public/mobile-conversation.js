@@ -1,5 +1,6 @@
 import { markdownNode } from './markdown.js';
 import { highlightCodeNode, languageForPath } from './syntax.js';
+import { createIcon, createIconButton } from './ui-components.js';
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -12,17 +13,19 @@ function emptyConversationNode() {
   const section = element('section', 'mobile-conversation-empty');
   section.setAttribute('aria-label', 'Empty conversation');
   section.__mobileItemSignature = 'empty-conversation';
+  const stack = element('div', 'chat-state-stack');
 
   const orbit = element('div', 'empty-orbit mobile-conversation-empty-orbit');
   orbit.setAttribute('aria-hidden', 'true');
   orbit.append(element('span'), element('i'));
 
-  section.append(
+  stack.append(
     orbit,
     element('span', 'empty-kicker', 'New conversation'),
     element('h2', '', 'What should we build next?'),
     element('p', '', 'Send a message below to start this chat.'),
   );
+  section.append(stack);
   return section;
 }
 
@@ -67,6 +70,7 @@ export function createMobileConversationView({
   const state = document.querySelector('#mobile-conversation-state');
   const boot = document.querySelector('#mobile-conversation-boot');
   const activityToggle = document.querySelector('#mobile-conversation-activity-toggle');
+  activityToggle.replaceChildren(createIcon('panel-collapse', { className: 'mobile-panel-collapse-icon' }));
   const menu = document.querySelector('#mobile-conversation-menu');
   const back = document.querySelector('#mobile-conversation-back');
   const messages = document.querySelector('#mobile-conversation-messages');
@@ -131,10 +135,14 @@ export function createMobileConversationView({
   let sheetReturnFocus;
   let sheetPointer;
   let sheetCloseGeneration = 0;
+  let sheetModeMotionGeneration = 0;
+  let revealChildDetails = false;
   let subagentPillHost;
+  let activityPillSignature = '';
   const expandedItems = new Set();
   const autoExpandedItems = new Set();
   const disclosureMotions = new WeakMap();
+  const sheetContentMotionTimers = new WeakMap();
   const pendingQuestions = new Map();
   const pendingPlanReviews = new Map();
   let questionStateVersion = 0;
@@ -146,6 +154,7 @@ export function createMobileConversationView({
   let interactionMotionKey = '';
   let attachments = [];
   let uploadingAttachments = 0;
+  let attachmentPickerState;
   const attachmentUploads = new Map();
   let suggestionItems = [];
   let suggestionIndex = 0;
@@ -175,6 +184,7 @@ export function createMobileConversationView({
   let filePreviewGeneration = 0;
   let browserAvailable = false;
   let pillDismissed = false;
+  let dismissedActivitySnapshot;
   let dismissedPlanRevision = '';
   let expectedConversation = false;
 
@@ -198,6 +208,7 @@ export function createMobileConversationView({
   }
 
   const planDismissalStoragePrefix = 'agent-remote:mobile-plan-dismissed:';
+  const activityDismissalStoragePrefix = 'agent-remote:mobile-activity-dismissed:';
 
   function planDismissalStorageKey(name = sessionName) {
     return name ? `${planDismissalStoragePrefix}${encodeURIComponent(name)}` : undefined;
@@ -224,6 +235,73 @@ export function createMobileConversationView({
       // Storage can be unavailable in hardened/private browser contexts. The
       // in-memory dismissal still behaves correctly for the current view.
     }
+  }
+
+  function activityDismissalStorageKey(name = sessionName) {
+    return name ? `${activityDismissalStoragePrefix}${encodeURIComponent(name)}` : undefined;
+  }
+
+  function loadDismissedActivitySnapshot(name = sessionName) {
+    const key = activityDismissalStorageKey(name);
+    if (!key) return undefined;
+    try {
+      const snapshot = JSON.parse(localStorage.getItem(key) || 'null');
+      if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.subagents)) return undefined;
+      return snapshot;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function currentActivitySnapshot(conversation = rootConversation || { items: [] }) {
+    return {
+      version: 1,
+      browser: browserAvailable,
+      plan: planRevision(plans(conversation).at(-1)),
+      subagents: subagents(conversation)
+        // Keep every durable alias. A newly spawned item gains threadId later;
+        // replacing its call id with that thread id made the same lifecycle
+        // look like a brand-new subagent after reload.
+        .flatMap((item) => [item.id, item.toolCallId, item.threadId])
+        .filter(Boolean)
+        .filter((value, index, values) => values.indexOf(value) === index)
+        .sort(),
+    };
+  }
+
+  function persistActivityDismissal() {
+    dismissedActivitySnapshot = currentActivitySnapshot();
+    pillDismissed = true;
+    const key = activityDismissalStorageKey();
+    if (!key) return;
+    try {
+      localStorage.setItem(key, JSON.stringify(dismissedActivitySnapshot));
+    } catch {
+      // Keep the dismissal in memory when persistent storage is unavailable.
+    }
+  }
+
+  function clearActivityDismissal() {
+    dismissedActivitySnapshot = undefined;
+    pillDismissed = false;
+    const key = activityDismissalStorageKey();
+    if (!key) return;
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // The in-memory state is still authoritative for this view.
+    }
+  }
+
+  function hasActivityAfterDismissal(snapshot) {
+    if (!dismissedActivitySnapshot) return false;
+    if (snapshot.browser && !dismissedActivitySnapshot.browser) return true;
+    if (snapshot.plan && snapshot.plan !== dismissedActivitySnapshot.plan) return true;
+    const dismissedSubagents = new Set(dismissedActivitySnapshot.subagents);
+    return subagents(rootConversation || { items: [] }).some((item) => {
+      const aliases = [item.id, item.toolCallId, item.threadId].filter(Boolean);
+      return aliases.length > 0 && !aliases.some((id) => dismissedSubagents.has(id));
+    });
   }
 
   function setBooting(next) {
@@ -462,9 +540,9 @@ export function createMobileConversationView({
   function paintEffortOptions(option) {
     const fragment = document.createDocumentFragment();
     const header = element('div', 'mobile-conversation-model-step');
-    const backButton = element('button', '', '‹');
-    backButton.type = 'button';
-    backButton.setAttribute('aria-label', 'Back to models');
+    const backButton = createIconButton({
+      label: 'Back to models', glyph: '‹', variant: 'bare', size: 'sm',
+    });
     backButton.addEventListener('click', () => {
       const control = lastConversation?.controls?.model;
       if (!control) return;
@@ -494,14 +572,46 @@ export function createMobileConversationView({
     modelList.replaceChildren(fragment);
   }
 
+  function renderContextUsage(conversation) {
+    const conversationStarted = Boolean(
+      conversation.items?.length || pendingMessage || optimisticQueuedInputs.size,
+    );
+    if (!conversationStarted) {
+      context.hidden = true;
+      return;
+    }
+    const usage = conversation.context;
+    const modelControl = conversation.controls?.model;
+    const currentModel = modelControl?.options?.find((model) => model.id === modelControl.currentId);
+    const windowTokens = usage?.windowTokens ?? currentModel?.contextWindowTokens;
+    if (!windowTokens) {
+      context.hidden = true;
+      return;
+    }
+    const usedTokens = usage?.usedTokens ?? 0;
+    // Prefer the exact token ratio so the bar moves after small turns. The
+    // provider's usagePercent is intentionally rounded for labels and can stay
+    // unchanged across several responses near the start of a large window.
+    const exactPercent = usedTokens > 0
+      ? (usedTokens / windowTokens) * 100
+      : Number(usage?.usagePercent) || 0;
+    const percent = Math.max(0, Math.min(100, exactPercent));
+    const announcedPercent = Math.round(percent * 10) / 10;
+    context.hidden = false;
+    contextProgress.value = percent;
+    contextProgress.setAttribute('aria-label', `${announcedPercent}% of context window used`);
+    contextValue.value = `${compactMetric(usedTokens)} / ${compactMetric(windowTokens)}`;
+    contextValue.textContent = contextValue.value;
+  }
+
   function renderModelControls(conversation) {
+    renderContextUsage(conversation);
     const control = conversation.controls?.model;
     const options = Array.isArray(control?.options) ? control.options : [];
     const current = options.find((model) => model.id === control?.currentId);
     if (!current || !options.length) {
       closeModelList();
       modelButton.hidden = true;
-      context.hidden = true;
       return;
     }
     modelButton.hidden = false;
@@ -520,17 +630,6 @@ export function createMobileConversationView({
       paintModelOptions(control);
     }
 
-    const usage = conversation.context;
-    if (!usage?.windowTokens && usage?.usedTokens === undefined) {
-      context.hidden = true;
-      return;
-    }
-    const percent = Math.max(0, Math.min(100, Number(usage.usagePercent) || 0));
-    context.hidden = false;
-    contextProgress.value = percent;
-    contextProgress.setAttribute('aria-label', `${percent}% of context window used`);
-    contextValue.value = `${compactMetric(usage.usedTokens)} / ${compactMetric(usage.windowTokens)}`;
-    contextValue.textContent = contextValue.value;
   }
 
   function renderChoiceControl(conversation, key, button, label, list, change) {
@@ -1015,22 +1114,24 @@ export function createMobileConversationView({
     sheetHandle.type = 'button';
     sheetHandle.setAttribute('aria-label', 'Drag down to close activity');
     const header = element('header', 'mobile-subagent-sheet-header');
-    sheetBack = element('button', 'mobile-subagent-sheet-back', '‹');
-    sheetBack.type = 'button';
-    sheetBack.setAttribute('aria-label', 'Back to subagent list');
+    sheetBack = createIconButton({
+      className: 'mobile-subagent-sheet-back', label: 'Back to subagent list', glyph: '‹',
+      variant: 'bare', size: 'xl',
+    });
     sheetTitle = element('strong', '', 'Subagents');
     sheetMeta = element('small');
     const copy = element('span');
     copy.append(sheetTitle, sheetMeta);
     sheetState = element('span', 'mobile-subagent-sheet-state');
-    sheetBrowser = element('button', 'mobile-subagent-sheet-browser', '↗');
-    sheetBrowser.type = 'button';
-    sheetBrowser.setAttribute('aria-label', 'Open browser');
-    sheetBrowser.title = 'Open browser';
+    sheetBrowser = createIconButton({
+      className: 'mobile-subagent-sheet-browser', label: 'Open browser', glyph: '↗',
+      variant: 'bare', size: 'xl',
+    });
     sheetBrowser.hidden = !browserAvailable;
-    sheetClose = element('button', 'mobile-subagent-sheet-close close-button', '×');
-    sheetClose.type = 'button';
-    sheetClose.setAttribute('aria-label', 'Close activity');
+    sheetClose = createIconButton({
+      className: 'mobile-subagent-sheet-close close-button', label: 'Close activity', glyph: '×',
+      variant: 'bare', size: 'xl',
+    });
     const actions = element('span', 'mobile-subagent-sheet-actions');
     actions.append(sheetBrowser, sheetClose);
     header.append(sheetBack, copy, sheetState, actions);
@@ -1082,9 +1183,10 @@ export function createMobileConversationView({
       if (!sheetPointer || event.pointerId !== sheetPointer.id) return;
       const shouldClose = sheetPointer.distance > 54;
       sheetPointer = undefined;
+      sheetPanel.dataset.dragSettled = 'true';
       delete sheetPanel.dataset.dragging;
-      sheetPanel.style.removeProperty('--mobile-sheet-drag');
       if (shouldClose) closeSheet();
+      else sheetPanel.style.removeProperty('--mobile-sheet-drag');
     };
     sheetHandle.addEventListener('pointerup', finishDrag);
     sheetHandle.addEventListener('pointercancel', finishDrag);
@@ -1120,18 +1222,59 @@ export function createMobileConversationView({
           element('small', '', [item.role || 'Subagent', item.model, item.capabilityMode]
             .filter(Boolean).join(' · ')),
         );
-        const status = element('span', 'mobile-subagent-status', label);
-        status.dataset.state = state;
+        const rowStatusLabel = ['calling', 'running'].includes(lifecycleState)
+          ? 'In progress' : statusLabel(lifecycleState);
+        const status = element('span', 'mobile-subagent-status', rowStatusLabel);
+        status.dataset.state = lifecycleState;
         row.append(copy, status, element('i', '', item.threadId ? '›' : ''));
         section.append(row);
       }
       sheetList.append(section);
     };
     appendGroup('In progress', running, 'running');
-    appendGroup('Success', completed, 'completed');
+    appendGroup('Done', completed, 'completed');
     if (!items.length) {
       sheetList.append(element('p', 'mobile-subagent-empty', 'No subagents yet.'));
     }
+  }
+
+  function transitionSheetMode(nextMode) {
+    const motionGeneration = ++sheetModeMotionGeneration;
+    const startHeight = sheetPanel.getBoundingClientRect().height;
+    sheetPanel.style.transition = 'none';
+    sheetPanel.dataset.mode = nextMode;
+    sheetPanel.style.removeProperty('height');
+    const targetHeight = sheetPanel.getBoundingClientRect().height;
+    sheetPanel.style.height = `${startHeight}px`;
+    sheetPanel.getBoundingClientRect();
+    sheetPanel.style.removeProperty('transition');
+    sheetPanel.dataset.navigating = 'true';
+    requestAnimationFrame(() => {
+      if (motionGeneration !== sheetModeMotionGeneration || sheet.hidden) return;
+      sheetPanel.style.height = `${targetHeight}px`;
+    });
+    let motionTimer;
+    const finishMotion = (event) => {
+      if (event && (event.target !== sheetPanel || event.propertyName !== 'height')) return;
+      sheetPanel.removeEventListener('transitionend', finishMotion);
+      clearTimeout(motionTimer);
+      if (motionGeneration !== sheetModeMotionGeneration) return;
+      delete sheetPanel.dataset.navigating;
+      sheetPanel.style.removeProperty('height');
+    };
+    sheetPanel.addEventListener('transitionend', finishMotion);
+    motionTimer = setTimeout(() => finishMotion(), 520);
+  }
+
+  function animateSheetContent(container) {
+    clearTimeout(sheetContentMotionTimers.get(container));
+    delete container.dataset.entering;
+    container.getBoundingClientRect();
+    container.dataset.entering = 'true';
+    sheetContentMotionTimers.set(container, setTimeout(() => {
+      delete container.dataset.entering;
+      sheetContentMotionTimers.delete(container);
+    }, 360));
   }
 
   function renderSubagentPill(conversation) {
@@ -1139,19 +1282,47 @@ export function createMobileConversationView({
       subagentPillHost = element('div', 'mobile-subagent-pill-host');
       scrollShell.after(subagentPillHost);
     }
-    if (!rootConversation || root.dataset.booting === 'true') {
+    const booting = !rootConversation || root.dataset.booting === 'true';
+    const items = booting ? [] : subagents(conversation);
+    const plan = booting ? undefined : visiblePlan(conversation);
+    if (!booting && pillDismissed && hasActivityAfterDismissal(currentActivitySnapshot(conversation))) {
+      clearActivityDismissal();
+    }
+    const nextSignature = JSON.stringify({
+      booting,
+      browserAvailable,
+      pillDismissed,
+      plan: planRevision(plan),
+      items: items.map((item) => ({
+        id: item.id,
+        threadId: item.threadId,
+        title: item.title,
+        role: item.role,
+        model: item.model,
+        capabilityMode: item.capabilityMode,
+        phase: item.phase,
+        status: item.status,
+      })),
+    });
+    if (nextSignature === activityPillSignature) return;
+    activityPillSignature = nextSignature;
+    const willShowHost = !booting && !pillDismissed && Boolean(items.length || browserAvailable || plan);
+    const preserveScroll = available && messages.childElementCount > 0 &&
+      !subagentPillHost.hidden !== willShowHost;
+    if (preserveScroll) holdMainScrollGeometry({ settle: 220 });
+    if (booting) {
       subagentPillHost.replaceChildren();
       subagentPillHost.hidden = true;
       activityToggle.hidden = true;
+      if (preserveScroll) applyMainScrollGeometryLock();
       return;
     }
-    const items = subagents(conversation);
-    const plan = visiblePlan(conversation);
     onSubagentAvailabilityChange(items.length > 0);
     if (!items.length && !browserAvailable && !plan) {
       subagentPillHost.replaceChildren();
       subagentPillHost.hidden = true;
       activityToggle.hidden = true;
+      if (preserveScroll) applyMainScrollGeometryLock();
       return;
     }
     subagentPillHost.hidden = pillDismissed;
@@ -1185,24 +1356,27 @@ export function createMobileConversationView({
       const pill = element('button', 'mobile-subagent-pill');
       pill.type = 'button';
       pill.dataset.state = running ? 'running' : 'completed';
-      pill.setAttribute('aria-label', `${label}. ${running ? 'In progress' : 'Success'}. View subagents`);
+      pill.setAttribute('aria-label', `${label}. ${running ? 'In progress' : 'Done'}. View subagents`);
       pill.append(element('i'), element('span', '', label));
       pill.addEventListener('click', () => openSheet());
       cluster.append(pill);
     }
-    const dismiss = element('button', 'mobile-activity-pill-dismiss', '⌄');
-    dismiss.type = 'button';
-    dismiss.setAttribute('aria-label', 'Hide activity');
+    const dismiss = createIconButton({
+      className: 'mobile-activity-pill-dismiss', label: 'Hide activity',
+      icon: createIcon('panel-collapse', { className: 'mobile-panel-collapse-icon' }),
+      variant: 'bare', size: 'md',
+    });
     dismiss.addEventListener('click', () => {
-      pillDismissed = true;
-      subagentPillHost.hidden = true;
-      activityToggle.hidden = false;
+      persistActivityDismissal();
+      renderSubagentPill(rootConversation || { items: [] });
     });
     cluster.append(dismiss);
     subagentPillHost.replaceChildren(cluster);
+    if (preserveScroll) applyMainScrollGeometryLock();
   }
 
   function clearSubagentPill() {
+    activityPillSignature = '';
     if (!subagentPillHost) return;
     subagentPillHost.replaceChildren();
     subagentPillHost.hidden = true;
@@ -1211,19 +1385,25 @@ export function createMobileConversationView({
   }
 
   activityToggle.addEventListener('click', () => {
-    pillDismissed = false;
+    clearActivityDismissal();
     renderSubagentPill(rootConversation || { items: [] });
   });
 
   function openSheet() {
     ensureSheet();
     sheetCloseGeneration += 1;
+    sheetModeMotionGeneration += 1;
     delete sheet.dataset.closing;
+    delete sheetPanel.dataset.dragSettled;
+    sheetPanel.style.removeProperty('--mobile-sheet-drag');
     sheet.inert = false;
     sheetReturnFocus = document.activeElement;
     sheet.hidden = false;
     sheetMode = 'list';
     sheetPanel.dataset.mode = 'list';
+    delete sheetPanel.dataset.navigating;
+    sheetPanel.style.removeProperty('height');
+    sheetPanel.style.removeProperty('transition');
     selectedChildId = undefined;
     selectedPlanId = undefined;
     onHideBrowser(sessionName);
@@ -1260,7 +1440,10 @@ export function createMobileConversationView({
   function openPlanSheet(planId) {
     ensureSheet();
     sheetCloseGeneration += 1;
+    sheetModeMotionGeneration += 1;
     delete sheet.dataset.closing;
+    delete sheetPanel.dataset.dragSettled;
+    sheetPanel.style.removeProperty('--mobile-sheet-drag');
     sheet.inert = false;
     sheetReturnFocus = document.activeElement;
     sheet.hidden = false;
@@ -1274,15 +1457,16 @@ export function createMobileConversationView({
     sheetMessages.hidden = false;
     sheetBack.hidden = true;
     renderPlanSheet();
+    animateSheetContent(sheetMessages);
     requestAnimationFrame(() => sheetClose.focus({ preventScroll: true }));
   }
 
   function openChild(nextThreadId) {
+    sheetCloseGeneration += 1;
     selectedChildId = nextThreadId;
     selectedPlanId = undefined;
     const lifecycle = subagentForThread(nextThreadId);
     sheetMode = 'child';
-    sheetPanel.dataset.mode = 'child';
     sheetList.hidden = true;
     sheetMessages.hidden = false;
     sheetBack.hidden = false;
@@ -1294,21 +1478,27 @@ export function createMobileConversationView({
     closeStream();
     threadId = nextThreadId;
     renderedSignature = '';
-    sheetMessages.replaceChildren(element('div', 'mobile-conversation-loading', 'Opening subagent…'));
+    revealChildDetails = true;
+    delete sheetMessages.dataset.entering;
+    sheetMessages.replaceChildren();
+    transitionSheetMode('child');
+    requestAnimationFrame(() => sheetBack.focus({ preventScroll: true }));
     void refresh();
   }
 
   function showSheetList() {
     if (sheetMode !== 'child') return;
+    revealChildDetails = false;
+    delete sheetMessages.dataset.entering;
     closeStream();
     threadId = rootThreadId;
     selectedChildId = undefined;
     sheetMode = 'list';
-    sheetPanel.dataset.mode = 'list';
     sheetList.hidden = false;
     sheetMessages.hidden = true;
     sheetBack.hidden = true;
     renderSubagentList();
+    transitionSheetMode('list');
     renderedSignature = '';
     void refresh();
   }
@@ -1316,11 +1506,16 @@ export function createMobileConversationView({
   function closeSheet({ dismiss = false } = {}) {
     if (!sheet || sheet.hidden || sheet.dataset.closing === 'true') return;
     const childWasOpen = sheetMode === 'child';
+    const subagentSheetWasOpen = sheetMode === 'list' || childWasOpen;
+    sheetModeMotionGeneration += 1;
+    revealChildDetails = false;
+    delete sheetMessages.dataset.entering;
     if (dismiss && sheetMode === 'plan') {
       const plan = plans(rootConversation || {}).find((item) => item.id === selectedPlanId)
         || plans(rootConversation || {}).at(-1);
       persistDismissedPlanRevision(planRevision(plan));
     }
+    if (dismiss && subagentSheetWasOpen) persistActivityDismissal();
     if (childWasOpen) closeStream();
     const closeGeneration = ++sheetCloseGeneration;
     sheet.dataset.closing = 'true';
@@ -1342,6 +1537,11 @@ export function createMobileConversationView({
       sheet.hidden = true;
       sheet.inert = false;
       delete sheet.dataset.closing;
+      delete sheetPanel.dataset.navigating;
+      delete sheetPanel.dataset.dragSettled;
+      sheetPanel.style.removeProperty('--mobile-sheet-drag');
+      sheetPanel.style.removeProperty('height');
+      sheetPanel.style.removeProperty('transition');
       sheetReturnFocus?.focus?.({ preventScroll: true });
     };
     const finishAfterAnimation = (event) => {
@@ -1385,6 +1585,7 @@ export function createMobileConversationView({
         if (payload?.type === 'control' && payload.action === 'open-graphics' &&
             Array.isArray(payload.argv) && payload.argv.length > 0 && payload.argv.length <= 100 &&
             payload.argv.every((argument) => typeof argument === 'string' && argument.length <= 4096)) {
+          clearActivityDismissal();
           browserAvailable = true;
           renderSubagentPill(rootConversation || { items: [] });
           onBrowserOpen(sessionName, payload.argv);
@@ -1496,6 +1697,8 @@ export function createMobileConversationView({
       fileSheet.hidden = true;
       fileSheet.inert = false;
       delete fileSheet.dataset.closing;
+      delete fileSheetPanel.dataset.dragSettled;
+      fileSheetPanel.style.removeProperty('--mobile-sheet-drag');
     };
     const finishAfterAnimation = (event) => {
       if (event.target === fileSheetPanel && event.animationName === 'mobile-sheet-out') finish();
@@ -1521,9 +1724,10 @@ export function createMobileConversationView({
     fileSheetTitle = element('strong', '', 'File');
     fileSheetMeta = element('small');
     copy.append(fileSheetTitle, fileSheetMeta);
-    fileSheetClose = element('button', 'mobile-file-sheet-close close-button', '×');
-    fileSheetClose.type = 'button';
-    fileSheetClose.setAttribute('aria-label', 'Close file preview');
+    fileSheetClose = createIconButton({
+      className: 'mobile-file-sheet-close close-button', label: 'Close file preview', glyph: '×',
+      variant: 'bare', size: 'xl',
+    });
     fileSheetClose.addEventListener('click', closeFileSheet);
     header.append(copy, fileSheetClose);
     fileSheetBody = element('div', 'mobile-file-sheet-body');
@@ -1549,9 +1753,10 @@ export function createMobileConversationView({
       if (!fileSheetPointer || event.pointerId !== fileSheetPointer.id) return;
       const shouldClose = fileSheetPointer.distance > 96;
       fileSheetPointer = undefined;
+      fileSheetPanel.dataset.dragSettled = 'true';
       delete fileSheetPanel.dataset.dragging;
-      fileSheetPanel.style.removeProperty('--mobile-sheet-drag');
       if (shouldClose) closeFileSheet();
+      else fileSheetPanel.style.removeProperty('--mobile-sheet-drag');
     };
     handle.addEventListener('pointerup', finishFileSheetDrag);
     handle.addEventListener('pointercancel', finishFileSheetDrag);
@@ -1562,6 +1767,8 @@ export function createMobileConversationView({
     ensureFileSheet();
     fileSheetCloseGeneration += 1;
     delete fileSheet.dataset.closing;
+    delete fileSheetPanel.dataset.dragSettled;
+    fileSheetPanel.style.removeProperty('--mobile-sheet-drag');
     fileSheet.inert = false;
     const previewGeneration = ++filePreviewGeneration;
     const candidates = conversationFiles(lastConversation).filter((file) => sameFilePath(file.path, reference.path));
@@ -1595,6 +1802,7 @@ export function createMobileConversationView({
     fileSheetBody.replaceChildren(filePreviewNode(file, {
       path, startLine, endLine, streamId: `file-sheet:${path}`,
     }));
+    animateSheetContent(fileSheetBody);
   }
 
   function searchMatchesNode(matches) {
@@ -2434,9 +2642,10 @@ export function createMobileConversationView({
     } else item.append(element('span', '', attachment.name?.split('.').pop()?.toUpperCase() || 'FILE'));
     item.append(element('small', '', attachment.name || 'Attachment'));
     if (removable) {
-      const remove = element('button', 'close-button close-button--destructive', '×');
-      remove.type = 'button';
-      remove.setAttribute('aria-label', `Remove ${attachment.name}`);
+      const remove = createIconButton({
+        className: 'close-button close-button--destructive', label: `Remove ${attachment.name}`,
+        glyph: '×', variant: 'danger', size: 'xs',
+      });
       remove.addEventListener('pointerdown', retainComposerInputFocus);
       remove.addEventListener('click', () => {
         attachments = attachments.filter((value) => value.id !== attachment.id);
@@ -2466,8 +2675,9 @@ export function createMobileConversationView({
       progress.setAttribute('aria-label', `Uploading ${upload.name}`);
       item.append(progress);
     }
-    const action = element('button', 'close-button', '×');
-    action.type = 'button';
+    const action = createIconButton({
+      className: 'close-button', label: 'Manage upload', glyph: '×', variant: 'bare', size: 'xs',
+    });
     action.addEventListener('pointerdown', retainComposerInputFocus);
     if (upload.status === 'uploading' || upload.status === 'cancelling') {
       action.setAttribute('aria-label', `Cancel upload ${upload.name}`);
@@ -2769,20 +2979,20 @@ export function createMobileConversationView({
       element('small', '', `• ${goalElapsed(goal.metrics?.elapsedMs)}`),
     );
     const actions = element('div', 'mobile-conversation-goal-actions');
-    const remove = element('button', '', '⌫');
-    remove.type = 'button';
-    remove.setAttribute('aria-label', 'Delete goal');
-    remove.title = 'Stop and delete goal';
+    const remove = createIconButton({
+      label: 'Delete goal', title: 'Stop and delete goal', glyph: '⌫', variant: 'danger', size: 'sm',
+    });
     remove.addEventListener('click', () => void runGoalAction(row, goal, 'clear'));
-    const pause = element('button', '', paused ? '▶' : 'Ⅱ');
-    pause.type = 'button';
+    const pause = createIconButton({
+      label: paused ? 'Resume goal' : 'Pause goal', glyph: paused ? '▶' : 'Ⅱ',
+      variant: 'bare', size: 'sm',
+    });
     pause.hidden = completed;
-    pause.setAttribute('aria-label', paused ? 'Resume goal' : 'Pause goal');
     pause.title = paused ? 'Resume goal' : 'Pause goal';
     pause.addEventListener('click', () => void runGoalAction(row, goal, paused ? 'resume' : 'pause'));
-    const expand = element('button', '', '⌗');
-    expand.type = 'button';
-    expand.setAttribute('aria-label', 'Show goal details');
+    const expand = createIconButton({
+      label: 'Show goal details', glyph: '⌗', variant: 'bare', size: 'sm',
+    });
     expand.setAttribute('aria-expanded', String(expandedItems.has(goal.id)));
     actions.append(remove, pause, expand);
     summary.append(icon, copy, actions);
@@ -2840,10 +3050,11 @@ export function createMobileConversationView({
       row.dataset.pending = String(entry.optimistic === true);
       row.toggleAttribute('aria-busy', entry.optimistic === true);
       row.append(element('span', 'mobile-conversation-queue-icon', '↳'));
-      const handle = element('button', 'mobile-conversation-queue-handle', '⋯');
-      handle.type = 'button';
+      const handle = createIconButton({
+        className: 'mobile-conversation-queue-handle',
+        label: `Reorder queued message: ${entry.text}`, glyph: '⋯', variant: 'bare', size: 'sm',
+      });
       handle.disabled = entries.length < 2 || entry.optimistic === true;
-      handle.setAttribute('aria-label', `Reorder queued message: ${entry.text}`);
       handle.title = 'Drag to reorder';
       setupQueueReorder(row, handle);
       const copy = element('div', 'mobile-conversation-queue-copy');
@@ -2871,10 +3082,11 @@ export function createMobileConversationView({
           void refresh();
         } },
       ));
-      const remove = element('button', 'mobile-conversation-queue-delete', '⌫');
-      remove.type = 'button';
+      const remove = createIconButton({
+        className: 'mobile-conversation-queue-delete', label: 'Delete queued message',
+        glyph: '⌫', variant: 'danger', size: 'sm',
+      });
       remove.disabled = entry.optimistic === true;
-      remove.setAttribute('aria-label', 'Delete queued message');
       remove.addEventListener('click', () => runQueueAction(
         row, () => removeQueuedInput(sessionName, entry.id), 'Delete failed',
       ));
@@ -2940,12 +3152,68 @@ export function createMobileConversationView({
     }
   }
 
+  function uploadedImagePreview(target) {
+    const value = String(target || '').trim();
+    const uploadId = value.match(/\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})(?:\.[a-z0-9]{1,10})?$/i)?.[1];
+    if (uploadId) {
+      return apiUrl(`/api/conversations/${encodeURIComponent(sessionName)}/attachments/${uploadId}`);
+    }
+    try {
+      const url = new URL(value, location.href);
+      return ['http:', 'https:'].includes(url.protocol) ? url.href : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function userMessageContentNode(item) {
+    const content = element('div', 'mobile-message-content');
+    const images = (Array.isArray(item.attachments) ? item.attachments : []).flatMap((attachment) => {
+      if (!/^image\/(?:png|jpeg|webp|gif)$/i.test(attachment?.mimeType || '') || !attachment.previewUrl) return [];
+      return [{ name: attachment.name || 'Attached image', url: apiUrl(attachment.previewUrl) }];
+    });
+    let visibleText = String(item.text || '');
+    if (!images.length) {
+      visibleText = visibleText.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (source, label, target) => {
+        const url = uploadedImagePreview(target);
+        if (!url) return source;
+        let fallback = 'Attached image';
+        try { fallback = decodeURIComponent(String(target).split('/').at(-1) || fallback); } catch { /* keep fallback */ }
+        images.push({ name: label.trim() || fallback, url });
+        return '';
+      }).replace(/\n{3,}/g, '\n\n').trim();
+    }
+    if (!images.length) {
+      content.textContent = visibleText;
+      return content;
+    }
+
+    const gallery = element('div', 'mobile-message-user-attachments');
+    for (const image of images) {
+      const link = element('a', 'mobile-message-user-attachment');
+      link.href = image.url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.setAttribute('aria-label', `View ${image.name}`);
+      const preview = document.createElement('img');
+      preview.src = image.url;
+      preview.alt = image.name;
+      preview.loading = 'lazy';
+      preview.decoding = 'async';
+      link.append(preview, element('small', '', image.name));
+      gallery.append(link);
+    }
+    content.append(gallery);
+    if (visibleText) content.append(element('div', 'mobile-message-user-text', visibleText));
+    return content;
+  }
+
   function messageNode(item, conversation, { suppressPendingInteractions = false } = {}) {
     if (item.type === 'message') {
       const article = element('article', `mobile-message mobile-message-${item.role}`);
       article.dataset.messageId = item.id;
       if (item.role === 'user') {
-        const content = element('div', 'mobile-message-content', item.text);
+        const content = userMessageContentNode(item);
         const author = item.pendingStatus === 'failed' ? 'Not received · tap to retry' : 'You';
         article.append(element('span', 'mobile-message-author', author), content);
       } else {
@@ -3105,6 +3373,9 @@ export function createMobileConversationView({
       rememberConversation(sessionName, conversation);
     }
     const targetMessages = isRoot ? messages : sheetMessages || messages;
+    const revealChild = !isRoot && revealChildDetails &&
+      conversation.thread?.id === selectedChildId;
+    if (revealChild) animateSheetContent(sheetMessages);
     // Follow new output only while the reader is actually at the bottom. A
     // generous "near bottom" threshold makes short mobile histories snap back
     // down on every streamed update and effectively prevents scrolling.
@@ -3223,6 +3494,9 @@ export function createMobileConversationView({
     }
     if (!fragment.childNodes.length) fragment.append(emptyConversationNode());
     reconcileTimeline(targetMessages, [...fragment.childNodes]);
+    if (revealChild) {
+      revealChildDetails = false;
+    }
     restoreStreamScroll(targetMessages, streamScroll);
     if (historyPrependAnchor?.sessionName === sessionName) {
       const anchor = historyPrependAnchor;
@@ -3263,7 +3537,11 @@ export function createMobileConversationView({
       // Keep the opaque startup surface in place until the first complete
       // conversation snapshot has been committed. Removing it afterwards
       // makes the transition atomic, with no Connecting/Reconnecting frame.
+      const finishingBoot = root.dataset.booting === 'true';
+      if (finishingBoot) holdMainScrollGeometry({ recapture: true, settle: 260 });
       setBooting(false);
+      if (!conversation.parent) renderSubagentPill(conversation);
+      if (finishingBoot) applyMainScrollGeometryLock();
       startStream();
     } catch (error) {
       if (currentGeneration !== generation) return;
@@ -3320,17 +3598,18 @@ export function createMobileConversationView({
     const switchingSettings = modelBusy || controlBusy;
     const stopAction = turnActive && !hasDraft;
     const waitingAction = pendingDelivery && !turnActive && !hasDraft;
-    const action = switchingSettings ? 'switching'
+    // Changing model or mode only locks submission. It is not a conversation
+    // turn, so keep the ordinary Send affordance instead of showing activity.
+    const action = switchingSettings ? 'send'
       : submittingMessage ? 'sending'
         : cancellingTurn ? 'stopping' : stopAction ? 'stop' : waitingAction ? 'waiting' : 'send';
     sendButton.dataset.action = action;
     sendButton.textContent = action === 'send' ? '↑' : '';
     sendButton.setAttribute('aria-label', action === 'stop' ? 'Stop response'
       : action === 'stopping' ? 'Stopping response'
-        : action === 'switching' ? `Switching ${modelBusy ? 'model' : 'mode'}`
-          : action === 'sending' ? 'Sending message'
+        : action === 'sending' ? 'Sending message'
         : action === 'waiting' ? 'Waiting for response' : 'Send message');
-    sendButton.disabled = uploadingAttachments > 0 || action === 'switching' ||
+    sendButton.disabled = uploadingAttachments > 0 || switchingSettings ||
       action === 'sending' || action === 'stopping' || action === 'waiting' ||
       (action === 'send' && !hasDraft);
   }
@@ -3465,7 +3744,8 @@ export function createMobileConversationView({
       updateComposerAction();
     }
   });
-  composer.addEventListener('focusin', () => {
+  composer.addEventListener('focusin', (event) => {
+    if (event.target === attachButton || event.target === fileInput) return;
     setComposerExpanded(true);
   });
   composer.addEventListener('focusout', () => {
@@ -3480,15 +3760,28 @@ export function createMobileConversationView({
     updateSuggestions();
   });
   input.addEventListener('click', updateSuggestions);
+  attachButton.addEventListener('pointerdown', (event) => {
+    // Do not let the attach control steal textarea focus before iOS opens its
+    // native picker. This keeps the software keyboard and expanded composer
+    // state intact for people who were already typing, just like Model/Mode.
+    attachmentPickerState = { restoreFocus: document.activeElement === input };
+    event.preventDefault();
+  });
   attachButton.addEventListener('click', () => {
-    setComposerExpanded(true);
+    attachmentPickerState ??= { restoreFocus: document.activeElement === input };
     fileInput.click();
   });
+  function restoreComposerAfterAttachmentPicker() {
+    const restoreFocus = attachmentPickerState?.restoreFocus ?? document.activeElement === input;
+    attachmentPickerState = undefined;
+    setComposerExpanded(restoreFocus);
+    if (restoreFocus) input.focus({ preventScroll: true });
+  }
   fileInput.addEventListener('change', async () => {
     const files = [...fileInput.files].slice(0, Math.max(0, 8 - attachments.length));
     fileInput.value = '';
     if (!files.length || !sessionName) {
-      input.focus({ preventScroll: true });
+      restoreComposerAfterAttachmentPicker();
       return;
     }
     const pendingUploads = files.map((file) => ({
@@ -3501,13 +3794,12 @@ export function createMobileConversationView({
     }));
     uploadingAttachments += pendingUploads.length;
     for (const { upload } of pendingUploads) attachmentUploads.set(upload.id, upload);
-    setComposerExpanded(true);
     renderAttachmentTray();
     autoSizeInput();
-    // The native picker temporarily owns focus. Restore the composer while
-    // this trusted change event is still active so iOS opens the keyboard and
-    // the expanded attachment tray exposes upload progress immediately.
-    input.focus({ preventScroll: true });
+    // The native picker temporarily owns focus. Restore the pre-picker input
+    // state while this trusted change event is active so iOS keeps/reopens the
+    // keyboard only for people who were already typing.
+    restoreComposerAfterAttachmentPicker();
     for (const { file, upload } of pendingUploads) {
       try {
         attachments.push(await uploadAttachment(sessionName, file, (progress) => {
@@ -3531,7 +3823,7 @@ export function createMobileConversationView({
       }
     }
   });
-  fileInput.addEventListener('cancel', () => input.focus({ preventScroll: true }));
+  fileInput.addEventListener('cancel', restoreComposerAfterAttachmentPicker);
   function retainComposerInputFocus(event) {
     if (document.activeElement !== input) return;
     // Picker controls must remain usable without dismissing the iOS keyboard.
@@ -3568,7 +3860,10 @@ export function createMobileConversationView({
     }
   }
   modeButton.addEventListener('click', () => toggleAuxiliaryList(modeButton, modeList));
-  menu.addEventListener('click', () => document.querySelector('#open-sidebar')?.click());
+  menu.addEventListener('click', () => {
+    const workspace = document.querySelector('.workspace');
+    document.querySelector(workspace?.dataset.sidebar === 'collapsed' ? '#open-sidebar' : '#toggle-sidebar')?.click();
+  });
   modelList.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
     event.preventDefault();
@@ -3684,7 +3979,7 @@ export function createMobileConversationView({
     renderedSignature = '';
     if (media.matches && sessionName) {
       setBooting(true);
-      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Preparing chat…'));
+      messages.replaceChildren();
       setAvailable(true);
       void refresh();
     } else {
@@ -3721,7 +4016,8 @@ export function createMobileConversationView({
       followStreamTail = true;
       submittedTurnFollow = false;
       browserAvailable = false;
-      pillDismissed = false;
+      dismissedActivitySnapshot = loadDismissedActivitySnapshot(nextSessionName);
+      pillDismissed = Boolean(dismissedActivitySnapshot);
       dismissedPlanRevision = loadDismissedPlanRevision(nextSessionName);
       clearSubagentPill();
       parentId = undefined;
@@ -3758,7 +4054,7 @@ export function createMobileConversationView({
       interactionDock.replaceChildren();
       back.hidden = true;
       jumpToLatest.hidden = true;
-      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Preparing chat…'));
+      messages.replaceChildren();
       setAvailable(true);
     },
     select(nextSessionName, { expected = false } = {}) {
@@ -3773,7 +4069,7 @@ export function createMobileConversationView({
           generation += 1;
           setBooting(true);
           jumpToLatest.hidden = true;
-          messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Preparing chat…'));
+          messages.replaceChildren();
           setAvailable(true);
           void refresh();
         }
@@ -3795,7 +4091,8 @@ export function createMobileConversationView({
       followStreamTail = true;
       submittedTurnFollow = false;
       browserAvailable = false;
-      pillDismissed = false;
+      dismissedActivitySnapshot = loadDismissedActivitySnapshot(sessionName);
+      pillDismissed = Boolean(dismissedActivitySnapshot);
       dismissedPlanRevision = loadDismissedPlanRevision(sessionName);
       clearSubagentPill();
       parentId = undefined;
@@ -3845,7 +4142,7 @@ export function createMobileConversationView({
       }
       setBooting(true);
       jumpToLatest.hidden = true;
-      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Preparing chat…'));
+      messages.replaceChildren();
       // Claim the mobile surface while provider detection is in flight. This
       // prevents the terminal transport from briefly attaching (and resizing)
       // the shared tmux pane before native history is ready.
@@ -3877,7 +4174,7 @@ export function createMobileConversationView({
       if (!media.matches) return;
       setBooting(true);
       jumpToLatest.hidden = true;
-      messages.replaceChildren(element('div', 'mobile-conversation-loading', 'Preparing chat…'));
+      messages.replaceChildren();
       setAvailable(true);
       void refresh();
     },

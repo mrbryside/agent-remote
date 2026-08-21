@@ -249,6 +249,8 @@ const staticRoutes = new Map([
   ['/workspace-boot.js', join(publicDir, 'workspace-boot.js')],
   ['/app.js', join(publicDir, 'app.js')],
   ['/api-client.js', join(publicDir, 'api-client.js')],
+  ['/prompt-title.js', join(publicDir, 'prompt-title.js')],
+  ['/ui-components.js', join(publicDir, 'ui-components.js')],
   ['/remote-control.js', join(publicDir, 'remote-control.js')],
   ['/mobile-conversation.js', join(publicDir, 'mobile-conversation.js')],
   ['/markdown.js', join(publicDir, 'markdown.js')],
@@ -263,6 +265,25 @@ const staticRoutes = new Map([
   ['/vendor/dompurify.js', join(root, 'node_modules/dompurify/dist/purify.es.mjs')],
   ['/vendor/highlight.js', join(root, 'node_modules/@highlightjs/cdn-assets/es/highlight.min.js')],
 ]);
+
+const localControlBlockStart = '<!-- local-control:start -->';
+const localControlBlockEnd = '<!-- local-control:end -->';
+
+function stripLocalControlBlocks(source) {
+  let stripped = '';
+  let remainder = source;
+  while (remainder.includes(localControlBlockStart)) {
+    const start = remainder.indexOf(localControlBlockStart);
+    const end = remainder.indexOf(localControlBlockEnd, start + localControlBlockStart.length);
+    if (end < 0) return undefined;
+    stripped += remainder.slice(0, start);
+    remainder = remainder.slice(end + localControlBlockEnd.length);
+  }
+  stripped += remainder;
+  if (stripped.includes(localControlBlockEnd)) return undefined;
+  if (/id="(?:remote-button|remote-dialog|cloudflare-token-guide-dialog)"/.test(stripped)) return undefined;
+  return stripped;
+}
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -431,18 +452,34 @@ export function createTerminalServer(options = {}) {
   const clientContexts = new Map();
   const renderers = new Map();
   const browserAgentCleanups = new Set();
+  const rendererCleanups = new Set();
   const rendererDiscoveryAttempts = Number.isInteger(options.rendererDiscoveryAttempts)
     ? Math.max(1, options.rendererDiscoveryAttempts)
     : 50;
   const rendererDiscoveryIntervalMs = Number.isInteger(options.rendererDiscoveryIntervalMs)
     ? Math.max(0, options.rendererDiscoveryIntervalMs)
     : 200;
+  const rendererCloseMinimumMs = Number.isInteger(options.rendererCloseMinimumMs)
+    ? Math.max(0, options.rendererCloseMinimumMs)
+    : 2_500;
+  const rendererCloseGraceMs = Number.isInteger(options.rendererCloseGraceMs)
+    ? Math.max(rendererCloseMinimumMs, options.rendererCloseGraceMs)
+    : Math.max(rendererCloseMinimumMs, 5_000);
+  const rendererClosePollMs = Number.isInteger(options.rendererClosePollMs)
+    ? Math.max(5, options.rendererClosePollMs)
+    : 100;
+  const sessionRendererSweepIntervalMs = Number.isInteger(options.sessionRendererSweepIntervalMs)
+    ? Math.max(0, options.sessionRendererSweepIntervalMs)
+    : 10_000;
   const closeBrowserAutomationSession = options.closeBrowserAutomationSession
     ?? closeTerminalBrowserAgentSession;
   const reapBrowserAutomationSessions = options.reapBrowserAutomationSessions
     ?? reapStaleTerminalBrowserAgentSessions;
   const projectStore = createProjectStore(config.databaseFile);
   let localControlUrl = '';
+  let sessionRendererSweepTimer;
+  let sessionRendererSweepRunning = false;
+  let serverClosing = false;
 
   function publishWorkspaceChange({ type = 'workspace-changed', deleted = [] } = {}) {
     const event = {
@@ -671,7 +708,8 @@ export function createTerminalServer(options = {}) {
     const sessions = (await listWorkspaceSessions())
       .filter((session) => session.projectId === projectId);
     for (const session of sessions) {
-      if (await stopManagedSession(config.tmuxCommand, session.name)) closeRenderer(`session:${session.name}`);
+      await stopManagedSession(config.tmuxCommand, session.name);
+      closeRenderer(`session:${session.name}`);
     }
     projectStore.removeProjectChats(projectId);
     if (sessions.length) {
@@ -706,13 +744,118 @@ export function createTerminalServer(options = {}) {
   }
   const listTerminalBrowsers = options.listTerminalBrowsers ?? readTerminalBrowsers;
 
+  function rendererBrowserCandidate(renderer, browsers, previousKeys = new Set()) {
+    const claimed = new Set([...renderers.values()]
+      .filter((item) => item !== renderer)
+      .map((item) => item.browserKey)
+      .filter(Boolean));
+    const candidates = browsers.filter((browser) =>
+      browser?.key && !previousKeys.has(browser.key) && !claimed.has(browser.key));
+    const rendererTty = renderer.terminal?._pty;
+    const exact = rendererTty && candidates.find((browser) => browser.tty === rendererTty);
+    if (exact) return exact;
+    // terminal-browser v0.5.8 and newer publishes the owning PTY. Retain a
+    // narrow fallback for older builds only when there is exactly one
+    // candidate without ownership metadata; guessing among multiple browsers
+    // risks attaching to or closing another chat.
+    const legacy = candidates.filter((browser) => !browser.tty);
+    return legacy.length === 1 ? legacy[0] : undefined;
+  }
+
+  function rememberRendererBrowser(renderer, browser) {
+    if (!browser?.key || (renderer.browserKey && renderer.browserKey !== browser.key)) return false;
+    renderer.browserKey = browser.key;
+    renderer.browserSocket = browser.socket;
+    if (renderer.closing) cleanUpRendererBrowserAgent(renderer);
+    return true;
+  }
+
   function cleanUpRendererBrowserAgent(renderer) {
     if (renderer.agentCleanupStarted || !renderer.browserKey) return;
     renderer.agentCleanupStarted = true;
-    const task = Promise.resolve(closeBrowserAutomationSession(renderer.browserKey))
+    const task = (async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (await closeBrowserAutomationSession(renderer.browserKey)) return;
+        if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    })()
       .catch(() => {})
       .finally(() => browserAgentCleanups.delete(task));
     browserAgentCleanups.add(task);
+  }
+
+  function killRendererTerminal(renderer) {
+    if (renderer.terminalKilled) return;
+    renderer.terminalKilled = true;
+    renderer.output?.dispose();
+    renderer.exit?.dispose();
+    try { renderer.terminal.kill(); } catch {}
+  }
+
+  async function finishRendererClose(renderer) {
+    const startedAt = Date.now();
+    const deadline = startedAt + rendererCloseGraceMs;
+    let observedBrowser = Boolean(renderer.browserKey);
+    while (!serverClosing && Date.now() < deadline) {
+      if (renderer.browserLaunchStarted) {
+        let browsers = [];
+        try { browsers = await listTerminalBrowsers(); } catch {}
+        const owned = renderer.browserKey
+          ? browsers.find((browser) => browser.key === renderer.browserKey)
+          : rendererBrowserCandidate(renderer, browsers, renderer.previousBrowserKeys);
+        if (owned) {
+          observedBrowser = true;
+          rememberRendererBrowser(renderer, owned);
+          cleanUpRendererBrowserAgent(renderer);
+        }
+        const minimumElapsed = Date.now() - startedAt >= rendererCloseMinimumMs;
+        if (minimumElapsed && observedBrowser && !owned) break;
+        if (minimumElapsed && !observedBrowser) break;
+      } else if (Date.now() - startedAt >= Math.min(100, rendererCloseMinimumMs)) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, rendererClosePollMs));
+    }
+    killRendererTerminal(renderer);
+  }
+
+  function trackRendererClose(renderer) {
+    const task = finishRendererClose(renderer)
+      .catch(() => killRendererTerminal(renderer))
+      .finally(() => rendererCleanups.delete(task));
+    rendererCleanups.add(task);
+  }
+
+  async function sweepSessionRenderers() {
+    if (sessionRendererSweepRunning || serverClosing) return;
+    sessionRendererSweepRunning = true;
+    try {
+      const sessions = options.listWorkspaceSessions
+        ? await options.listWorkspaceSessions()
+        : await listManagedSessions(config.tmuxCommand);
+      const live = new Set(sessions.map((session) => session.name));
+      for (const [key] of renderers) {
+        if (key.startsWith('session:') && !live.has(key.slice('session:'.length))) {
+          closeRenderer(key, 'Owning chat ended');
+        }
+      }
+    } catch {
+      // A transient tmux/provider discovery failure must not close a browser
+      // whose owner may still be alive. The next sweep retries.
+    } finally {
+      sessionRendererSweepRunning = false;
+    }
+  }
+
+  function scheduleSessionRendererSweep() {
+    if (serverClosing || sessionRendererSweepIntervalMs === 0 || sessionRendererSweepTimer) return;
+    if (![...renderers.keys()].some((key) => key.startsWith('session:'))) return;
+    sessionRendererSweepTimer = setTimeout(async () => {
+      sessionRendererSweepTimer = undefined;
+      await sweepSessionRenderers();
+      scheduleSessionRendererSweep();
+    }, sessionRendererSweepIntervalMs);
+    sessionRendererSweepTimer.unref?.();
   }
 
   function controlTerminalBrowser(socketPath, request) {
@@ -1214,16 +1357,13 @@ export function createTerminalServer(options = {}) {
   async function discoverRendererSurface(renderer, previousKeys) {
     for (let attempt = 0; attempt < rendererDiscoveryAttempts && !renderer.closing; attempt += 1) {
       const browsers = await listTerminalBrowsers();
-      const claimed = new Set([...renderers.values()].map((item) => item.browserKey).filter(Boolean));
-      const browser = browsers.find((item) => !previousKeys.has(item.key) && !claimed.has(item.key));
+      const browser = rendererBrowserCandidate(renderer, browsers, previousKeys);
       if (browser) {
-        renderer.browserKey = browser.key;
-        renderer.browserSocket = browser.socket;
+        rememberRendererBrowser(renderer, browser);
+        if (renderer.closing) return browser;
         try {
           await connectRendererSurface(renderer, browser);
         } catch (error) {
-          renderer.browserKey = undefined;
-          renderer.browserSocket = undefined;
           throw new Error(`Could not connect to terminal-browser: ${error.message}`);
         }
         renderer.tabPoll = setInterval(() => void refreshRendererSurface(renderer), 1000);
@@ -1239,9 +1379,12 @@ export function createTerminalServer(options = {}) {
   async function launchRenderer(renderer, argv) {
     const commandName = argv[0].split('/').at(-1);
     const discoversBrowser = commandName === 'terminal-browser';
+    renderer.browserLaunchStarted = discoversBrowser;
     const previous = discoversBrowser
       ? new Set((await listTerminalBrowsers()).map((browser) => browser.key))
       : null;
+    renderer.previousBrowserKeys = previous || new Set();
+    if (renderer.closing) return;
     setRendererState(renderer, discoversBrowser ? 'starting' : 'terminal');
     const command = argv.map(shellQuote).join(' ');
     renderer.terminal.write(`${discoversBrowser ? 'TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK=1 ' : ''}${command}\r`);
@@ -1304,7 +1447,10 @@ export function createTerminalServer(options = {}) {
       stateMessage: undefined,
       browserKey: undefined,
       launchSignature: undefined,
+      browserLaunchStarted: false,
+      previousBrowserKeys: new Set(),
       agentCleanupStarted: false,
+      terminalKilled: false,
       browserSocket: undefined,
       cdp: undefined,
       cdpSequence: 0,
@@ -1328,6 +1474,7 @@ export function createTerminalServer(options = {}) {
       devtoolsAccess: randomBytes(24).toString('base64url'),
     };
     renderers.set(key, renderer);
+    if (key.startsWith('session:')) scheduleSessionRendererSweep();
 
     renderer.output = terminal.onData((data) => {
       if (renderer.surface) return;
@@ -1340,6 +1487,7 @@ export function createTerminalServer(options = {}) {
       if (renderer.terminalClient) sendJson(renderer.terminalClient, { type: 'output', data });
     });
     renderer.exit = terminal.onExit(({ exitCode, signal }) => {
+      renderer.terminalKilled = true;
       if (renderers.get(key) === renderer) renderers.delete(key);
       cleanUpRendererBrowserAgent(renderer);
       renderer.output?.dispose();
@@ -1372,20 +1520,17 @@ export function createTerminalServer(options = {}) {
     }
     renderer.clients.clear();
 
-    const kill = () => {
-      renderer.output?.dispose();
-      renderer.exit?.dispose();
-      try { renderer.terminal.kill(); } catch {}
-    };
-    if (immediate) kill();
+    if (immediate) killRendererTerminal(renderer);
     else {
       try { renderer.terminal.write('\x03'); } catch {}
-      // terminal-browser unregisters its browser and profile on SIGINT. Give
-      // that handshake enough time to finish before forcing the PTY down;
-      // 250ms intermittently killed Electron mid-cleanup and left the next
-      // agent invocation reporting signal 9.
-      const timer = setTimeout(kill, 2_000);
-      timer.unref?.();
+      // The terminal-browser client itself uses a two-second close timeout.
+      // Racing that same deadline can kill it between daemon unregister and
+      // profile/socket cleanup, which makes a later invocation report signal
+      // 9. Track the exact PTY-owned browser until its registry entry is gone,
+      // then tear down only this renderer. A bounded grace still handles a
+      // wedged client by closing its owning connection without touching the
+      // shared daemon or any other session.
+      trackRendererClose(renderer);
     }
     return true;
   }
@@ -2467,9 +2612,12 @@ export function createTerminalServer(options = {}) {
         if (request.method === 'DELETE' && pathname.startsWith('/api/sessions/')) {
           const name = decodeURIComponent(pathname.slice('/api/sessions/'.length));
           const stopped = await stopManagedSession(config.tmuxCommand, name);
+          // Renderer ownership is exact by session key, so cleanup remains
+          // safe even if tmux disappeared between discovery and this request.
+          // This closes stale PTYs/workers without affecting another chat.
+          closeRenderer(`session:${name}`);
           if (stopped) {
             projectStore.removeChat(name);
-            closeRenderer(`session:${name}`);
             await Promise.all([...conversationStreams]
               .filter((stream) => stream.sessionName === name)
               .map((stream) => stream(true)));
@@ -2485,6 +2633,12 @@ export function createTerminalServer(options = {}) {
       }
     }
 
+    if (surface === 'remote' && pathname === '/remote-control.js') {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+      response.end('Not found');
+      return;
+    }
+
     const file = staticRoutes.get(pathname);
     if (!file || !existsSync(file)) {
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
@@ -2492,12 +2646,33 @@ export function createTerminalServer(options = {}) {
       return;
     }
 
-    response.writeHead(200, {
+    const staticHeaders = {
       'content-type': contentTypes[extname(file)] ?? 'application/octet-stream',
-      'cache-control': pathname.startsWith('/vendor/') ? 'public, max-age=86400' : 'no-cache',
+      // First-party assets change together and iOS standalone web apps are
+      // particularly sticky about reusing an old CSS/manifest response. Never
+      // let a PWA or a Cloudflare hop retain a mixed-version application shell.
+      'cache-control': pathname.startsWith('/vendor/') ? 'public, max-age=86400' : 'no-store',
       'x-content-type-options': 'nosniff',
       ...(surface === 'remote' && pathname === '/' ? remoteWorkspaceDocumentHeaders : {}),
-    });
+    };
+    if (surface === 'remote' && pathname === '/') {
+      let document;
+      try { document = stripLocalControlBlocks(readFileSync(file, 'utf8')); }
+      catch { document = undefined; }
+      if (document === undefined) {
+        response.writeHead(500, {
+          'content-type': 'text/plain; charset=utf-8',
+          'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff',
+        });
+        response.end('Remote workspace is unavailable');
+        return;
+      }
+      response.writeHead(200, { ...staticHeaders, 'content-length': String(Buffer.byteLength(document)) });
+      response.end(request.method === 'HEAD' ? undefined : document);
+      return;
+    }
+    response.writeHead(200, staticHeaders);
     createReadStream(file).pipe(response);
   }
 
@@ -3008,15 +3183,22 @@ export function createTerminalServer(options = {}) {
       const localUrl = `http://${config.host}:${localAddress.port}`;
       localControlUrl = localUrl;
       const remoteUrl = `http://${config.remoteHost}:${remoteAddress.port}`;
+      // Reconnect an explicitly desired named tunnel as soon as both listeners
+      // can accept traffic. Terminal-browser discovery is unrelated startup
+      // housekeeping and must not gate Remote access or make it depend on a
+      // user opening the local UI.
+      remoteRestore = restoreNamedTunnel().catch(() => {});
       const activeBrowserKeys = new Set((await listTerminalBrowsers()).map((browser) => browser.key).filter(Boolean));
       await reapBrowserAutomationSessions(activeBrowserKeys).catch(() => {});
-      // Reconnect only an explicitly desired named tunnel. Do not delay local
-      // readiness (or fail it) if Keychain or Cloudflare is unavailable.
-      remoteRestore = restoreNamedTunnel().catch(() => {});
       return { url: localUrl, localUrl, remoteUrl };
     },
     async close() {
+      serverClosing = true;
+      clearTimeout(sessionRendererSweepTimer);
       for (const key of [...renderers.keys()]) closeRenderer(key, 'Server stopping', true);
+      await Promise.allSettled([...rendererCleanups]);
+      // A renderer closing concurrently can discover its browser key and add
+      // the exact worker cleanup while the first wait is in flight.
       await Promise.allSettled([...browserAgentCleanups]);
       // A browser that has gone to sleep (common on phones) may never answer a
       // WebSocket close handshake. Terminate server-owned sockets during full

@@ -129,19 +129,21 @@ function waitForMessage(socket, predicate) {
 async function waitForCondition(predicate, message, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  assert.fail(message);
+  assert.fail(typeof message === 'function' ? message() : message);
 }
 
 test('serves the frontend and health status', async () => {
   await withServer({}, async (url) => {
-    const [page, manifest, tokens, apiClient, remoteControl, mobileConversation, markdown, syntax, markedVendor, purifierVendor, highlightVendor, health] = await Promise.all([
+    const [page, manifest, tokens, apiClient, promptTitle, uiComponents, remoteControl, mobileConversation, markdown, syntax, markedVendor, purifierVendor, highlightVendor, health] = await Promise.all([
       fetch(url),
       fetch(`${url}/manifest.webmanifest`),
       fetch(`${url}/tokens.css`),
       fetch(`${url}/api-client.js`),
+      fetch(`${url}/prompt-title.js`),
+      fetch(`${url}/ui-components.js`),
       fetch(`${url}/remote-control.js`),
       fetch(`${url}/mobile-conversation.js`),
       fetch(`${url}/markdown.js`),
@@ -154,16 +156,23 @@ test('serves the frontend and health status', async () => {
     assert.equal(page.status, 200);
     const pageHtml = await page.text();
     assert.match(pageHtml, /Interactive terminal/);
-    assert.match(pageHtml, /apple-mobile-web-app-status-bar-style" content="black"/);
-    assert.doesNotMatch(pageHtml, /apple-mobile-web-app-status-bar-style" content="black-translucent"/);
+    assert.match(pageHtml, /apple-mobile-web-app-status-bar-style" content="black-translucent"/);
     assert.equal(manifest.status, 200);
     assert.match(manifest.headers.get('content-type'), /^application\/manifest\+json/);
-    assert.equal((await manifest.json()).orientation, 'portrait-primary');
+    const manifestJson = await manifest.json();
+    assert.equal(manifestJson.orientation, 'portrait-primary');
+    assert.equal(manifestJson.theme_color, '#0c0c0d');
+    assert.equal(manifest.headers.get('cache-control'), 'no-store');
     assert.equal(tokens.status, 200);
     assert.match(tokens.headers.get('content-type'), /^text\/css/);
+    assert.equal(tokens.headers.get('cache-control'), 'no-store');
     assert.match(await tokens.text(), /--color-terminal-background:\s*#141416/);
     assert.equal(apiClient.status, 200);
     assert.match(apiClient.headers.get('content-type'), /^text\/javascript/);
+    assert.equal(promptTitle.status, 200);
+    assert.match(await promptTitle.text(), /derivePromptTitle/);
+    assert.equal(uiComponents.status, 200);
+    assert.match(await uiComponents.text(), /createIconButton/);
     assert.equal(remoteControl.status, 200);
     assert.match(remoteControl.headers.get('content-type'), /^text\/javascript/);
     assert.equal(mobileConversation.status, 200);
@@ -697,6 +706,16 @@ test('remote gateway rejects unauthenticated traffic, hides local administration
     const projects = await remoteRequest(`${addresses.remoteUrl}/api/projects`, { headers: authenticatedHeaders });
     assert.equal(projects.status, 200);
     assert.deepEqual(await projects.json(), { projects: [] });
+    const workspace = await remoteRequest(`${addresses.remoteUrl}/`, { headers: authenticatedHeaders });
+    assert.equal(workspace.status, 200);
+    const workspaceHtml = workspace.text();
+    assert.doesNotMatch(workspaceHtml, /id="remote-button"/);
+    assert.doesNotMatch(workspaceHtml, /id="remote-dialog"/);
+    assert.doesNotMatch(workspaceHtml, /id="cloudflare-token-guide-dialog"/);
+    assert.doesNotMatch(workspaceHtml, /local-control:(?:start|end)/);
+    assert.equal((await remoteRequest(`${addresses.remoteUrl}/remote-control.js`, {
+      headers: authenticatedHeaders,
+    })).status, 404);
     assert.equal((await remoteRequest(`${addresses.remoteUrl}/api/remote/status`, { headers: authenticatedHeaders })).status, 404);
     assert.equal((await remoteRequest(`${addresses.remoteUrl}/devtools/missing/inspector.html`, { headers })).status, 401);
     assert.equal((await remoteRequest(`${addresses.remoteUrl}/devtools/missing/inspector.html`, {
@@ -792,28 +811,55 @@ test('local Remote administration routes require same-origin JSON mutations and 
   });
 });
 
-test('named reconnect runs only after both listeners are ready and cannot block local readiness', async () => {
+test('named reconnect starts after both listeners bind without waiting for local UI startup work', async () => {
   const stateRoot = mkdtempSync(join(tmpdir(), 'agent-remote-restore-'));
   const attempts = [];
-  const app = createTerminalServer({
+  let releaseBrowserScan;
+  let signalRestore;
+  const browserScan = new Promise((resolve) => { releaseBrowserScan = resolve; });
+  const restoreStarted = new Promise((resolve) => { signalRestore = resolve; });
+  let app;
+  app = createTerminalServer({
     host: '127.0.0.1', port: 0, remoteHost: '127.0.0.1', remotePort: 0,
     shell: '/bin/sh', shellArgs: [], tmuxSession: '', tmuxShell: false,
     databaseFile: join(stateRoot, 'agent-remote.db'),
-    remoteController: { startNamed: async (input) => { attempts.push(input); throw new Error('Cloudflare is unavailable'); } },
+    listTerminalBrowsers: async () => {
+      await browserScan;
+      return [];
+    },
+    remoteController: { startNamed: async (input) => {
+      assert.equal(app.server.listening, true);
+      assert.equal(app.remoteServer.listening, true);
+      attempts.push(input);
+      signalRestore();
+      throw new Error('Cloudflare is unavailable');
+    } },
   });
   app.remoteStore.saveNamedTunnel({
     accountId: 'account-1', zoneId: 'zone-1', zoneName: 'example.com', hostname: 'term.example.com',
     tunnelId: 'tunnel-1', tunnelName: 'agent-remote-test', dnsRecordId: 'dns-1', dnsTarget: 'tunnel-1.cfargotunnel.com',
   });
   app.remoteStore.setDesiredState('running');
+  let listenSettled = false;
   try {
-    const addresses = await app.listen();
+    const listening = app.listen().finally(() => { listenSettled = true; });
+    let restoreTimer;
+    await Promise.race([
+      restoreStarted,
+      new Promise((_, reject) => {
+        restoreTimer = setTimeout(() => reject(new Error('Remote restore waited for local UI startup work')), 1_000);
+      }),
+    ]).finally(() => clearTimeout(restoreTimer));
+    assert.equal(listenSettled, false);
+    assert.deepEqual(attempts, [{ zoneId: 'zone-1', subdomain: 'term' }]);
+    releaseBrowserScan();
+    const addresses = await listening;
     assert.match(addresses.localUrl, /^http:\/\/127\.0\.0\.1:/);
     assert.equal(app.server.listening, true);
     assert.equal(app.remoteServer.listening, true);
     await app.remoteRestore;
-    assert.deepEqual(attempts, [{ zoneId: 'zone-1', subdomain: 'term' }]);
   } finally {
+    releaseBrowserScan();
     await app.close();
     rmSync(stateRoot, { recursive: true, force: true });
   }
@@ -1189,6 +1235,107 @@ test('closes the browser automation daemon owned by a renderer', async () => {
     await new Promise((resolve) => socket.once('close', resolve));
     await waitForCondition(() => closed.length === 1, 'browser automation daemon was not closed');
     assert.deepEqual(closed, ['fixture-1']);
+  });
+});
+
+test('claims a browser by its renderer PTY instead of another session browser', async () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agent-remote-renderer-owner-'));
+  const executable = join(fixture, 'terminal-browser');
+  const ttyFile = join(fixture, 'tty');
+  writeFileSync(executable, `#!/bin/sh\ntty > "${ttyFile}"\nsleep 30\n`);
+  chmodSync(executable, 0o755);
+  const closed = [];
+  let lastTarget;
+  try {
+    await withServer({
+      listTerminalBrowsers: async () => {
+        let tty;
+        try { tty = readFileSync(ttyFile, 'utf8').trim(); } catch { return []; }
+        return [
+          { key: 'other-session', tty: '/dev/not-this-renderer', socket: '/tmp/other.sock', tabs: [] },
+          { key: 'owned-session', tty, socket: '/tmp/owned.sock', tabs: [] },
+        ];
+      },
+      closeBrowserAutomationSession: async (browserKey) => closed.push(browserKey),
+      rendererDiscoveryAttempts: 500,
+      rendererDiscoveryIntervalMs: 5,
+      rendererCloseMinimumMs: 20,
+      rendererCloseGraceMs: 100,
+      rendererClosePollMs: 5,
+    }, async (url) => {
+      const socket = await connect(url, '/ws?mode=graphics&purpose=renderer&renderer=session%3Aowned-chat');
+      socket.send(JSON.stringify({ type: 'launch', argv: [executable, 'open', 'https://example.test'] }));
+      await waitForCondition(async () => {
+        lastTarget = await (await fetch(`${url}/api/control/browser-target?session=owned-chat`)).json();
+        return lastTarget.browserKey === 'owned-session';
+      }, () => `renderer claimed another session browser: tty=${readFileSync(ttyFile, 'utf8').trim()} target=${JSON.stringify(lastTarget)}`);
+      socket.send(JSON.stringify({ type: 'close' }));
+      await new Promise((resolve) => socket.once('close', resolve));
+      await waitForCondition(() => closed.length === 1, 'owned automation worker was not closed');
+      assert.deepEqual(closed, ['owned-session']);
+    });
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('cleans a browser worker that registers while its renderer is closing', async () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agent-remote-renderer-late-owner-'));
+  const executable = join(fixture, 'terminal-browser');
+  const ttyFile = join(fixture, 'tty');
+  writeFileSync(executable, `#!/bin/sh\ntty > "${ttyFile}"\nsleep 30\n`);
+  chmodSync(executable, 0o755);
+  const closed = [];
+  let revealBrowser = false;
+  try {
+    await withServer({
+      listTerminalBrowsers: async () => {
+        if (!revealBrowser) return [];
+        let tty;
+        try { tty = readFileSync(ttyFile, 'utf8').trim(); } catch { return []; }
+        return [{ key: 'late-session', tty, socket: '/tmp/late.sock', tabs: [] }];
+      },
+      closeBrowserAutomationSession: async (browserKey) => closed.push(browserKey),
+      rendererDiscoveryIntervalMs: 5,
+      rendererCloseMinimumMs: 20,
+      rendererCloseGraceMs: 100,
+      rendererClosePollMs: 5,
+    }, async (url) => {
+      const socket = await connect(url, '/ws?mode=graphics&purpose=renderer&renderer=session%3Alate-chat');
+      socket.send(JSON.stringify({ type: 'launch', argv: [executable, 'open', 'https://example.test'] }));
+      await waitForCondition(() => {
+        try { return Boolean(readFileSync(ttyFile, 'utf8').trim()); } catch { return false; }
+      }, 'renderer PTY was not recorded');
+      socket.send(JSON.stringify({ type: 'close' }));
+      await new Promise((resolve) => socket.once('close', resolve));
+      revealBrowser = true;
+      await waitForCondition(() => closed.includes('late-session'), 'late browser worker was not closed');
+      assert.deepEqual(closed, ['late-session']);
+    });
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+test('reaps an orphaned session renderer without touching another live chat', async () => {
+  const live = new Set(['orphaned-chat', 'active-chat']);
+  await withServer({
+    listWorkspaceSessions: async () => [...live].map((name) => ({
+      name, label: name, cwd: process.cwd(), managed: true,
+    })),
+    sessionRendererSweepIntervalMs: 10,
+  }, async (url) => {
+    const orphaned = await connect(url, '/ws?mode=graphics&purpose=renderer&renderer=session%3Aorphaned-chat');
+    const active = await connect(url, '/ws?mode=graphics&purpose=renderer&renderer=session%3Aactive-chat');
+    live.delete('orphaned-chat');
+    await waitForCondition(async () => {
+      const payload = await (await fetch(`${url}/api/renderers`)).json();
+      return !payload.renderers.some((renderer) => renderer.key === 'session:orphaned-chat');
+    }, 'orphaned renderer was not reaped');
+    const payload = await (await fetch(`${url}/api/renderers`)).json();
+    assert.equal(payload.renderers.some((renderer) => renderer.key === 'session:active-chat'), true);
+    active.close();
+    orphaned.close();
   });
 });
 

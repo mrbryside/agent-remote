@@ -57,8 +57,23 @@ test.afterEach(async ({ request }) => {
   await cleanWorkspace(request);
 });
 
-test('shows a three-step Remote setup with separate device management', async ({ page }) => {
+test('keeps Remote configuration separate from the header Start and Stop control', async ({ page }) => {
   let tunnel = { mode: 'none', state: 'stopped' };
+  let named = { zoneName: 'example.com', hostname: 'terminal.example.com', desiredState: 'stopped' };
+  let quickCalls = 0;
+  let namedCalls = 0;
+  let signalStopStarted;
+  let releaseStop;
+  let signalNamedStarted;
+  let releaseNamed;
+  let signalQuickStarted;
+  let releaseQuick;
+  const stopStarted = new Promise((resolve) => { signalStopStarted = resolve; });
+  const stopReleased = new Promise((resolve) => { releaseStop = resolve; });
+  const namedStarted = new Promise((resolve) => { signalNamedStarted = resolve; });
+  const namedReleased = new Promise((resolve) => { releaseNamed = resolve; });
+  const quickStarted = new Promise((resolve) => { signalQuickStarted = resolve; });
+  const quickReleased = new Promise((resolve) => { releaseQuick = resolve; });
   let pairedDevices = [{
     id: 'device-auto', name: 'Mac · Chrome', createdAt: Date.now(), lastUsedAt: null, revokedAt: null,
   }, {
@@ -72,16 +87,21 @@ test('shows a three-step Remote setup with separate device management', async ({
     cloudflared: { available: true, version: '2026.8.2', source: 'path' },
     tokenConfigured: true,
     tunnel,
-    named: { zoneName: 'example.com', hostname: 'terminal.example.com', desiredState: 'stopped' },
+    named,
   } }));
   await page.route('**/api/remote/tunnel-status', (route) => route.fulfill({ json: { tunnel } }));
   await page.route('**/api/remote/zones', (route) => route.fulfill({ json: { zones: [
     { id: 'zone-example', name: 'example.com' },
     { id: 'zone-work', name: 'work.example' },
   ] } }));
-  await page.route('**/api/remote/hostname-availability**', (route) => route.fulfill({ json: {
-    hostname: 'taken.example.com', status: 'conflict', suggestions: ['taken-2', 'taken-3'],
-  } }));
+  await page.route('**/api/remote/hostname-availability**', (route) => {
+    const requested = new URL(route.request().url()).searchParams.get('subdomain');
+    return route.fulfill({ json: requested === 'taken' ? {
+      hostname: 'taken.example.com', status: 'conflict', suggestions: ['taken-2', 'taken-3'],
+    } : {
+      hostname: `${requested}.example.com`, status: 'available', suggestions: [],
+    } });
+  });
   await page.route('**/api/remote/devices', (route) => {
     if (route.request().method() === 'DELETE') {
       const removed = pairedDevices.length;
@@ -96,9 +116,32 @@ test('shows a three-step Remote setup with separate device management', async ({
     // 404 even though the authoritative device list already reflects removal.
     return route.fulfill({ status: 404, json: { error: 'Not found' } });
   });
-  await page.route('**/api/remote/tunnels/quick', (route) => {
+  await page.route('**/api/remote/tunnels/quick', async (route) => {
+    quickCalls += 1;
+    signalQuickStarted();
+    await quickReleased;
     tunnel = { mode: 'quick', state: 'running', publicUrl: 'https://example.trycloudflare.com' };
+    named = { ...named, desiredState: 'stopped' };
     return route.fulfill({ status: 201, json: tunnel });
+  });
+  await page.route('**/api/remote/tunnels/named', async (route) => {
+    namedCalls += 1;
+    signalNamedStarted();
+    await namedReleased;
+    const { zoneId, subdomain: requestedSubdomain } = route.request().postDataJSON();
+    const zoneName = zoneId === 'zone-work' ? 'work.example' : 'example.com';
+    const hostname = `${requestedSubdomain}.${zoneName}`;
+    tunnel = { mode: 'named', state: 'running', hostname, publicUrl: `https://${hostname}` };
+    named = { zoneName, hostname, desiredState: 'running' };
+    await route.fulfill({ status: 201, json: tunnel });
+  });
+  await page.route('**/api/remote/tunnels/stop', async (route) => {
+    tunnel = { mode: 'quick', state: 'stopping', publicUrl: 'https://example.trycloudflare.com' };
+    signalStopStarted();
+    await stopReleased;
+    tunnel = { mode: 'none', state: 'stopped' };
+    named = { ...named, desiredState: 'stopped' };
+    await route.fulfill({ json: { tunnel } });
   });
   await page.route('**/api/remote/pairing-sessions', (route) => route.fulfill({ status: 201, json: {
     qrDataUrl: 'data:image/png;base64,iVBORw0KGgo=', expiresAt: Date.now() + 120_000,
@@ -128,6 +171,7 @@ test('shows a three-step Remote setup with separate device management', async ({
     buttonWidth: 34,
     listEndsBeforeFooter: true,
   });
+  await expect(page.locator('.sidebar-footer')).toHaveCSS('border-top-width', '0px');
   await expect(remoteButtonLabel).toHaveCSS('opacity', '0');
   const remoteButtonMotion = await remoteButton.evaluate((button) => ({
     button: getComputedStyle(button).transitionDuration,
@@ -172,7 +216,12 @@ test('shows a three-step Remote setup with separate device management', async ({
   await expect(remoteDialog.getByRole('heading', { name: 'Paired devices' })).toBeHidden();
   await expect(remoteDialog.locator('[data-remote-step-target]')).toHaveCount(3);
   await expect(remoteDialog.getByRole('button', { name: 'Back' })).toHaveCount(0);
-  await expect(remoteDialog.locator('#remote-stop')).toHaveText('Stop Remote');
+  const power = remoteDialog.locator('#remote-power');
+  await expect(power).toHaveText('Start Remote');
+  await expect(power).toBeEnabled();
+  await expect(remoteDialog.locator('#remote-runtime-status')).toHaveAttribute('data-state', 'stopped');
+  await expect(remoteDialog.locator('#remote-state')).toHaveText('Remote is off');
+  await expect(power.locator('xpath=..').locator('xpath=following-sibling::button[1]')).toHaveText('Manage devices');
   const closeRemote = remoteDialog.getByRole('button', { name: 'Close Remote access' });
   await expect(closeRemote).toHaveCSS('border-top-width', '0px');
   await expect(closeRemote).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
@@ -209,9 +258,86 @@ test('shows a three-step Remote setup with separate device management', async ({
   await expect(remoteDialog.locator('#remote-zone-options option')).toHaveCount(2);
   await remoteDialog.locator('#remote-subdomain').fill('taken');
   await expect(remoteDialog.locator('#remote-subdomain-options option').first()).toHaveAttribute('value', 'taken-2');
+  await remoteDialog.locator('#remote-subdomain').fill('available');
+  await expect(remoteDialog.locator('#remote-hostname-availability')).toContainText('available.example.com is available');
+  await expect(power).toBeEnabled();
+  await expect(power).toHaveAttribute('data-action', 'start');
+  await power.click();
+  await namedStarted;
+  expect(namedCalls).toBe(1);
+  await expect(remoteDialog.locator('#remote-loading-title')).toHaveText('Opening Remote access…');
+  await expect(remoteDialog.locator('#remote-loading-copy')).toHaveText('Starting the public tunnel. Keep this window open.');
+  await expect(remoteDialog.locator('#remote-loading')).toBeVisible();
+  await expect(power).toHaveAttribute('data-action', 'starting');
+  await expect(remoteDialog.locator('[data-remote-step-target="2"]')).toHaveAttribute('aria-current', 'step');
+  releaseNamed();
+  await expect(remoteDialog.locator('#remote-loading')).toBeHidden();
+  await expect(remoteDialog.locator('[data-remote-step-target="3"]')).toHaveAttribute('aria-current', 'step');
+  await expect(remoteDialog.getByRole('heading', { name: 'Scan devices locally' })).toBeVisible();
+  await expect(power).toHaveText('Stop Remote');
+  await expect(power).toHaveAttribute('data-action', 'stop');
+  await page.mouse.move(0, 0);
+  await expect(power).toHaveCSS('border-color', 'rgb(80, 56, 61)');
+  await expect(power).toHaveCSS('color', 'rgb(201, 135, 142)');
+  await power.hover();
+  await expect(power).toHaveCSS('border-color', 'rgb(201, 135, 142)');
+  await expect(power).toHaveCSS('color', 'rgb(219, 141, 148)');
+  await expect(remoteDialog.locator('#remote-runtime-status')).toHaveAttribute('data-state', 'running');
+  await expect(remoteDialog.locator('#remote-state')).toHaveText('Remote connected');
+  await expect(remoteDialog.locator('#remote-state-detail')).toContainText('Custom Domain');
+
+  await remoteDialog.locator('[data-remote-step-target="2"]').click();
+  await expect(remoteDialog.locator('#remote-remove')).toHaveCount(0);
+  await remoteDialog.locator('#remote-subdomain').fill('draft-only');
+  await expect(remoteDialog.locator('#remote-hostname-availability')).toContainText('draft-only.example.com is available');
+  await expect(power).toHaveText('Update & Restart');
+  await expect(power).toHaveAttribute('data-action', 'update');
+
+  // Closing without updating discards the draft and restores the active setup.
+  await closeRemote.click();
+  await remoteButton.click();
+  await remoteDialog.locator('[data-remote-step-target="2"]').click();
+  await expect(remoteDialog.locator('#remote-subdomain')).toHaveValue('available');
+  await expect(power).toHaveText('Stop Remote');
+
+  await remoteDialog.locator('#remote-subdomain').fill('replacement');
+  await expect(remoteDialog.locator('#remote-hostname-availability')).toContainText('replacement.example.com is available');
+  await expect(power).toHaveText('Update & Restart');
+  await power.click();
+  await expect.poll(() => namedCalls).toBe(2);
+  await expect(remoteDialog.getByLabel('Remote public URL')).toHaveValue('https://replacement.example.com');
+  await expect(power).toHaveText('Stop Remote');
+  await expect(remoteDialog.locator('#remote-alert')).toHaveText('Remote configuration updated and restarted.');
+
+  await power.click();
+  await stopStarted;
+  await expect(remoteDialog).toHaveAttribute('aria-busy', 'true');
+  await expect(remoteDialog.locator('#remote-loading-title')).toHaveText('Stopping Remote access…');
+  await expect(remoteDialog.locator('#remote-loading-copy')).toHaveText('Closing the public tunnel. Your selected setup will be kept.');
+  await expect(power).toHaveAttribute('data-action', 'stopping');
+  await expect(power).toHaveCSS('color', 'rgb(232, 164, 101)');
+  releaseStop();
+  await expect(remoteDialog.locator('#remote-loading')).toBeHidden();
+  await expect(power).toHaveText('Start Remote');
+  await expect(power).toHaveAttribute('data-action', 'start');
+  await expect(remoteDialog.getByRole('heading', { name: 'Scan devices locally' })).toBeVisible();
+
   await remoteDialog.locator('[data-remote-step-target="1"]').click();
   await remoteDialog.getByRole('radio', { name: /Random URL/ }).check();
-  await remoteDialog.getByRole('button', { name: 'Connect Random URL' }).click();
+  await expect(remoteDialog.locator('[data-remote-step-target="2"]')).toBeHidden();
+  await expect(remoteDialog.locator('[data-remote-step-target="3"] span')).toHaveText('2');
+  await expect(remoteDialog.locator('#remote-step-caption')).toHaveText('Step 1 of 2');
+  await remoteDialog.getByRole('button', { name: 'Next: Pair devices' }).click();
+  await expect(remoteDialog.getByRole('heading', { name: 'Scan devices locally' })).toBeVisible();
+  await expect(remoteDialog.locator('#remote-step-caption')).toHaveText('Step 2 of 2');
+  expect(quickCalls).toBe(0);
+  await power.click();
+  await quickStarted;
+  expect(quickCalls).toBe(1);
+  await expect(remoteDialog.locator('#remote-loading-title')).toHaveText('Opening Remote access…');
+  await expect(remoteDialog.locator('#remote-loading')).toBeVisible();
+  await expect(remoteDialog.locator('[data-remote-step-target="3"]')).toHaveAttribute('aria-current', 'step');
+  releaseQuick();
   await expect(remoteDialog.getByLabel('Remote public URL')).toHaveValue('https://example.trycloudflare.com');
   await expect(remoteButton).toHaveAttribute('data-state', 'running');
   await expect(remoteButton).toHaveAttribute('title', 'Remote On');
@@ -219,8 +345,20 @@ test('shows a three-step Remote setup with separate device management', async ({
   await expect(remoteDialog.getByRole('heading', { name: 'Scan devices locally' })).toBeVisible();
   await expect(remoteDialog.locator('#remote-next')).toBeHidden();
   await expect(remoteDialog.getByText(/pair as many browser profiles as you need/i)).toBeVisible();
-  await remoteDialog.getByRole('button', { name: 'Create QR for another device' }).click();
+  const pairAction = remoteDialog.getByRole('button', { name: 'Create QR for another device' });
+  const pairActionBeforeQr = await pairAction.boundingBox();
+  const pairingBeforeQr = await remoteDialog.locator('.remote-pairing').boundingBox();
+  await expect(remoteDialog.getByText('QR appears here')).toBeVisible();
+  await pairAction.click();
   await expect(remoteDialog.locator('#remote-qr')).toBeVisible();
+  await expect(remoteDialog.getByText('QR appears here')).toBeHidden();
+  const pairActionAfterQr = await pairAction.boundingBox();
+  const pairingAfterQr = await remoteDialog.locator('.remote-pairing').boundingBox();
+  expect(Math.abs((pairActionAfterQr.x - pairingAfterQr.x) - (pairActionBeforeQr.x - pairingBeforeQr.x))).toBeLessThan(1);
+  expect(Math.abs((pairActionAfterQr.y - pairingAfterQr.y) - (pairActionBeforeQr.y - pairingBeforeQr.y))).toBeLessThan(1);
+  expect(pairingAfterQr.width).toBe(pairingBeforeQr.width);
+  expect(pairingAfterQr.height).toBe(pairingBeforeQr.height);
+  expect((await remoteDialog.locator('#remote-qr').boundingBox()).x).toBeGreaterThan(pairActionAfterQr.x + pairActionAfterQr.width);
   await expect(remoteDialog.getByText(/QR code expires in/)).toBeVisible();
   await remoteDialog.getByRole('button', { name: 'Manage devices' }).click();
   await expect(remoteDialog.getByRole('heading', { name: 'Paired devices' })).toBeVisible();
@@ -236,10 +374,15 @@ test('shows a three-step Remote setup with separate device management', async ({
   await remoteDialog.getByRole('button', { name: 'Clear all' }).click();
   await expect(remoteDialog.getByText('No paired devices yet.')).toBeVisible();
   await expect(remoteDialog.getByRole('button', { name: 'Clear all' })).toBeHidden();
-  await remoteDialog.getByRole('button', { name: 'Setup' }).click();
-  await expect(remoteDialog.getByRole('heading', { name: 'Paired devices' })).toBeHidden();
-  await expect(remoteDialog.locator('.remote-stepper')).toBeVisible();
-  await expect(remoteDialog.locator('#remote-next')).toBeHidden();
+  // The header control remains available from device management and keeps the
+  // selected setup intact for the next Start.
+  await power.click();
+  await expect(power).toHaveText('Start Remote');
+  await expect(remoteDialog.locator('#remote-alert')).toHaveText('Remote access stopped. Your setup is ready to start again.');
+  await expect(remoteDialog.locator('#remote-alert')).toHaveAttribute('data-kind', 'success');
+  await expect(remoteDialog.getByRole('heading', { name: 'Paired devices' })).toBeVisible();
+  await expect(remoteDialog.getByRole('button', { name: 'Setup' })).toBeVisible();
+  await expect(remoteDialog.locator('#remote-qr')).toBeHidden();
   await closeRemote.click();
   await expect(remoteDialog).toBeHidden();
   await expect(remoteButton).toBeFocused();
@@ -253,7 +396,10 @@ test('does not show Remote controls on the remote surface', async ({ page }) => 
     product: 'agent-remote', version: 1, surface: 'remote', desktopMode: false,
   } }));
   await page.reload();
-  await expect(page.locator('#remote-button')).toBeHidden();
+  await expect(page.locator('#remote-button')).toHaveCount(0);
+  await expect(page.locator('#remote-dialog')).toHaveCount(0);
+  await expect(page.locator('#cloudflare-token-guide-dialog')).toHaveCount(0);
+  await expect(page.locator('.sidebar-footer')).toHaveCount(0);
 });
 
 test('starts loading Remote setup on refresh and reuses the in-flight request when opened', async ({ page }) => {
@@ -262,6 +408,7 @@ test('starts loading Remote setup on refresh and reuses the in-flight request wh
   let statusRequests = 0;
   let deviceRequests = 0;
   const remoteStateReady = new Promise((resolve) => { releaseRemoteState = resolve; });
+  await page.goto('about:blank');
   await page.route('**/api/runtime', (route) => route.fulfill({ json: {
     product: 'agent-remote', version: 1, surface: 'local', desktopMode: false,
   } }));
@@ -281,11 +428,21 @@ test('starts loading Remote setup on refresh and reuses the in-flight request wh
       id: 'phone', name: 'iPhone · Safari', createdAt: Date.now(), lastUsedAt: null,
     }] } });
   });
-  await page.reload();
+  await page.goto('/');
   await expect.poll(() => statusRequests).toBe(1);
   await expect.poll(() => deviceRequests).toBe(1);
   await page.locator('#open-sidebar').click();
-  await page.locator('#remote-button').click();
+  const remoteButton = page.locator('#remote-button');
+  await expect(remoteButton).toBeVisible();
+  await expect(remoteButton.locator('svg')).toBeVisible();
+  await expect(remoteButton).toHaveAttribute('data-state', 'loading');
+  await expect(remoteButton).toHaveAttribute('aria-busy', 'true');
+  await expect(remoteButton).toHaveAttribute('title', 'Remote');
+  await expect(remoteButton.locator('.remote-fab-label')).toHaveText('Remote');
+  await expect.poll(() => remoteButton.locator('svg').evaluate((icon) => getComputedStyle(icon).animationName))
+    .toBe('remote-loading-signal');
+  expect(await remoteButton.evaluate((button) => getComputedStyle(button, '::after').content)).toBe('none');
+  await remoteButton.click();
   expect(statusRequests).toBe(1);
   expect(deviceRequests).toBe(1);
   const dialog = page.locator('#remote-dialog');
@@ -293,6 +450,9 @@ test('starts loading Remote setup on refresh and reuses the in-flight request wh
   await expect(dialog.locator('.remote-stepper')).toBeHidden();
   await expect(dialog.getByRole('radio', { name: /Random URL/ })).not.toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Manage devices' })).toBeHidden();
+  await expect(dialog.locator('#remote-power')).toBeHidden();
+  await expect(dialog.locator('#remote-power-hint')).toBeHidden();
+  await expect(dialog.locator('#remote-power-hint')).toHaveAttribute('title', 'Remote setup is still loading.');
   const loadingBounds = await dialog.locator('#remote-loading').boundingBox();
   const dialogBounds = await dialog.boundingBox();
   expect(Math.abs((loadingBounds.x + loadingBounds.width / 2) -
@@ -300,16 +460,28 @@ test('starts loading Remote setup on refresh and reuses the in-flight request wh
   expect((await dialog.getByRole('heading', { name: 'Remote access' }).boundingBox()).height).toBeLessThan(30);
   releaseRemoteState();
   await expect(dialog.locator('#remote-loading')).toBeHidden();
+  await expect(remoteButton).toHaveAttribute('data-state', 'running');
+  await expect(remoteButton).not.toHaveAttribute('aria-busy', 'true');
+  await expect(remoteButton.locator('.remote-fab-label')).toHaveText('Remote On');
+  await expect(dialog.locator('#remote-power')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Manage devices' })).toBeVisible();
   await expect(dialog.locator('.remote-stepper')).toBeVisible();
-  await expect(dialog.getByRole('radio', { name: /Custom Domain/ })).toBeChecked();
+  await expect(dialog.locator('.remote-stepper')).toHaveCSS('border-top-width', '1px');
+  await expect(dialog.locator('input[name="remote-connection-type"][value="named"]')).toBeChecked();
   await expect(dialog.locator('.remote-connection-choice').filter({ hasText: 'Custom Domain' }))
     .toHaveAttribute('data-active', 'true');
   await expect(dialog.locator('.remote-connection-choice').filter({ hasText: 'Custom Domain' }))
     .toContainText('Custom Domain');
   await expect(dialog.locator('[data-remote-step-target="3"]')).toHaveAttribute('data-complete', 'true');
+  await expect(dialog.locator('[data-remote-step-target="3"]')).toHaveAttribute('aria-current', 'step');
+  await expect(dialog.getByRole('heading', { name: 'Scan devices locally' })).toBeVisible();
   await expect(dialog.locator('#remote-next')).toBeHidden();
+  await dialog.locator('[data-remote-step-target="1"]').click();
   await dialog.getByRole('radio', { name: /Random URL/ }).check();
-  await expect(dialog.getByRole('button', { name: 'Connect Random URL' })).toBeVisible();
+  await expect(dialog.locator('[data-remote-step-target="2"]')).toBeHidden();
+  await expect(dialog.locator('[data-remote-step-target="3"] span')).toHaveText('2');
+  await expect(dialog.locator('#remote-power')).toHaveText('Stop Remote');
+  await expect(dialog.getByRole('button', { name: 'Next: Pair devices' })).toBeVisible();
 });
 
 test('uses a safe-area aware near-edge Remote modal on a 390x844 viewport', async ({ page }) => {
@@ -332,6 +504,22 @@ test('uses a safe-area aware near-edge Remote modal on a 390x844 viewport', asyn
   expect(bounds.width).toBe(374);
   expect(bounds.height).toBe(828);
   await expect(page.locator('#remote-dialog')).toHaveCSS('border-radius', '16px');
+  const compactRemote = page.locator('#remote-dialog');
+  await compactRemote.locator('[data-remote-step-target="3"]').click();
+  await expect(compactRemote.getByRole('heading', { name: 'Scan devices locally' })).toBeVisible();
+  await expect.poll(() => compactRemote.locator('.remote-pairing').evaluate((panel) => {
+    const action = panel.querySelector('#remote-pair').getBoundingClientRect();
+    const slot = panel.querySelector('.remote-qr-slot').getBoundingClientRect();
+    return {
+      horizontalOverflow: panel.scrollWidth > panel.clientWidth,
+      qrIsRightOfAction: slot.left >= action.right,
+    };
+  })).toEqual({ horizontalOverflow: false, qrIsRightOfAction: true });
+  await compactRemote.locator('[data-remote-step-target="1"]').click();
+  await compactRemote.getByRole('radio', { name: /Custom Domain/ }).check();
+  await expect(compactRemote.locator('#remote-power')).toBeDisabled();
+  await expect(compactRemote.locator('#remote-power-hint'))
+    .toHaveAttribute('title', 'Validate a Cloudflare API token in Domain first.');
   const remoteTypography = await page.locator('#remote-dialog').evaluate((element) => ({
     button: Number.parseFloat(getComputedStyle(element.querySelector('button')).fontSize),
     heading: Number.parseFloat(getComputedStyle(element.querySelector('h2')).fontSize),
@@ -576,7 +764,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     id: 'subagent-call-spawn-3', type: 'subagent',
     title: 'Summarize the findings', role: 'summary', phase: 'done', status: 'completed',
   };
-  rootItems.push(subagentItem, secondSubagentItem, completedSubagentItem);
+  rootItems.push({
+    id: 'user-image-attachment', type: 'message', role: 'user',
+    text: 'Please inspect this\n\n![IMG_6024.png](/tmp/agent-remote-uploads-test/11111111-1111-4111-8111-111111111111.png)',
+  }, subagentItem, secondSubagentItem, completedSubagentItem);
   let currentModelId = 'qwen-local';
   let currentEffortId = 'high';
   let currentModeId = 'normal';
@@ -654,6 +845,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   let releaseHelloInput;
   let releaseQueuedInput;
   let releaseStreamingUpload;
+  let releaseFirstChildRead;
+  let holdFirstChildRead = true;
   let firstQuestion = true;
   let conversationReads = 0;
   await page.route('**/api/conversations/**', async (route) => {
@@ -776,6 +969,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     const selectedThread = new URL(route.request().url()).searchParams.get('thread');
     const child = selectedThread === 'child-thread';
     const secondChild = selectedThread === 'child-thread-2';
+    if (child && holdFirstChildRead) {
+      holdFirstChildRead = false;
+      await new Promise((resolve) => { releaseFirstChildRead = resolve; });
+    }
     return route.fulfill({ json: { conversation: child ? childConversation() : secondChild ? {
       provider: { id: 'grok', label: 'Grok' },
       thread: { id: 'child-thread-2', title: 'Review the test coverage', agentName: 'review', model: 'tera', status: 'working' },
@@ -798,6 +995,23 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     radius: getComputedStyle(button).borderRadius,
     background: getComputedStyle(button).backgroundColor,
   }))).toEqual({ border: 'none', radius: '0px', background: 'rgba(0, 0, 0, 0)' });
+  await expect(conversation.locator('#mobile-conversation-menu')).toHaveAttribute('aria-expanded', 'false');
+  await expect(conversation.locator('#mobile-conversation-menu')).toHaveClass(/ui-icon-button/);
+  await expect(conversation.locator('#mobile-conversation-menu')).toHaveAttribute('data-ui-variant', 'bare');
+  await expect(conversation.locator('#mobile-conversation-menu .sidebar-nav-icon')).toHaveCount(1);
+  await expect(conversation.locator('#mobile-conversation-menu .sidebar-nav-icon')).toHaveCSS('width', '24px');
+  await expect(conversation.locator('#mobile-conversation-menu .sidebar-nav-icon')).toHaveCSS('height', '24px');
+  await expect(conversation.locator('#mobile-conversation-menu .sidebar-nav-icon')).toHaveCSS('fill', 'none');
+  await expect(conversation.locator('#mobile-conversation-menu .sidebar-nav-icon')).toHaveCSS('stroke', 'rgb(170, 170, 176)');
+  await expect(conversation.locator('#mobile-conversation-menu .sidebar-nav-icon path')).toHaveCount(2);
+  await conversation.locator('#mobile-conversation-menu').hover();
+  await expect(conversation.locator('#mobile-conversation-menu')).toHaveCSS('cursor', 'pointer');
+  await expect(conversation.locator('#mobile-conversation-menu')).toHaveCSS('color', 'rgb(222, 222, 224)');
+  await expect(conversation.locator('#mobile-conversation-menu .sidebar-nav-icon')).toHaveCSS('stroke', 'rgb(222, 222, 224)');
+  await expect(page.locator('#open-sidebar .sidebar-nav-icon')).toHaveCSS('width', '24px');
+  await expect(page.locator('#open-sidebar .sidebar-nav-icon')).toHaveCSS('height', '24px');
+  await expect(page.locator('#open-sidebar .sidebar-nav-icon path')).toHaveCount(2);
+  await expect(conversation.locator('#mobile-conversation-menu')).not.toContainText('☰');
   const mobileStageBox = await page.locator('#terminal-stage').boundingBox();
   const mobileShellBox = await page.locator('.terminal-shell').boundingBox();
   expect(mobileStageBox.y).toBe(mobileShellBox.y);
@@ -806,6 +1020,22 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   // measuring a switch away and back. Workspace SSE intentionally makes the
   // second chat appear faster than the old polling-only path did.
   await expect(conversation.getByRole('heading', { name: 'Markdown response' })).toBeVisible({ timeout: 8_000 });
+  // The first HTTP snapshot already contains the agent lifecycle. The dock
+  // must commit with that snapshot instead of waiting for a later WebSocket
+  // replay, and its late layout slot must keep a tail-following reader pinned.
+  await expect(conversation.locator('.mobile-subagent-pill')).toBeVisible();
+  await expect.poll(() => messages.evaluate((node) =>
+    Math.max(0, node.scrollHeight - node.scrollTop - node.clientHeight))).toBeLessThanOrEqual(1);
+  await expect.poll(() => conversation.evaluate((node) => {
+    const messages = node.querySelector('#mobile-conversation-messages');
+    const pill = node.querySelector('.mobile-activity-pill-cluster').getBoundingClientRect();
+    const lastItem = [...messages.children].reverse()
+      .find((item) => item.getBoundingClientRect().height > 0)?.getBoundingClientRect();
+    return {
+      layout: getComputedStyle(messages).display,
+      topGap: Math.round(pill.top - lastItem.bottom),
+    };
+  })).toEqual({ layout: 'flex', topGap: 20 });
   const projectId = await project.getAttribute('data-project');
   const secondSessionName = await page.evaluate(async (id) => {
     const response = await fetch(`/api/projects/${encodeURIComponent(id)}/sessions`, {
@@ -817,9 +1047,20 @@ test('uses native mobile conversation history, input, and subagent navigation', 
 
   await conversation.locator('#mobile-conversation-menu').click();
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'expanded');
+  await expect(conversation.locator('#mobile-conversation-menu')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('#new-project')).toHaveCSS('font-size', '26px');
+  await expect(project.locator('.project-new-chat svg')).toHaveCSS('width', '22px');
+  await expect(project.locator('.project-new-chat svg')).toHaveCSS('height', '22px');
+  await expect(project.locator('.project-action').nth(1)).toHaveCSS('font-size', '23px');
+  await expect(project.locator('.project-action')).toHaveCount(3);
+  await expect(project.locator('.project-action').first()).toHaveClass(/ui-icon-button/);
+  await expect(project.locator('.project-delete')).toHaveAttribute('data-ui-variant', 'danger');
+  await expect(project.locator('.project-delete')).toHaveCSS('font-size', '26px');
+  await expect(project.locator('.session-close').first()).toHaveCSS('font-size', '26px');
   await expect(page.locator('#sidebar-backdrop')).toBeVisible();
   await page.locator('#sidebar-backdrop').click({ position: { x: 380, y: 420 } });
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'collapsed');
+  await expect(conversation.locator('#mobile-conversation-menu')).toHaveAttribute('aria-expanded', 'false');
   await expect(page.locator('#sidebar-backdrop')).toBeHidden();
   await conversation.locator('#mobile-conversation-menu').click();
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'expanded');
@@ -838,6 +1079,69 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await page.waitForTimeout(100);
   expect(conversationReads).toBe(readsBeforeCachedReturn);
   await expect(conversation.locator('.mobile-conversation-header')).toBeVisible();
+  const pwaNavbarChrome = await conversation.locator('.mobile-conversation-header').evaluate((header) => {
+    const root = document.documentElement;
+    const property = '--visual-viewport-inset-top';
+    const previousInset = root.style.getPropertyValue(property);
+    root.style.setProperty(property, '20px');
+    const conversationStyle = getComputedStyle(header.closest('.mobile-conversation'));
+    const headerStyle = getComputedStyle(header);
+    const homeHeaderStyle = getComputedStyle(document.querySelector('.topbar'));
+    const menuStyle = getComputedStyle(header.querySelector('#mobile-conversation-menu'));
+    const homeMenuStyle = getComputedStyle(document.querySelector('#open-sidebar'));
+    const safeAreaStyle = getComputedStyle(header, '::before');
+    const homeCanvasStyle = getComputedStyle(document.querySelector('.empty-state'));
+    const sidebarStyle = getComputedStyle(document.querySelector('.sidebar'));
+    const sidebarHeaderStyle = getComputedStyle(document.querySelector('.sidebar-header'));
+    const workspace = document.querySelector('.workspace');
+    const hadMobileConversation = workspace.dataset.mobileConversation;
+    delete workspace.dataset.mobileConversation;
+    const homeWorkspaceStyle = getComputedStyle(workspace);
+    const result = {
+      statusBarStyle: document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')?.content,
+      themeColor: document.querySelector('meta[name="theme-color"]')?.content,
+      navbarBackground: headerStyle.backgroundColor,
+      navbarHeight: headerStyle.height,
+      navbarBorder: headerStyle.borderBottomWidth,
+      navbarShadow: headerStyle.boxShadow,
+      matchesHomeNavbar: headerStyle.height === homeHeaderStyle.height
+        && headerStyle.backgroundColor === homeHeaderStyle.backgroundColor,
+      matchesHomeMenu: menuStyle.width === homeMenuStyle.width
+        && menuStyle.height === homeMenuStyle.height,
+      safeAreaBackground: safeAreaStyle.backgroundColor,
+      homeCanvasBackground: homeCanvasStyle.backgroundColor,
+      chatCanvasBackground: conversationStyle.backgroundColor,
+      safeAreaPadding: conversationStyle.paddingTop,
+      safeAreaHeight: safeAreaStyle.height,
+      homeSafeAreaPadding: homeWorkspaceStyle.paddingTop,
+      homeSafeAreaBackground: homeWorkspaceStyle.backgroundColor,
+      sidebarSafeAreaPadding: sidebarStyle.paddingTop,
+      sidebarHeaderHeight: sidebarHeaderStyle.height,
+    };
+    if (hadMobileConversation !== undefined) workspace.dataset.mobileConversation = hadMobileConversation;
+    if (previousInset) root.style.setProperty(property, previousInset);
+    else root.style.removeProperty(property);
+    return result;
+  });
+  expect(pwaNavbarChrome).toEqual({
+    statusBarStyle: 'black-translucent',
+    themeColor: '#0c0c0d',
+    navbarBackground: 'rgb(12, 12, 13)',
+    navbarHeight: '44px',
+    navbarBorder: '0px',
+    navbarShadow: 'none',
+    matchesHomeNavbar: true,
+    matchesHomeMenu: true,
+    safeAreaBackground: 'rgb(12, 12, 13)',
+    homeCanvasBackground: 'rgb(12, 12, 13)',
+    chatCanvasBackground: 'rgb(12, 12, 13)',
+    safeAreaPadding: '20px',
+    safeAreaHeight: '20px',
+    homeSafeAreaPadding: '20px',
+    homeSafeAreaBackground: 'rgb(12, 12, 13)',
+    sidebarSafeAreaPadding: '20px',
+    sidebarHeaderHeight: '44px',
+  });
   await expect(conversation.locator('#mobile-conversation-composer')).toBeVisible();
   await expect(conversation.locator('#mobile-conversation-title')).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-meta')).toBeHidden();
@@ -850,9 +1154,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('#mobile-conversation-state')).toHaveText('Ready', { timeout: 8_000 });
   await expect(conversation.locator('#mobile-conversation-boot')).toBeHidden();
   await expect(conversation.locator('.mobile-conversation-loading')).toHaveCount(0, { timeout: 8_000 });
-  await expect(conversation.locator('.mobile-message')).toHaveCount(18);
+  await expect(conversation.locator('.mobile-message')).toHaveCount(19);
   await expect(conversation.locator('.mobile-message-assistant .mobile-message-author')).toHaveCount(0);
   await expect(conversation.locator('.mobile-message-user .mobile-message-author').first()).toHaveText('You');
+  const imageMessage = conversation.locator('[data-message-id="user-image-attachment"]');
+  const imageAttachment = imageMessage.locator('.mobile-message-user-attachment');
+  await expect(imageAttachment).toHaveAttribute('aria-label', 'View IMG_6024.png');
+  await expect(imageAttachment.locator('img')).toHaveAttribute('src', new RegExp(
+    `/api/conversations/${sessionName}/attachments/11111111-1111-4111-8111-111111111111$`,
+  ));
+  await expect(imageAttachment.locator('small')).toHaveText('IMG_6024.png');
+  await expect(imageMessage.locator('.mobile-message-user-text')).toHaveText('Please inspect this');
+  await expect(imageMessage).not.toContainText('![IMG_6024.png]');
   await expect(messages).toHaveCSS('scroll-behavior', 'auto');
   await expect.poll(() => messages.evaluate((element) =>
     element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(1);
@@ -936,6 +1249,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(fileSheet.locator('.mobile-file-line .hljs-keyword').first()).toHaveText('const');
   await expect(fileSheet.locator('.mobile-file-line .hljs-string').first()).toHaveText('"ready"');
   const fileSheetPanel = fileSheet.locator('.mobile-file-sheet-panel');
+  await expect.poll(() => fileSheet.evaluate((sheet) => ({
+    body: getComputedStyle(sheet.querySelector('.mobile-file-sheet-body'), '::-webkit-scrollbar').display,
+    lines: getComputedStyle(sheet.querySelector('.mobile-file-lines'), '::-webkit-scrollbar').display,
+  }))).toEqual({ body: 'none', lines: 'none' });
   expect((await fileSheetPanel.boundingBox()).height).toBeLessThan(400);
   await fileSheet.locator('.mobile-file-lines').evaluate((lines) => {
     const row = lines.querySelector('.mobile-file-line');
@@ -973,10 +1290,71 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await goalRow.getByRole('button', { name: 'Delete goal' }).click();
   await expect.poll(() => goalActions).toContain('clear');
   await expect(goalRow).toHaveCount(0);
-  await expect(conversation.locator('#mobile-conversation-context')).toContainText('6K / 190K');
+  const contextWindow = conversation.locator('#mobile-conversation-context');
+  await expect(contextWindow).toContainText('6K / 190K');
+  await expect(contextWindow.locator('progress')).toBeVisible();
+  await expect.poll(() => contextWindow.locator('progress').evaluate((progress) => progress.value))
+    .toBeCloseTo((5_979 / 190_000) * 100, 4);
+  const emptyConversationWithContext = rootConversation();
+  emptyConversationWithContext.items = [];
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, emptyConversationWithContext);
+  await expect(contextWindow).toBeHidden();
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(contextWindow).toBeVisible();
+  const conversationWithoutUsage = rootConversation();
+  delete conversationWithoutUsage.context;
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, conversationWithoutUsage);
+  await expect(contextWindow).toBeVisible();
+  await expect(contextWindow).toContainText('0 / 190K');
+  await expect(contextWindow.locator('progress')).toBeVisible();
+  const conversationWithoutModelControl = rootConversation();
+  delete conversationWithoutModelControl.controls.model;
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, conversationWithoutModelControl);
+  await expect(conversation.locator('#mobile-conversation-model')).toBeHidden();
+  await expect(contextWindow).toBeVisible();
+  await expect(contextWindow).toContainText('6K / 190K');
+  await expect(contextWindow.locator('progress')).toBeVisible();
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
   const input = conversation.locator('#mobile-conversation-input');
   await input.click();
   await expect(conversation.locator('#mobile-conversation-composer')).toHaveAttribute('data-expanded', 'true');
+  await expect(conversation.locator('#mobile-conversation-model')).toBeVisible();
+  await expect.poll(() => conversation.evaluate((node) => {
+    const composer = node.querySelector('#mobile-conversation-composer').getBoundingClientRect();
+    const progress = node.querySelector('#mobile-conversation-context-progress').getBoundingClientRect();
+    const value = node.querySelector('#mobile-conversation-context-value').getBoundingClientRect();
+    const send = node.querySelector('#mobile-conversation-send').getBoundingClientRect();
+    const borderWidth = Number.parseFloat(getComputedStyle(node.querySelector('#mobile-conversation-composer')).borderBottomWidth);
+    return {
+      progressOnBottomBorder: Math.abs(progress.bottom - composer.bottom) <= 2,
+      progressMatchesBorderThickness: Math.abs(progress.height - borderWidth) < 0.1,
+      valueSeparatedFromSend: send.left - value.right >= 12,
+    };
+  })).toEqual({
+    progressOnBottomBorder: true,
+    progressMatchesBorderThickness: true,
+    valueSeparatedFromSend: true,
+  });
   const modelButton = conversation.locator('#mobile-conversation-model');
   const modeButton = conversation.locator('#mobile-conversation-mode');
   await expect(modelButton).toContainText('Qwen 3.8 27B');
@@ -1020,8 +1398,12 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(modelButton).toHaveAttribute('aria-busy', 'true');
   await expect(modeButton).toBeDisabled();
   const switchingSend = conversation.locator('#mobile-conversation-send');
-  await expect(switchingSend).toHaveAttribute('data-action', 'switching');
+  await expect(switchingSend).toHaveAttribute('data-action', 'send');
+  await expect(switchingSend).toHaveText('↑');
+  await expect(switchingSend).toHaveAttribute('aria-label', 'Send message');
   await expect(switchingSend).toBeDisabled();
+  await expect.poll(() => switchingSend.evaluate((button) =>
+    getComputedStyle(button, '::before').content)).toBe('none');
   const inputsBeforeBlockedSubmit = mobileInputs.length;
   await input.fill('must wait for model switching');
   await conversation.locator('#mobile-conversation-composer').evaluate((form) => form.requestSubmit());
@@ -1046,8 +1428,12 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(modeButton).toContainText('Switching…');
   await expect(modeButton).toHaveAttribute('aria-busy', 'true');
   await expect(modelButton).toBeDisabled();
-  await expect(switchingSend).toHaveAttribute('data-action', 'switching');
+  await expect(switchingSend).toHaveAttribute('data-action', 'send');
+  await expect(switchingSend).toHaveText('↑');
+  await expect(switchingSend).toHaveAttribute('aria-label', 'Send message');
   await expect(switchingSend).toBeDisabled();
+  await expect.poll(() => switchingSend.evaluate((button) =>
+    getComputedStyle(button, '::before').content)).toBe('none');
   await expect(input).toBeFocused();
   await expect.poll(() => modeChanges).toContainEqual({ modeId: 'plan' });
   await expect(modeButton).toContainText('Plan');
@@ -1123,6 +1509,17 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   expect(collapsedComposer.contextValueFontSize).toBeLessThanOrEqual(8);
   expect(collapsedComposer.contextSendGap).toBeGreaterThanOrEqual(4);
   expect(collapsedComposer.contextSendGap).toBeLessThanOrEqual(16);
+  const attachButton = conversation.locator('#mobile-conversation-attach');
+  await attachButton.focus();
+  await expect(conversation.locator('#mobile-conversation-composer')).toHaveAttribute('data-expanded', 'false');
+  const collapsedFileChooserPromise = page.waitForEvent('filechooser');
+  await attachButton.click();
+  const collapsedFileChooser = await collapsedFileChooserPromise;
+  await expect(conversation.locator('#mobile-conversation-composer')).toHaveAttribute('data-expanded', 'false');
+  await expect.poll(() => input.evaluate((node) => document.activeElement === node)).toBe(false);
+  await collapsedFileChooser.setFiles([]);
+  await expect(conversation.locator('#mobile-conversation-composer')).toHaveAttribute('data-expanded', 'false');
+  await expect.poll(() => input.evaluate((node) => document.activeElement === node)).toBe(false);
   await page.evaluate(() => { window.__mobileComposerFocusOptions.length = 0; });
   await messages.evaluate((node) => { node.scrollTop = node.scrollHeight; });
   await expect.poll(() => messages.evaluate((node) =>
@@ -1314,7 +1711,12 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => modeChanges).toContainEqual({ modeId: 'auto' });
   await expect(conversation.locator('#mobile-conversation-mode')).toContainText('Auto');
   await input.click();
-  await conversation.locator('#mobile-conversation-file').setInputFiles({
+  const focusedFileChooserPromise = page.waitForEvent('filechooser');
+  await attachButton.click();
+  const focusedFileChooser = await focusedFileChooserPromise;
+  await expect(conversation.locator('#mobile-conversation-composer')).toHaveAttribute('data-expanded', 'true');
+  await expect.poll(() => input.evaluate((node) => document.activeElement === node)).toBe(true);
+  await focusedFileChooser.setFiles({
     name: 'streaming.png', mimeType: 'image/png', buffer: Buffer.from('streaming-image'),
   });
   await expect(conversation.locator('#mobile-conversation-composer')).toHaveAttribute('data-expanded', 'true');
@@ -1340,6 +1742,37 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     });
   }, rootConversation());
   await expect(sendButton).toHaveAttribute('data-action', 'stop');
+  const activeSendIndicator = await sendButton.evaluate((node) => {
+    const button = getComputedStyle(node);
+    const ring = getComputedStyle(node, '::before');
+    const stop = getComputedStyle(node, '::after');
+    return {
+      ringAnimation: ring.animationName,
+      ringAroundButton: Math.abs(Number.parseFloat(ring.width) - Number.parseFloat(button.width)) < 0.1 &&
+        Math.abs(Number.parseFloat(ring.height) - Number.parseFloat(button.height)) < 0.1,
+      stopContent: stop.content,
+      stopWidth: stop.width,
+      stopHeight: stop.height,
+      stopRadius: stop.borderRadius,
+    };
+  });
+  await expect.poll(() => sendButton.evaluate((node) => {
+    const dangerProbe = document.createElement('span');
+    dangerProbe.style.color = 'var(--color-button-danger-text)';
+    document.body.append(dangerProbe);
+    const dangerColor = getComputedStyle(dangerProbe).color;
+    dangerProbe.remove();
+    return getComputedStyle(node).color === dangerColor &&
+      getComputedStyle(node, '::before').borderTopColor === dangerColor;
+  })).toBe(true);
+  expect(activeSendIndicator).toEqual({
+    ringAnimation: 'mobile-activity-spin',
+    ringAroundButton: true,
+    stopContent: '""',
+    stopWidth: '10px',
+    stopHeight: '10px',
+    stopRadius: '2px',
+  });
   await input.fill('queue this while Grok works');
   await expect(sendButton).toHaveAttribute('data-action', 'send');
   await expect(sendButton).toHaveAttribute('aria-label', 'Send message');
@@ -1350,8 +1783,14 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(sendButton).toHaveAttribute('data-action', 'stopping');
   await expect(sendButton).toHaveAttribute('aria-label', 'Stopping response');
   await expect.poll(() => sendButton.evaluate(
-    (node) => getComputedStyle(node, '::before').animationName,
+    (node) => getComputedStyle(node, '::after').animationName,
   )).toBe('mobile-stop-pulse');
+  await expect.poll(() => sendButton.evaluate((node) => ({
+    ringWidth: getComputedStyle(node, '::before').width,
+    ringHeight: getComputedStyle(node, '::before').height,
+    stopWidth: getComputedStyle(node, '::after').width,
+    stopHeight: getComputedStyle(node, '::after').height,
+  }))).toEqual({ ringWidth: '40px', ringHeight: '40px', stopWidth: '10px', stopHeight: '10px' });
   await expect(sendButton).toBeDisabled();
 
   currentActivity = { active: false };
@@ -1362,6 +1801,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }, rootConversation());
   await expect(sendButton).toHaveAttribute('data-action', 'send');
   await expect(sendButton).toBeDisabled();
+  await expect(sendButton).toHaveText('↑');
+  await expect.poll(() => sendButton.evaluate((node) => ({
+    ringContent: getComputedStyle(node, '::before').content,
+    stopContent: getComputedStyle(node, '::after').content,
+  }))).toEqual({ ringContent: 'none', stopContent: 'none' });
   await expect(sidebarSession).not.toHaveClass(/working/);
 
   await input.fill('/goal');
@@ -1449,11 +1893,13 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       const row = toggle.getBoundingClientRect();
       const copy = toggle.querySelector(':scope > span:first-child').getBoundingClientRect();
       const title = toggle.querySelector('.mobile-event-heading > strong');
+      const status = toggle.querySelector('.mobile-event-status').getBoundingClientRect();
       return {
-        withinLimit: (copy.right - row.left) / row.width <= 0.45,
+        pastOldLimit: copy.width / row.width > 0.45,
+        statusGap: Math.round(status.left - copy.right),
         trimmed: title.scrollWidth > title.clientWidth,
       };
-    })).toEqual({ withinLimit: true, trimmed: true });
+    })).toEqual({ pastOldLimit: true, statusGap: 12, trimmed: true });
   await expect.poll(() => conversation.evaluate((node) => {
     const selectors = [
       '[data-event-id="tool-shell"] .mobile-tool-command',
@@ -1522,17 +1968,26 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     });
   }, rootConversation());
   await expect.poll(() => conversation.locator('[data-event-id="tool-group-1"]').evaluate((group) => {
+    const groupToggle = group.querySelector(':scope > .mobile-tool-group-toggle');
+    const groupTitle = groupToggle.querySelector('strong').getBoundingClientRect();
     const groupStatus = group.querySelector(':scope > .mobile-tool-group-toggle small');
+    const groupStatusBox = groupStatus.getBoundingClientRect();
+    const toolToggle = group.querySelector('[data-event-id="tool-shell"] .mobile-event-toggle');
+    const toolCopy = toolToggle.querySelector(':scope > span:first-child').getBoundingClientRect();
     const toolStatus = group.querySelector('[data-event-id="tool-shell"] .mobile-event-status');
+    const toolStatusBox = toolStatus.getBoundingClientRect();
     return {
       groupText: groupStatus.textContent,
       groupAnimation: getComputedStyle(groupStatus).animationName,
+      groupPastOldLimit: groupTitle.width / groupToggle.getBoundingClientRect().width > 0.45,
+      groupStatusGap: Math.round(groupStatusBox.left - groupTitle.right),
       toolText: toolStatus.textContent,
       toolAnimation: getComputedStyle(toolStatus, '::before').animationName,
+      toolStatusGap: Math.round(toolStatusBox.left - toolCopy.right),
     };
   })).toEqual({
-    groupText: 'Running', groupAnimation: 'mobile-activity-spin',
-    toolText: 'Running', toolAnimation: 'mobile-activity-spin',
+    groupText: 'Running', groupAnimation: 'mobile-activity-spin', groupPastOldLimit: true, groupStatusGap: 12,
+    toolText: 'Running', toolAnimation: 'mobile-activity-spin', toolStatusGap: 12,
   });
   await expect(conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-toggle')).toHaveAttribute('aria-expanded', 'false');
   const stableToolGroup = await page.evaluate(async (nextConversation) => {
@@ -1637,6 +2092,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const subagentPill = conversation.locator('.mobile-subagent-pill');
   await expect(subagentPill).toHaveCount(1);
   await expect(subagentPill).toContainText('Agents');
+  const subagentPillHost = conversation.locator('.mobile-subagent-pill-host');
+  await expect(subagentPillHost).toHaveCSS('border-top-width', '0px');
+  await expect(subagentPillHost).toHaveCSS('border-bottom-width', '0px');
   await expect.poll(() => conversation.evaluate((node) => {
     const pill = node.querySelector('.mobile-subagent-pill').getBoundingClientRect();
     const composer = node.querySelector('#mobile-conversation-composer').getBoundingClientRect();
@@ -1688,21 +2146,73 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => conversation.locator('.mobile-activity-pill-cluster').evaluate((cluster) => {
     const pill = cluster.querySelector('.mobile-browser-pill');
     const dismiss = cluster.querySelector('.mobile-activity-pill-dismiss');
+    const icon = dismiss.querySelector('.mobile-panel-collapse-icon');
+    const dismissBox = dismiss.getBoundingClientRect();
+    const iconBox = icon.getBoundingClientRect();
     return {
       height: Math.round(cluster.getBoundingClientRect().height),
       fontSize: getComputedStyle(pill).fontSize,
       horizontalPadding: getComputedStyle(pill).paddingLeft,
       dismissWidth: Math.round(dismiss.getBoundingClientRect().width),
+      collapseIconCount: dismiss.querySelectorAll('.mobile-panel-collapse-icon').length,
+      collapseIconCentered: Math.abs((iconBox.left + iconBox.right - dismissBox.left - dismissBox.right) / 2) <= 1 &&
+        Math.abs((iconBox.top + iconBox.bottom - dismissBox.top - dismissBox.bottom) / 2) <= 1,
     };
-  })).toEqual({ height: 38, fontSize: '12px', horizontalPadding: '9px', dismissWidth: 34 });
+  })).toEqual({
+    height: 38,
+    fontSize: '12px',
+    horizontalPadding: '9px',
+    dismissWidth: 34,
+    collapseIconCount: 1,
+    collapseIconCentered: true,
+  });
+  await expect(conversation.getByRole('button', { name: 'Hide activity' })).toHaveText('');
   await page.locator('#graphics-sheet-backdrop').click({ position: { x: 8, y: 8 } });
   await expect(page.locator('#graphics-split')).toBeHidden();
+  await messages.evaluate((node) => {
+    node.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -120 }));
+    node.scrollTop = Math.max(0, node.scrollTop - 120);
+  });
+  await expect.poll(() => messages.evaluate((node) =>
+    Math.max(0, node.scrollHeight - node.scrollTop - node.clientHeight))).toBeGreaterThan(48);
+  let activityScrollAnchor = await messages.evaluate((node) => node.scrollTop);
+  // A spawn can be dismissed before its thread id arrives. The later binding
+  // is the same lifecycle and must not resurrect the activity pill on reload.
+  const persistedSubagentThreadId = subagentItem.threadId;
+  delete subagentItem.threadId;
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
   await conversation.getByRole('button', { name: 'Hide activity' }).click();
   await expect(conversation.locator('.mobile-subagent-pill-host')).toBeHidden();
+  await expect.poll(() => page.evaluate((name) => Boolean(
+    localStorage.getItem(`agent-remote:mobile-activity-dismissed:${encodeURIComponent(name)}`),
+  ), sessionName)).toBe(true);
+  await expect.poll(() => messages.evaluate((node, anchor) =>
+    Math.abs(node.scrollTop - anchor), activityScrollAnchor)).toBeLessThanOrEqual(1);
+  subagentItem.threadId = persistedSubagentThreadId;
+  await page.reload();
+  await expect(conversation).toBeVisible();
+  await expect(conversation.locator('.mobile-subagent-pill-host')).toBeHidden();
+  activityScrollAnchor = await messages.evaluate((node) => node.scrollTop);
   const activityToggle = conversation.getByRole('button', { name: 'Show activity' });
   await expect(activityToggle).toBeVisible();
+  await expect(activityToggle.locator('.mobile-panel-collapse-icon')).toHaveCount(1);
+  await expect(activityToggle.locator('.mobile-panel-collapse-icon')).toHaveCSS('width', '17px');
+  await expect.poll(() => conversation.evaluate((node) => {
+    const showIcon = node.querySelector('#mobile-conversation-activity-toggle svg');
+    const hideIcon = node.querySelector('.mobile-activity-pill-dismiss svg');
+    return showIcon?.innerHTML === hideIcon?.innerHTML;
+  })).toBe(true);
   await activityToggle.click();
   await expect(conversation.locator('.mobile-subagent-pill-host')).toBeVisible();
+  await expect.poll(() => page.evaluate((name) => (
+    localStorage.getItem(`agent-remote:mobile-activity-dismissed:${encodeURIComponent(name)}`)
+  ), sessionName)).toBeNull();
+  await expect.poll(() => messages.evaluate((node, anchor) =>
+    Math.abs(node.scrollTop - anchor), activityScrollAnchor)).toBeLessThanOrEqual(1);
   await expect(activityToggle).toBeHidden();
   await page.setViewportSize({ width: 320, height: 568 });
   await expect.poll(() => conversation.evaluate((node) => {
@@ -1732,7 +2242,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   })).toEqual(expect.objectContaining({ bottom: 0, slidesFromBelow: true }));
   expect((await conversation.locator('.mobile-subagent-sheet-panel').boundingBox()).height).toBeLessThan(420);
   await expect(conversation.locator('.mobile-subagent-group').first()).toContainText('In progress');
-  await expect(conversation.locator('.mobile-subagent-group').last()).toContainText('Success');
+  await expect(conversation.locator('.mobile-subagent-group').last()).toContainText('Done');
   await conversation.locator('.mobile-subagent-sheet-browser').click();
   await expect(conversation.locator('.mobile-subagent-sheet')).toBeHidden();
   await expect(page.locator('#graphics-split')).toBeVisible();
@@ -2453,6 +2963,14 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(sendButton).toHaveAttribute('data-action', 'sending');
   await expect(sendButton).toHaveAttribute('aria-label', 'Sending message');
   await expect(sendButton).toBeDisabled();
+  await expect.poll(() => sendButton.evaluate((node) => ({
+    ringAnimation: getComputedStyle(node, '::before').animationName,
+    ringWidth: getComputedStyle(node, '::before').width,
+    ringHeight: getComputedStyle(node, '::before').height,
+    stopContent: getComputedStyle(node, '::after').content,
+  }))).toEqual({
+    ringAnimation: 'mobile-activity-spin', ringWidth: '14px', ringHeight: '14px', stopContent: 'none',
+  });
   await expect(conversation.locator('.mobile-message[data-pending="true"]')).toContainText('hello from phone');
   await expect(conversation.locator('.mobile-message[data-pending="true"] .mobile-message-author'))
     .toHaveText('You');
@@ -2920,10 +3438,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     optionsBorderTop: '0px',
     optionsMarginTop: 8,
     optionBorders: [
-    { left: '0px', top: '0px', bottom: '0px' },
-    { left: '0px', top: '1px', bottom: '0px' },
-    { left: '0px', top: '1px', bottom: '0px' },
-  ],
+      { left: '0px', top: '0px', bottom: '0px' },
+      { left: '0px', top: '1px', bottom: '0px' },
+      { left: '0px', top: '1px', bottom: '0px' },
+    ],
     optionRadius: '0px',
     optionBackground: 'rgba(0, 0, 0, 0)',
   });
@@ -3154,13 +3672,38 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await page.setViewportSize({ width: 390, height: 844 });
   await conversation.locator('.mobile-subagent-pill').click();
   const sheet = conversation.locator('.mobile-subagent-sheet');
+  const sheetPanel = sheet.locator('.mobile-subagent-sheet-panel');
   await expect(sheet).toBeVisible();
-  await expect(sheet.getByRole('button', { name: /Inspect mobile behavior/ })).toContainText('Success');
+  await expect(sheet.getByRole('button', { name: 'Close activity', exact: true })).toHaveClass(/ui-icon-button/);
+  await expect(sheet.getByRole('button', { name: 'Close activity', exact: true })).toHaveAttribute('data-ui-variant', 'bare');
+  await expect.poll(() => sheet.evaluate((node) => ({
+    list: getComputedStyle(node.querySelector('.mobile-subagent-list'), '::-webkit-scrollbar').display,
+    messages: getComputedStyle(node.querySelector('.mobile-subagent-sheet-messages'), '::-webkit-scrollbar').display,
+  }))).toEqual({ list: 'none', messages: 'none' });
+  await expect(sheet.locator('.mobile-subagent-list-loading')).toHaveCount(0);
+  await expect(sheetPanel).toHaveCSS('transition-property', /height/);
+  await expect(sheetPanel).not.toHaveAttribute('data-expanding', 'true');
+  const openingSheetHeight = (await sheetPanel.boundingBox()).height;
+  await sheetPanel.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
+  await expect.poll(() => sheetPanel.evaluate((node) => node.getBoundingClientRect().height))
+    .toBeCloseTo(openingSheetHeight, 0);
+  await expect(sheet.getByRole('button', { name: /Inspect mobile behavior/ })).toContainText('Done');
   await expect(sheet.getByRole('button', { name: /Review the test coverage/ })).toContainText('In progress');
+  const listSheetHeight = (await sheetPanel.boundingBox()).height;
   await sheet.getByRole('button', { name: /Inspect mobile behavior/ }).click();
+  await expect(sheet.locator('.mobile-subagent-child-loading')).toHaveCount(0);
+  await expect(sheet.locator('.mobile-subagent-sheet-messages')).toBeEmpty();
+  await expect(sheetPanel).toHaveAttribute('data-navigating', 'true');
+  await expect.poll(() => sheetPanel.evaluate((panel) => panel.getBoundingClientRect().height))
+    .toBeGreaterThan(listSheetHeight + 20);
+  await expect.poll(() => Boolean(releaseFirstChildRead)).toBe(true);
+  releaseFirstChildRead();
   await expect(sheet.locator('.mobile-subagent-sheet-header strong')).toHaveText('Inspect mobile behavior');
   await expect(sheet.locator('.mobile-subagent-sheet-header small')).toHaveText('explore · read-only');
   await expect(sheet.locator('.mobile-subagent-sheet-state')).toHaveText('Done');
+  await expect(sheet.locator('.mobile-subagent-list')).toBeHidden();
+  await expect.poll(() => sheetPanel.evaluate((panel) =>
+    Math.abs(panel.getBoundingClientRect().height - innerHeight * 0.9))).toBeLessThanOrEqual(2);
   await expect(sheet.getByText('Subagent findings')).toBeVisible();
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', {
@@ -3171,10 +3714,38 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(sheet.locator('.mobile-event-thought')).toHaveCount(1);
   await expect(sheet.locator('.mobile-event-tool')).toHaveCount(1);
   await expect(conversation.locator('#mobile-conversation-composer')).toBeVisible();
+  const childSheetHeight = (await sheetPanel.boundingBox()).height;
   await sheet.getByRole('button', { name: 'Back to subagent list' }).click();
+  await expect(sheetPanel).toHaveAttribute('data-navigating', 'true');
+  await expect.poll(() => sheetPanel.evaluate((panel) => panel.getBoundingClientRect().height))
+    .toBeLessThan(childSheetHeight - 20);
   await expect(sheet.getByRole('button', { name: /Review the test coverage/ })).toBeVisible();
   await sheet.getByRole('button', { name: /Review the test coverage/ }).click();
   await expect(sheet.getByText('Second subagent findings')).toBeVisible();
+  await sheet.getByRole('button', { name: 'Close activity', exact: true }).click();
+  await expect(sheet).toBeHidden();
+  await expect(conversation.locator('.mobile-subagent-pill-host')).toBeHidden();
+  await expect.poll(() => page.evaluate((name) => Boolean(
+    localStorage.getItem(`agent-remote:mobile-activity-dismissed:${encodeURIComponent(name)}`),
+  ), sessionName)).toBe(true);
+  await expect.poll(() => page.evaluate(() => (
+    new URL(window.__conversationStreams.at(-1).url).searchParams.get('thread')
+  ))).toBe('root-thread');
+  rootItems.push({
+    id: 'subagent-call-spawn-new', type: 'subagent', title: 'New persisted event',
+    role: 'explore', phase: 'calling', status: 'working',
+  });
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(conversation.locator('.mobile-subagent-pill-host')).toBeVisible();
+  await expect.poll(() => page.evaluate((name) => (
+    localStorage.getItem(`agent-remote:mobile-activity-dismissed:${encodeURIComponent(name)}`)
+  ), sessionName)).toBeNull();
+  await conversation.locator('.mobile-subagent-pill').click();
+  await expect(sheet.getByText('New persisted event')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(sheet).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-composer')).toBeVisible();
@@ -3247,11 +3818,40 @@ test('owns the mobile surface from the first frame of a new Grok chat', async ({
   await group.getByRole('button', { name: 'New chat in Mobile ACP startup' }).click();
   await expect(page.locator('#mobile-conversation')).toBeVisible();
   const mobileLoading = page.locator('#mobile-conversation-boot');
-  await expect(mobileLoading).toContainText('Agent chat');
-  await expect(mobileLoading.getByRole('heading', { name: 'Preparing chat…' })).toBeVisible();
-  await expect(mobileLoading.locator('.empty-orbit')).toBeVisible();
-  await expect(mobileLoading.locator('.chat-loading-indicator')).toBeVisible();
-  await expect(page.locator('.mobile-conversation-header')).toBeHidden();
+  await expect(mobileLoading).toHaveAttribute('aria-label', 'Preparing chat');
+  await expect(mobileLoading).toHaveText('');
+  await expect(mobileLoading.locator('.chat-state-stack > *')).toHaveCount(1);
+  const mobileLoadingIndicator = mobileLoading.locator('.chat-loading-indicator');
+  await expect(mobileLoadingIndicator).toBeVisible();
+  const [mobileScrollShellBox, mobileLoadingBox, mobileLoadingIndicatorBox] = await Promise.all([
+    page.locator('.mobile-conversation-scroll-shell').boundingBox(),
+    mobileLoading.boundingBox(),
+    mobileLoadingIndicator.boundingBox(),
+  ]);
+  expect(Math.abs(
+    (mobileLoadingBox.y + mobileLoadingBox.height / 2)
+      - (mobileScrollShellBox.y + mobileScrollShellBox.height / 2),
+  )).toBeLessThan(2);
+  expect(Math.abs(mobileLoadingBox.height - mobileScrollShellBox.height)).toBeLessThan(2);
+  expect(Math.abs(
+    (mobileLoadingIndicatorBox.y + mobileLoadingIndicatorBox.height / 2)
+      - (mobileLoadingBox.y + mobileLoadingBox.height / 2),
+  )).toBeLessThan(2);
+  await expect.poll(() => mobileLoadingIndicator.evaluate((indicator) => {
+    const style = getComputedStyle(indicator);
+    return {
+      size: [style.width, style.height],
+      animation: style.animationName,
+      contrastingEdge: style.borderLeftColor !== style.borderTopColor,
+    };
+  })).toEqual({
+    size: ['24px', '24px'],
+    animation: 'session-spin',
+    contrastingEdge: true,
+  });
+  await expect(page.locator('.mobile-conversation-header')).toBeVisible();
+  await expect(page.locator('#mobile-conversation-menu')).toBeVisible();
+  await expect(page.locator('#mobile-conversation-menu')).toHaveCSS('pointer-events', 'auto');
   await expect(page.locator('#mobile-conversation-composer')).toBeHidden();
   await expect(page.locator('#terminal')).toBeHidden();
   await expect(page.locator('#mobile-conversation-title')).toHaveText('New Grok chat');
@@ -3260,6 +3860,15 @@ test('owns the mobile surface from the first frame of a new Grok chat', async ({
   await expect(emptyConversation.getByRole('heading', { name: 'What should we build next?' })).toBeVisible();
   await expect(emptyConversation).toContainText('Send a message below to start this chat.');
   await expect(emptyConversation).not.toContainText('No messages yet');
+  const [messageViewportBox, emptyConversationBox] = await Promise.all([
+    page.locator('#mobile-conversation-messages').boundingBox(),
+    emptyConversation.boundingBox(),
+  ]);
+  expect(Math.abs(
+    (emptyConversationBox.y + emptyConversationBox.height / 2)
+      - (messageViewportBox.y + messageViewportBox.height / 2),
+  )).toBeLessThan(5);
+  expect(emptyConversationBox.height).toBeGreaterThan(messageViewportBox.height * .9);
   await expect(page.locator('#terminal')).toBeHidden();
   const terminalWasVisible = await page.evaluate(() => {
     clearInterval(window.__terminalVisibilityTimer);
@@ -3280,7 +3889,14 @@ test('organizes chats by project, titles the first prompt, and clears projects i
   expect(sidebarHeaderBox.height).toBe(44);
   await expect(page.locator('.sidebar-header')).toHaveCSS('border-bottom-width', '0px');
   await expect(page.locator('.topbar')).toHaveCSS('border-bottom-width', '0px');
-  await expect(page.locator('.sidebar-header #toggle-sidebar')).toBeVisible();
+  const sidebarCollapse = page.locator('.sidebar-header #toggle-sidebar');
+  await expect(sidebarCollapse).toBeVisible();
+  await expect(sidebarCollapse).toHaveCSS('border-width', '0px');
+  await expect(sidebarCollapse).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await sidebarCollapse.hover();
+  await expect(sidebarCollapse).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(sidebarCollapse).toHaveCSS('color', 'rgb(192, 192, 196)');
+  await expect(sidebarCollapse).toHaveCSS('transform', 'none');
   await expect(page.locator('.sidebar-section-header #home-button')).toHaveText('Projects');
   await expect(page.locator('#open-sidebar')).toBeHidden();
   await page.locator('#new-project').hover();
@@ -3289,6 +3905,23 @@ test('organizes chats by project, titles the first prompt, and clears projects i
 
   const fallbackProject = await createProject(page, { marker: '__FIRST_PROJECT__' });
   await expect(fallbackProject.locator('.project-name')).toHaveText(fallbackProjectName);
+  await expect.poll(() => fallbackProject.locator('.session-row.active').evaluate((row) => ({
+    backgroundFades: getComputedStyle(row, '::after').backgroundImage.includes('linear-gradient'),
+    backgroundTransition: getComputedStyle(row, '::after').transitionProperty.includes('opacity'),
+    outlineRemoved: getComputedStyle(row).boxShadow === 'none',
+    accentFades: getComputedStyle(row.querySelector('.session-button'), '::before')
+      .backgroundImage.includes('linear-gradient'),
+    accentTransition: getComputedStyle(row.querySelector('.session-button'), '::before')
+      .transitionProperty.includes('opacity'),
+    accentWidth: getComputedStyle(row.querySelector('.session-button'), '::before').width,
+  }))).toEqual({
+    backgroundFades: true,
+    backgroundTransition: true,
+    outlineRemoved: true,
+    accentFades: true,
+    accentTransition: true,
+    accentWidth: '4px',
+  });
   const terminalTokens = await page.locator('#terminal').evaluate((terminal) => ({
     declaredBackground: getComputedStyle(document.documentElement)
       .getPropertyValue('--color-terminal-background').trim(),
@@ -3669,7 +4302,20 @@ test('keeps a persisted collapsed sidebar hidden while its workspace bootstrap i
 });
 
 test('persists sidebar and per-chat browser split while both panes resize', async ({ page }) => {
-  test.setTimeout(45_000);
+  test.setTimeout(60_000);
+  await page.evaluate(() => {
+    window.__sidebarResizeMessages = [];
+    const send = WebSocket.prototype.send;
+    WebSocket.prototype.send = function trackedSidebarResize(payload) {
+      try {
+        const message = JSON.parse(payload);
+        if (message.type === 'resize') window.__sidebarResizeMessages.push(message);
+      } catch {
+        // Ignore terminal input and non-JSON WebSocket frames.
+      }
+      return send.call(this, payload);
+    };
+  });
   await createProject(page, { name: 'Resizable', marker: '__RESIZE_PROJECT__' });
 
   const beforeSidebar = await page.locator('.sidebar').boundingBox();
@@ -3682,10 +4328,20 @@ test('persists sidebar and per-chat browser split while both panes resize', asyn
   const afterSidebar = await page.locator('.sidebar').boundingBox();
   expect(afterSidebar.width).toBeGreaterThan(beforeSidebar.width + 40);
 
+  await page.evaluate(() => { window.__sidebarResizeMessages.length = 0; });
   await page.locator('#toggle-sidebar').click();
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'collapsed');
   await expect(page.locator('#open-sidebar')).toBeVisible();
+  await expect(page.locator('#open-sidebar')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('#open-sidebar')).toHaveCSS('border-width', '0px');
+  await expect(page.locator('#open-sidebar')).toHaveCSS('border-radius', '0px');
+  await page.locator('#open-sidebar').hover();
+  await expect(page.locator('#open-sidebar')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+  await expect(page.locator('#open-sidebar')).toHaveCSS('color', 'rgb(192, 192, 196)');
+  await expect(page.locator('#open-sidebar .sidebar-nav-icon')).toHaveCount(1);
+  await expect(page.locator('#open-sidebar')).not.toContainText('☰');
   await page.waitForTimeout(300);
+  expect(await page.evaluate(() => window.__sidebarResizeMessages)).toHaveLength(1);
   const collapsedTerminal = await page.locator('.terminal-shell').boundingBox();
   const edgeTrigger = await page.locator('#sidebar-edge-trigger').boundingBox();
   expect(edgeTrigger.x).toBe(0);
@@ -3705,6 +4361,9 @@ test('persists sidebar and per-chat browser split while both panes resize', asyn
   await expect(page.locator('.sidebar')).not.toBeVisible();
   await page.locator('#open-sidebar').click();
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'expanded');
+  await expect(page.locator('#toggle-sidebar')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('#toggle-sidebar .sidebar-nav-icon')).toHaveCount(1);
+  await expect(page.locator('#toggle-sidebar')).not.toContainText('←');
   await page.locator('#toggle-sidebar').click();
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'collapsed');
   await page.keyboard.press('ControlOrMeta+b');
@@ -3791,6 +4450,20 @@ test('persists sidebar and per-chat browser split while both panes resize', asyn
   await expect(graphicsToggle).toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator('.graphics-terminal-instance:not([hidden]) .xterm-rows'))
     .toContainText('__PROJECT_SPLIT__');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await expect(page.locator('#graphics-split')).toBeHidden({ timeout: 5000 });
+  await expect(page.locator('#toggle-graphics-pane')).toBeHidden();
+  const mobileBrowserTab = page.locator('#graphics-mobile-reopen');
+  await expect(mobileBrowserTab).toBeVisible();
+  await expect(mobileBrowserTab).toHaveText('Browser');
+  await mobileBrowserTab.click();
+  await expect(page.locator('#graphics-split')).toBeVisible();
+  await page.locator('#graphics-sheet-backdrop').click({ position: { x: 8, y: 8 } });
+  await expect(page.locator('#graphics-split')).toBeHidden();
+  await expect(mobileBrowserTab).toBeVisible();
+  await mobileBrowserTab.click();
   await page.locator('#close-graphics-split').click();
   await expect(page.locator('#graphics-split')).toBeHidden();
   await expect(page.locator('#graphics-resizer')).toBeHidden();
@@ -4081,9 +4754,12 @@ test('keeps one loading cover until Grok conversation readiness succeeds', async
   const terminal = page.locator('#terminal .terminal-instance');
   await expect.poll(() => readinessRequests).toBeGreaterThan(0);
   await expect(loading).toBeVisible();
-  await expect(loading).toContainText('Agent chat');
-  await expect(loading.getByRole('heading', { name: 'Preparing chat…' })).toBeVisible();
-  await expect(loading.locator('.empty-orbit')).toBeVisible();
+  await expect(loading).toHaveAttribute('aria-label', 'Preparing chat');
+  await expect(loading.locator('.session-loading-orbit')).toBeHidden();
+  await expect(loading.locator('#session-loading-kicker')).toBeHidden();
+  await expect(loading.locator('#session-loading-title')).toBeHidden();
+  await expect(loading.locator('#session-loading-copy')).toBeHidden();
+  await expect(loading.locator('.chat-state-stack > :visible')).toHaveCount(1);
   await expect(loading.locator('.chat-loading-indicator')).toBeVisible();
   await expect.poll(() => loading.locator('.chat-loading-indicator').evaluate((indicator) =>
     getComputedStyle(indicator).animationName)).toBe('session-spin');

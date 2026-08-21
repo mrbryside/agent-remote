@@ -142,10 +142,10 @@ function modelControls(metadata) {
 }
 
 function contextUsage(signals, controls) {
-  const usedTokens = finiteTokenCount(signals?.contextTokensUsed);
+  const usedTokens = finiteTokenCount(signals?.contextTokensUsed) ?? 0;
   const currentWindow = controls?.options.find((model) => model.id === controls.currentId)?.contextWindowTokens;
   const windowTokens = currentWindow ?? finiteTokenCount(signals?.contextWindowTokens);
-  if (usedTokens === undefined || !windowTokens) return undefined;
+  if (!windowTokens) return undefined;
   const reported = finiteTokenCount(signals?.contextWindowUsage);
   const usagePercent = Math.max(0, Math.min(100,
     reported ?? Math.round((usedTokens / windowTokens) * 100)));
@@ -1374,6 +1374,7 @@ export function createGrokConversationProvider({
     let rerun = false;
     let latestConversation;
     let latestSignature;
+    let contextRefreshesRemaining = 0;
     const subscriptions = new Map();
     const selectedThreadId = options?.threadId || handle.rootThreadId;
 
@@ -1425,6 +1426,12 @@ export function createGrokConversationProvider({
           emit(conversation, stream);
           if (conversation.activity?.active) {
             timer = setTimeout(() => requestPublish(0), 250);
+          } else if (update?.sessionUpdate === 'turn_completed') {
+            // The completion notification can beat Grok's signals.json write.
+            // Re-read the provider snapshot shortly after settling so context
+            // usage does not remain frozen at its pre-turn value.
+            contextRefreshesRemaining = 3;
+            requestPublish(60);
           }
         }));
       }
@@ -1456,6 +1463,12 @@ export function createGrokConversationProvider({
             if (conversation.activity?.active) {
               clearTimeout(timer);
               timer = setTimeout(() => requestPublish(0), 250);
+            } else if (contextRefreshesRemaining > 0) {
+              contextRefreshesRemaining -= 1;
+              clearTimeout(timer);
+              if (contextRefreshesRemaining > 0) {
+                timer = setTimeout(() => requestPublish(0), 140);
+              }
             }
           } catch {
             if (stopped) return;

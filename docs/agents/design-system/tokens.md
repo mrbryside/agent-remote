@@ -64,6 +64,8 @@ hiding the entire conversation surface. This keeps navigation spatially stable
 and still prevents the terminal from flashing during provider discovery.
 Keep the compact header dense: its resting height is 44px, with 30px controls
 centered vertically so navigation remains visible without consuming chat space.
+The mobile sidebar owns the same top safe-area inset, and its collapse-arrow row
+uses the same 44px rhythm so neither control row crowds the iOS status bar.
 
 Browser, Plan, and Agents share one compact activity dock in normal document
 flow above the composer. Its hidden-state affordance uses a tab/panel glyph,
@@ -71,10 +73,30 @@ never the workspace hamburger, and its labels do not repeat counts that are
 already visible inside the corresponding sheet. The Goal row belongs at the
 bottom of the queue/steer dock with a restrained status accent and borderless
 pause, resume, clear, and detail actions; do not render Goal as a chat card.
+Closing a Subagent sheet with X dismisses this dock persistently for that chat.
+Keep it hidden across refresh until a new Browser event, Plan revision, or
+Subagent ID arrives; loading the same activity snapshot is not a new event.
 Activity sheets use content-fit height up to the shared viewport maximum and
-group agents into `In progress` and `Success` sections.
+group agents into `In progress` and `Done` sections.
+Every bottom-sheet view change uses the shared height and content-entry motion:
+Agent list/detail navigation animates in both directions, and Plan/File content
+uses the same restrained fade/translate entry. Pending Agent detail remains
+blank until its first snapshot arrives; do not add a loading indicator or an
+artificial minimum delay.
+Initial sheet entry must lay out the panel at its final content-fit height before
+sliding the whole panel into view. Do not animate an opening sheet's height from
+a clipped placeholder because iOS Safari can paint its content at the temporary
+bottom position before reflowing it upward.
+On mobile, the safe-area top inset is shared by both the native conversation and
+the non-conversation workspace. Home, Preparing, and Terminal navbars must start
+below the iOS status bar while their canvas continues behind it in the same
+navbar color; do not limit this contract to an active chat.
 
 Scrollbar colors use the semantic `--color-scrollbar-thumb`, `--color-scrollbar-thumb-hover`, and `--color-scrollbar-thumb-active` tokens. `public/styles.css` applies one cross-browser 6px scrollbar contract to every scroll surface: transparent, borderless tracks and corners; rounded low-contrast thumbs; and no arrow buttons. Do not hide a component scrollbar or add a component-specific track frame.
+
+Mobile bottom sheets are the exception: their primary list, message, body, and
+file viewports keep native scrolling but hide the scrollbar chrome. A transient
+gutter during the sheet height/entry animation must not shift sheet content.
 
 Syntax colors use the `--color-syntax-*` tokens. `public/syntax.js` applies the
 same Highlight.js grammar and palette to assistant code fences, file previews,

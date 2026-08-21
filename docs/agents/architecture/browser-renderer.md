@@ -18,6 +18,12 @@ the agent runtime may later kill.
 
 Each session owns one keyed renderer and one UI split state. The browser toolbar reflects the daemon's real tabs with keyed DOM nodes, so polling can update labels and active state without replacing a button during a click. Back/forward/reload, tab changes, Inspect, and Record are routed to that renderer. Refresh and session switching reattach to the same backend renderer; closing the final tab, split, session, or project must clean up the renderer and daemon.
 
+Renderer discovery must match terminal-browser's published `tty` to the
+graphics PTY that launched it. A newly listed browser key alone is not proof of
+ownership because two chats can open browsers concurrently. Builds without PTY
+metadata may use the legacy single-candidate fallback, but must never guess
+between multiple candidates.
+
 Public browser-state discovery, the shim's `ls`, and implicit `action` commands
 resolve through the same owning session and expose only that session's browser
 and tabs. Server-internal renderer discovery uses a private graphics-routing
@@ -33,9 +39,15 @@ available while the split is hidden; it is not a renderer lifecycle control.
 The sheet's close button is different from dismissal: it closes the keyed
 renderer and unregisters the owning terminal-browser process, while dragging
 down or tapping the backdrop remains the reversible hide action.
-Shutdown allows a bounded two-second grace period for the renderer to process
-`SIGINT` and unregister cleanly. Closing one session's browser must leave every
-other session-owned browser alive. The automation CLI also creates one
+Terminal-browser allows itself a bounded two-second grace period to process
+`SIGINT` and unregister cleanly. Agent Remote must not force-kill at that exact
+boundary. It waits
+past that boundary and checks that the exact browser registry key disappeared,
+then tears down the owning PTY; a bounded five-second fallback closes only that
+PTY connection when the client is wedged. Closing one session's browser must
+leave every other session-owned browser alive. A background ownership sweep
+also closes session renderers whose managed tmux chat has ended outside the
+normal delete route. The automation CLI creates one
 `agent-browser` worker for each browser key after its first action. Agent Remote
 closes that exact worker with the renderer; it never uses a global shutdown.
 At server startup it compares live worker sockets with the global browser

@@ -58,6 +58,49 @@ test('does not launch a real terminal browser when agent-remote rejects session 
   }
 });
 
+test('does not launch a long-lived real browser when a managed backend is temporarily unavailable', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'agent-remote-terminal-browser-unavailable-'));
+  const marker = join(directory, 'real-browser-ran');
+  const fakeBrowser = join(directory, 'terminal-browser-real');
+  writeFileSync(fakeBrowser, `#!/bin/sh\ntouch '${marker}'\n`);
+  chmodSync(fakeBrowser, 0o755);
+  try {
+    const result = await runShim(['open', 'https://example.test'], {
+      AGENT_REMOTE_URL: 'http://127.0.0.1:1',
+      AGENT_REMOTE_WEB: '',
+      AGENT_REMOTE_ACP: '',
+      TERM_PROGRAM: 'agent-remote',
+      TERMINAL_BROWSER_REAL: fakeBrowser,
+    });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /agent-remote backend/i);
+    assert.equal(existsSync(marker), false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('preserves host terminal-browser fallback outside an agent-remote terminal', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'agent-remote-terminal-browser-host-'));
+  const marker = join(directory, 'real-browser-ran');
+  const fakeBrowser = join(directory, 'terminal-browser-real');
+  writeFileSync(fakeBrowser, `#!/bin/sh\ntouch '${marker}'\n`);
+  chmodSync(fakeBrowser, 0o755);
+  try {
+    const result = await runShim(['open', 'https://example.test'], {
+      AGENT_REMOTE_URL: 'http://127.0.0.1:1',
+      AGENT_REMOTE_WEB: '',
+      AGENT_REMOTE_ACP: '',
+      TERM_PROGRAM: 'external-terminal',
+      TERMINAL_BROWSER_REAL: fakeBrowser,
+    });
+    assert.equal(result.code, 0);
+    assert.equal(existsSync(marker), true);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('lists only the browser state returned for the resolved agent-remote session', async () => {
   await withBackend((request, response) => {
     assert.match(request.url, /^\/api\/control\/browser-state\?/);

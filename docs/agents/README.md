@@ -6,7 +6,7 @@ This folder holds context documents for agents. Treat every `index.md` as a jump
 | --- | --- |
 | Root project index | [AGENTS.md](../../AGENTS.md) |
 | Runtime, persistence, browser rendering, Remote access, or conversation providers | [Architecture](architecture/index.md) |
-| Design tokens and visual implementation rules | [Design system](design-system/index.md) |
+| Shared UI components, design tokens, and visual implementation rules | [Design system](design-system/index.md) |
 | Setup, guardrails, testing, and packaging workflow | [Workflows](workflows/index.md) |
 
 ## Maintenance note

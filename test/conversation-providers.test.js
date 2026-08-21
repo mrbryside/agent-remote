@@ -1219,9 +1219,10 @@ test('Grok provider exposes advertised models, context usage, and changes the ro
       } },
     ],
   };
+  let signals = { contextTokensUsed: 5_979, contextWindowTokens: 190_000, contextWindowUsage: 3 };
   const provider = createGrokConversationProvider({
     acpClient: data.acpClient,
-    loadSignals: async () => ({ contextTokensUsed: 5_979, contextWindowTokens: 190_000, contextWindowUsage: 3 }),
+    loadSignals: async () => signals,
   });
   const registry = createConversationRegistry({ providers: [provider] });
   const session = {
@@ -1243,9 +1244,56 @@ test('Grok provider exposes advertised models, context usage, and changes the ro
     ],
   });
   assert.deepEqual(result.context, { usedTokens: 5_979, windowTokens: 190_000, usagePercent: 3 });
+  signals = undefined;
+  const resultBeforeSignals = await registry.read(session);
+  assert.deepEqual(resultBeforeSignals.context, { usedTokens: 0, windowTokens: 190_000, usagePercent: 0 });
 
   await registry.setModel(session, 'grok-4.6');
   assert.deepEqual(data.modelChanges, [{
     sessionId: data.parentId, cwd: data.cwd, modelId: 'grok-4.6',
   }]);
+});
+
+test('Grok provider refreshes context usage after a streamed turn completes', async () => {
+  const data = await fixture();
+  data.snapshots.get(data.parentId).metadata.models = {
+    currentModelId: 'qwen-local',
+    availableModels: [
+      { modelId: 'qwen-local', name: 'Qwen', _meta: { totalContextTokens: 190_000 } },
+    ],
+  };
+  let signals = { contextTokensUsed: 1_000, contextWindowTokens: 190_000 };
+  const provider = createGrokConversationProvider({
+    acpClient: data.acpClient,
+    loadSignals: async () => signals,
+  });
+  const session = {
+    name: 'ar-chat', cwd: data.cwd,
+    command: `grok --leader --session-id ${data.parentId}`, conversationThreadId: data.parentId,
+  };
+  const handle = await provider.detect(session);
+  const updates = [];
+  const stop = await provider.watch(handle, {}, (conversation) => updates.push(conversation));
+  assert.equal(updates.at(-1).context.usedTokens, 1_000);
+
+  data.acpClient.append(data.parentId, {
+    timestamp: 8, params: { update: { sessionUpdate: 'turn_started' } },
+  });
+  data.acpClient.append(data.parentId, {
+    timestamp: 9, params: { update: {
+      sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'A new answer.' },
+    } },
+  });
+  signals = { contextTokensUsed: 2_500, contextWindowTokens: 190_000 };
+  data.acpClient.append(data.parentId, {
+    timestamp: 10, params: { update: { sessionUpdate: 'turn_completed' } },
+  });
+
+  const deadline = Date.now() + 1_500;
+  while (updates.at(-1)?.context?.usedTokens !== 2_500 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(updates.at(-1).activity.active, false);
+  assert.equal(updates.at(-1).context.usedTokens, 2_500);
+  await stop();
 });
