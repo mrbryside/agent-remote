@@ -1,4 +1,5 @@
 import { api } from './api-client.js';
+import { installDialogBackdropDismiss } from './ui-components.js';
 
 const POLL_MS = 3_000;
 const HOSTNAME_DELAY_MS = 350;
@@ -24,6 +25,7 @@ function setText(element, value) {
 
 /** Bootstrap only after the local runtime explicitly identifies itself. */
 export async function bootstrapRemoteControl() {
+  if (matchMedia('(max-width: 760px)').matches) return;
   const button = document.querySelector('#remote-button');
   const buttonLabel = button?.querySelector('.remote-fab-label');
   const dialog = document.querySelector('#remote-dialog');
@@ -98,6 +100,8 @@ export async function bootstrapRemoteControl() {
   const clearToken = $('#remote-clear-token');
   const tokenGuideOpen = $('#remote-token-guide-open');
   const tokenGuideDialog = document.querySelector('#cloudflare-token-guide-dialog');
+  installDialogBackdropDismiss(dialog);
+  installDialogBackdropDismiss(tokenGuideDialog);
   const zoneInput = $('#remote-zone');
   const zoneOptions = $('#remote-zone-options');
   const subdomain = $('#remote-subdomain');

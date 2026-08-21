@@ -57,6 +57,35 @@ test.afterEach(async ({ request }) => {
   await cleanWorkspace(request);
 });
 
+test('keeps Remote administration out of the compact mobile surface', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await expect(page.locator('.local-remote-control')).toBeHidden();
+  await expect(page.locator('#remote-button')).toBeHidden();
+  await expect(page.locator('#remote-dialog')).toBeHidden();
+  await page.waitForTimeout(100);
+  const remoteAdminRequests = await page.evaluate(() => performance.getEntriesByType('resource')
+    .map(({ name }) => name)
+    .filter((url) => new URL(url).pathname.startsWith('/api/remote/')));
+  expect(remoteAdminRequests).toEqual([]);
+});
+
+test('dismisses every native modal only from its outside backdrop', async ({ page }) => {
+  const dialogIds = ['create-dialog', 'remote-dialog', 'cloudflare-token-guide-dialog'];
+  for (const id of dialogIds) {
+    await expect.poll(() => page.locator(`#${id}`).getAttribute('data-backdrop-dismiss')).toBe('true');
+    await page.locator(`#${id}`).evaluate((dialog) => dialog.showModal());
+    await expect(page.locator(`#${id}`)).toBeVisible();
+
+    const bounds = await page.locator(`#${id}`).boundingBox();
+    await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + 24);
+    await expect(page.locator(`#${id}`)).toBeVisible();
+
+    await page.mouse.click(1, 1);
+    await expect(page.locator(`#${id}`)).toBeHidden();
+  }
+});
+
 test('keeps Remote configuration separate from the header Start and Stop control', async ({ page }) => {
   let tunnel = { mode: 'none', state: 'stopped' };
   let named = { zoneName: 'example.com', hostname: 'terminal.example.com', desiredState: 'stopped' };
@@ -2722,7 +2751,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       gap: Math.round(rows[1].top - rows[0].bottom),
       gutter: getComputedStyle(panel).scrollbarGutter,
     };
-  })).toEqual({ firstHeight: 36, secondHeight: 36, gap: 0, gutter: 'auto' });
+  })).toEqual({ firstHeight: 36, secondHeight: 36, gap: 0, gutter: 'stable' });
+  await expect.poll(() => messages.evaluate((panel) => getComputedStyle(panel).scrollbarGutter)).toBe('stable');
   await expect.poll(() => toolPanel.evaluate((panel) => {
     const group = panel.parentElement.getBoundingClientRect();
     const panelBox = panel.getBoundingClientRect();
@@ -2878,7 +2908,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(fileSheet).toBeHidden();
   await conversation.getByRole('button', { name: /Ran node --test/ }).click();
   const shellDetail = conversation.locator('[data-event-id="tool-shell"] .mobile-tool-command');
-  await expect(shellDetail.locator('.mobile-tool-command-line > i')).toHaveText('$');
+  await expect(shellDetail.locator('.mobile-tool-command-icon')).toHaveCount(1);
+  await expect(shellDetail.locator('.mobile-tool-command-line')).not.toContainText('$');
   await expect(shellDetail.locator('.mobile-tool-command-line > code')).toContainText('node --test');
   await expect(shellDetail.locator('.mobile-tool-command-output')).toContainText('test output line 1');
   await expect(conversation.locator('[data-event-id="tool-shell"] .mobile-event-detail')).toHaveCount(0);
@@ -2892,7 +2923,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
 
   await conversation.getByRole('button', { name: /List Files/ }).click();
   const listDetail = conversation.locator('[data-event-id="tool-list"] .mobile-tool-command');
-  await expect(listDetail.locator('.mobile-tool-command-line > i')).toHaveText('$');
+  await expect(listDetail.locator('.mobile-tool-command-icon')).toHaveCount(1);
+  await expect(listDetail.locator('.mobile-tool-command-line')).not.toContainText('$');
   await expect(listDetail.locator('.mobile-tool-command-line > code')).toHaveText('List Files src');
   await expect(listDetail.locator('.mobile-tool-command-output')).toHaveText('Found files');
   await expect(conversation.locator('[data-event-id="tool-list"] .mobile-event-detail')).toHaveCount(0);

@@ -8,6 +8,23 @@ const iconDefinitions = {
       fill: 'none', stroke: 'currentColor', 'stroke-width': '1.8', 'stroke-linejoin': 'round',
     }],
   },
+  terminal: {
+    viewBox: '0 0 20 20',
+    elements: [
+      {
+        tag: 'rect', x: '2.5', y: '3.5', width: '15', height: '13', rx: '2.5',
+        fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5',
+      },
+      {
+        d: 'm5.5 7 2.5 2.5L5.5 12', fill: 'none', stroke: 'currentColor',
+        'stroke-width': '1.5', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+      },
+      {
+        d: 'M10.5 12h3.5', fill: 'none', stroke: 'currentColor',
+        'stroke-width': '1.5', 'stroke-linecap': 'round',
+      },
+    ],
+  },
   'panel-collapse': {
     viewBox: '0 0 20 20',
     elements: [
@@ -70,4 +87,18 @@ export function createIconButton(options = {}) {
   const button = document.createElement('button');
   if (options.className) button.className = options.className;
   return configureIconButton(button, options);
+}
+
+export function installDialogBackdropDismiss(dialog) {
+  if (!dialog || dialog.dataset.backdropDismiss === 'true') return;
+  dialog.dataset.backdropDismiss = 'true';
+  dialog.addEventListener('click', (event) => {
+    if (!dialog.open || event.target !== dialog) return;
+    const bounds = dialog.getBoundingClientRect();
+    const clickedInside = event.clientX >= bounds.left
+      && event.clientX <= bounds.right
+      && event.clientY >= bounds.top
+      && event.clientY <= bounds.bottom;
+    if (!clickedInside) dialog.close();
+  });
 }

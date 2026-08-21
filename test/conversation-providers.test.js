@@ -182,6 +182,50 @@ test('Grok provider maps a managed tmux process to messages and subagents', asyn
   assert.ok(!cleared.items.some((item) => item.type === 'message' && item.text.includes('/goal clear')));
 });
 
+test('Grok provider identifies SKILL.md reads as skill activity', async () => {
+  const data = await fixture();
+  data.snapshots.get(data.parentId).events = [
+    { timestamp: 1, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'skill-1', title: 'read_file',
+      rawInput: { target_file: '/Users/test/.agents/skills/terminal-browser/SKILL.md' },
+      _meta: { 'x.ai/tool': { name: 'read_file', kind: 'read', label: 'Read' } },
+    } } },
+    { timestamp: 2, params: { update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'skill-1', status: 'completed',
+      locations: [{ path: '/Users/test/.agents/skills/terminal-browser/SKILL.md' }],
+      rawOutput: { FileContent: {
+        absolute_path: '/Users/test/.agents/skills/terminal-browser/SKILL.md',
+        content: '1→---\n2→name: terminal-browser',
+      } },
+    } } },
+    { timestamp: 2.1, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'command-1', title: 'execute',
+      rawInput: { command: 'terminal-browser open example.com' },
+      _meta: { 'x.ai/tool': { name: 'execute', kind: 'execute', label: 'Execute' } },
+    } } },
+    { timestamp: 2.2, params: { update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'command-1', status: 'completed',
+    } } },
+    { timestamp: 3, params: { update: { sessionUpdate: 'turn_completed' } } },
+  ];
+  const registry = createConversationRegistry({
+    providers: [createGrokConversationProvider({ acpClient: data.acpClient })],
+  });
+  const result = await registry.read({
+    name: 'ar-chat', cwd: data.cwd,
+    command: `grok --leader --session-id ${data.parentId}`,
+    conversationThreadId: data.parentId,
+  });
+
+  const group = result.items.find((item) => item.type === 'tool_group');
+  assert.equal(group.title, 'Read 1 skill, Ran 1 command');
+  const tool = group.tools.find((item) => item.kind === 'skill');
+  assert.equal(tool.kind, 'skill');
+  assert.equal(tool.title, 'Read 1 skill');
+  assert.equal(tool.subject, 'terminal-browser');
+  assert.equal(tool.file.path, '/Users/test/.agents/skills/terminal-browser/SKILL.md');
+});
+
 test('Grok provider returns a bounded recent history window for mobile', async () => {
   const data = await fixture();
   const snapshot = data.snapshots.get(data.parentId);

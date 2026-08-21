@@ -1,77 +1,14 @@
-import { open, readFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
-
-const sessionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-async function loadGrokSignals({ cwd, sessionId }) {
-  if (!sessionIdPattern.test(sessionId || '') || typeof cwd !== 'string' || !cwd) return undefined;
-  const grokHome = process.env.GROK_HOME?.trim() || join(homedir(), '.grok');
-  const file = join(grokHome, 'sessions', encodeURIComponent(cwd), sessionId, 'signals.json');
-  try {
-    const source = await readFile(file, 'utf8');
-    if (source.length > 1024 * 1024) return undefined;
-    const signals = JSON.parse(source);
-    return signals && typeof signals === 'object' && !Array.isArray(signals) ? signals : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function readFileTail(file, maximum = 128 * 1024) {
-  let handle;
-  try {
-    handle = await open(file, 'r');
-    const { size } = await handle.stat();
-    const length = Math.min(size, maximum);
-    const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, Math.max(0, size - length));
-    const source = buffer.toString('utf8');
-    return size > length ? source.slice(source.indexOf('\n') + 1) : source;
-  } catch {
-    return '';
-  } finally {
-    await handle?.close().catch(() => {});
-  }
-}
-
-async function loadGrokLifecycle({ cwd, sessionId }) {
-  if (!sessionIdPattern.test(sessionId || '') || typeof cwd !== 'string' || !cwd) return undefined;
-  const grokHome = process.env.GROK_HOME?.trim() || join(homedir(), '.grok');
-  const file = join(grokHome, 'sessions', encodeURIComponent(cwd), sessionId, 'updates.jsonl');
-  const lines = (await readFileTail(file)).trimEnd().split('\n');
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    try {
-      const record = JSON.parse(lines[index]);
-      const kind = record?.params?.update?.sessionUpdate;
-      if (!['turn_started', 'user_message_chunk', 'turn_completed'].includes(kind)) continue;
-      const agentTimestamp = Number(record?.params?._meta?.agentTimestampMs);
-      const persistedTimestamp = Number(record?.timestamp);
-      const changedAt = Number.isFinite(agentTimestamp) && agentTimestamp > 0
-        ? agentTimestamp
-        : Number.isFinite(persistedTimestamp) && persistedTimestamp > 0
-          ? persistedTimestamp * (persistedTimestamp < 10_000_000_000 ? 1_000 : 1)
-          : 0;
-      return { active: kind !== 'turn_completed', changedAt };
-    } catch {
-      // A process may be appending the final line while it is read. Ignore a
-      // partial record and continue to the preceding complete boundary.
-    }
-  }
-  return undefined;
-}
-
-function authoritativeTurn(snapshot, lifecycle) {
-  const observedAt = Number(snapshot.turn?.changedAt) || 0;
-  const persistedAt = Number(lifecycle?.changedAt) || 0;
-  if (lifecycle && persistedAt >= observedAt) return lifecycle.active;
-  return snapshot.turn?.active;
-}
-
-function finiteTokenCount(value) {
-  const number = Number(value);
-  return Number.isFinite(number) && number >= 0 ? Math.round(number) : undefined;
-}
+import { basename } from 'node:path';
+import {
+  authoritativeTurn,
+  contextUsage,
+  finiteTokenCount,
+  isGrokSessionId,
+  loadGrokLifecycle,
+  loadGrokSignals,
+  modelControls,
+  shortText,
+} from './grok-state.js';
 
 function textContent(content) {
   if (typeof content === 'string') return content;
@@ -84,72 +21,6 @@ function userMessageContent(content) {
   const text = textContent(content);
   const match = text.match(/^The user sent a message while you were working:\n<user_query>\n([\s\S]*?)\n<\/user_query>\nMake sure to complete any unfinished tasks from previous turns\.?$/);
   return match ? match[1] : text;
-}
-
-function shortText(value, fallback, length = 160) {
-  if (typeof value !== 'string') return fallback;
-  const normalized = value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return normalized.slice(0, length) || fallback;
-}
-
-function modelProvider(model) {
-  const supplied = model?.provider ?? model?._meta?.provider ?? model?._meta?.providerId;
-  if (supplied && typeof supplied === 'object') {
-    const label = shortText(supplied.label || supplied.name || supplied.id, '', 80);
-    const id = shortText(supplied.id || supplied.providerId || supplied.name, '', 80).toLowerCase();
-    if (id && label) return { id, label };
-  }
-  if (typeof supplied === 'string') {
-    const label = shortText(supplied, '', 80);
-    if (label) return { id: label.toLowerCase(), label };
-  }
-  const modelId = shortText(model?.modelId, '', 80).toLowerCase();
-  if (modelId.startsWith('grok')) return { id: 'xai', label: 'xAI' };
-  if (modelId === 'qwen-local' || modelId.endsWith('-local')) return { id: 'local', label: 'Local' };
-  return { id: 'other', label: 'Other' };
-}
-
-function modelControls(metadata) {
-  const models = metadata?.models;
-  const detail = metadata?._meta?.['x.ai/sessionDetail'] || {};
-  const options = (Array.isArray(models?.availableModels) ? models.availableModels : [])
-    .map((model) => {
-      const efforts = (Array.isArray(model?._meta?.reasoningEfforts) ? model._meta.reasoningEfforts : [])
-        .map((effort) => ({
-          id: shortText(effort?.id || effort?.value, '', 80),
-          value: shortText(effort?.value || effort?.id, '', 80),
-          label: shortText(effort?.label, shortText(effort?.id || effort?.value, 'Effort', 80), 120),
-          description: shortText(effort?.description, '', 300),
-          default: effort?.default === true,
-        }))
-        .filter((effort) => effort.id && effort.value);
-      const selectedEffort = shortText(model?._meta?.reasoningEffort, '', 80);
-      const currentEffort = efforts.find((effort) => effort.value === selectedEffort || effort.id === selectedEffort)
-        ?? efforts.find((effort) => effort.default);
-      return {
-        id: shortText(model?.modelId, '', 80),
-        label: shortText(model?.name, shortText(model?.modelId, 'Model', 80), 120),
-        provider: modelProvider(model),
-        description: shortText(model?.description, '', 300),
-        contextWindowTokens: finiteTokenCount(model?._meta?.totalContextTokens ?? model?._meta?.contextLimit),
-        ...(efforts.length ? { currentEffortId: currentEffort?.id, efforts } : {}),
-      };
-    })
-    .filter((model) => model.id);
-  const currentId = shortText(models?.currentModelId || detail.currentModelId, '', 80);
-  if (!currentId || !options.some((model) => model.id === currentId)) return undefined;
-  return { currentId, options };
-}
-
-function contextUsage(signals, controls) {
-  const usedTokens = finiteTokenCount(signals?.contextTokensUsed) ?? 0;
-  const currentWindow = controls?.options.find((model) => model.id === controls.currentId)?.contextWindowTokens;
-  const windowTokens = currentWindow ?? finiteTokenCount(signals?.contextWindowTokens);
-  if (!windowTokens) return undefined;
-  const reported = finiteTokenCount(signals?.contextWindowUsage);
-  const usagePercent = Math.max(0, Math.min(100,
-    reported ?? Math.round((usedTokens / windowTokens) * 100)));
-  return { usedTokens, windowTokens, usagePercent };
 }
 
 function boundedText(value, length = 32_768) {
@@ -264,6 +135,35 @@ function toolSubject(update) {
   return shortText(value, '', 180);
 }
 
+function skillReadInfo(update, item) {
+  const input = subagentInput(update);
+  const paths = [
+    input.target_file,
+    input.file_path,
+    input.path,
+    update.rawOutput?.FileContent?.absolute_path,
+    item?.file?.path,
+    ...(Array.isArray(update.locations) ? update.locations.map((location) => location?.path) : []),
+    ...(Array.isArray(item?.locations) ? item.locations : []),
+  ];
+  for (const value of paths) {
+    if (typeof value !== 'string') continue;
+    const normalized = value.replaceAll('\\', '/');
+    const match = normalized.match(/(?:^|\/)skills\/(?:[^/]+\/)*([^/]+)\/SKILL\.md$/i);
+    if (match) return { path: value, name: match[1] };
+  }
+  return undefined;
+}
+
+function classifySkillRead(item, update) {
+  if (!['read', 'skill'].includes(item.kind)) return;
+  const skill = skillReadInfo(update, item);
+  if (!skill) return;
+  item.kind = 'skill';
+  item.title = 'Read 1 skill';
+  item.subject = shortText(skill.name, 'skill', 180);
+}
+
 function isPlanArtifactTool(update) {
   const meta = toolMeta(update);
   const input = subagentInput(update);
@@ -304,6 +204,7 @@ function toolActivity(update) {
 const toolSummaryLabels = new Map([
   ['list', ['Listed', 'dir', 'dirs']],
   ['read', ['Read', 'file', 'files']],
+  ['skill', ['Read', 'skill', 'skills']],
   ['edit', ['Edited', 'file', 'files']],
   ['write', ['Wrote', 'file', 'files']],
   ['search', ['Searched', 'time', 'times']],
@@ -470,7 +371,7 @@ function subagentTaskId(update) {
     ? outputText.match(/(?:subagent_id|task_id):\s*([0-9a-f-]{36})/i)?.[1]
     : undefined;
   const id = outputId ?? inputId ?? textId;
-  return sessionIdPattern.test(id || '') ? id : undefined;
+  return isGrokSessionId(id) ? id : undefined;
 }
 
 function timeline(updates, { turnActive } = {}) {
@@ -535,7 +436,7 @@ function timeline(updates, { turnActive } = {}) {
   };
 
   const bindSubagent = (item, threadId) => {
-    if (!item || !sessionIdPattern.test(threadId || '')) return item;
+    if (!item || !isGrokSessionId(threadId)) return item;
     item.threadId = threadId;
     item.phase = item.status === 'completed' ? 'done' : 'running';
     children.set(threadId, item);
@@ -771,6 +672,7 @@ function timeline(updates, { turnActive } = {}) {
       if (file) item.file = file;
       const matches = toolMatches(update);
       if (matches.length) item.matches = matches;
+      classifySkillRead(item, update);
       if (typeof update.status === 'string') {
         const nextStatus = normalizedStatus(update.status, item.status);
         if (!settledTools.has(id) || ['completed', 'failed', 'cancelled'].includes(nextStatus)) {
@@ -783,7 +685,7 @@ function timeline(updates, { turnActive } = {}) {
     }
     if (kind === 'subagent_spawned') {
       const id = update.child_session_id || update.subagent_id;
-      if (!sessionIdPattern.test(id || '')) return;
+      if (!isGrokSessionId(id)) return;
       let item = children.get(id);
       if (!item) {
         item = matchingPendingSubagent(update);
@@ -813,7 +715,7 @@ function timeline(updates, { turnActive } = {}) {
     }
     if (kind === 'subagent_finished') {
       const id = update.child_session_id || update.subagent_id;
-      if (!sessionIdPattern.test(id || '')) return;
+      if (!isGrokSessionId(id)) return;
       let child = children.get(id);
       if (!child) {
         child = {
@@ -1502,7 +1404,7 @@ export function createGrokConversationProvider({
 
     async detect(session) {
       if (!grokCommand(session.command) || !/(?:^|\s)--leader(?:\s|$)/i.test(session.command || '')) return undefined;
-      if (!sessionIdPattern.test(session.conversationThreadId || '')) return undefined;
+      if (!isGrokSessionId(session.conversationThreadId)) return undefined;
       return { cwd: session.cwd, rootThreadId: session.conversationThreadId };
     },
 

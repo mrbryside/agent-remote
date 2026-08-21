@@ -1,7 +1,14 @@
 import { api, apiUrl } from './api-client.js';
 import { createMobileConversationView } from './mobile-conversation.js';
 import { derivePromptTitle } from './prompt-title.js';
-import { createIcon, createIconButton } from './ui-components.js';
+import { createTerminalSnapshotCache } from './terminal-snapshots.js';
+import { createIcon, createIconButton, installDialogBackdropDismiss } from './ui-components.js';
+import { installVisualViewportSync } from './visual-viewport.js';
+import {
+  browserPointerPosition,
+  createBrowserMediaController,
+  parseBrowserFrame,
+} from './browser-media.js';
 
 const terminalElement = document.querySelector('#terminal');
 const statusElement = document.querySelector('#status');
@@ -46,7 +53,6 @@ const sidebarEdgeTrigger = document.querySelector('#sidebar-edge-trigger');
 const toggleSidebarButton = document.querySelector('#toggle-sidebar');
 const openSidebarButton = document.querySelector('#open-sidebar');
 const mobileConversationMenuButton = document.querySelector('#mobile-conversation-menu');
-const token = new URLSearchParams(location.search).get('token');
 const SIDEBAR_STORAGE_KEY = 'agent-remote-sidebar-collapsed';
 const SIDEBAR_WIDTH_STORAGE_KEY = 'agent-remote-sidebar-width';
 const compactSidebarMedia = matchMedia('(max-width: 760px)');
@@ -61,6 +67,8 @@ const browserCursorValues = new Set([
   'col-resize', 'row-resize', 'n-resize', 'e-resize', 's-resize', 'w-resize', 'ne-resize', 'nw-resize',
   'se-resize', 'sw-resize', 'ew-resize', 'ns-resize', 'nesw-resize', 'nwse-resize', 'zoom-in', 'zoom-out',
 ]);
+
+installDialogBackdropDismiss(dialog);
 
 const rootStyles = getComputedStyle(document.documentElement);
 function designToken(name, fallback) {
@@ -132,7 +140,11 @@ let activeTerminalRuntime;
 let terminalRuntimeGeneration = 0;
 let workspaceHydrated = false;
 let sidebarPeekCloseTimer;
-const terminalSnapshots = readTerminalSnapshots();
+const terminalSnapshotCache = createTerminalSnapshotCache({
+  storage: sessionStorage,
+  key: TERMINAL_SNAPSHOTS_STORAGE_KEY,
+});
+const { snapshots: terminalSnapshots } = terminalSnapshotCache;
 const mobileConversation = createMobileConversationView({
   api,
   apiUrl,
@@ -293,6 +305,19 @@ const mobileConversation = createMobileConversationView({
     graphicsMobileAgentsButton.hidden = !available;
   },
 });
+const browserMedia = createBrowserMediaController({
+  setLoading: setGraphicsLoading,
+  onFirstFrame() {
+    updateGraphicsSplit();
+    requestAnimationFrame(() => requestAnimationFrame(fitTerminals));
+  },
+});
+const {
+  queueFrame: queueBrowserFrame,
+  startRecording: startBrowserRecording,
+  stopRecording: stopBrowserRecording,
+  updateRecordButton: updateBrowserRecordButton,
+} = browserMedia;
 
 function readStoredIdSet(key) {
   try {
@@ -303,124 +328,20 @@ function readStoredIdSet(key) {
   }
 }
 
-function readTerminalSnapshots() {
-  try {
-    const stored = JSON.parse(sessionStorage.getItem(TERMINAL_SNAPSHOTS_STORAGE_KEY) || '{}');
-    return new Map(Object.entries(stored).filter(([, snapshot]) =>
-      snapshot?.format === 2 && Array.isArray(snapshot.ansiLines) && Number.isFinite(snapshot.savedAt)));
-  } catch {
-    return new Map();
-  }
-}
-
-function saveTerminalSnapshots() {
-  try {
-    const newest = [...terminalSnapshots.entries()]
-      .sort((left, right) => right[1].savedAt - left[1].savedAt)
-      .slice(0, 12);
-    terminalSnapshots.clear();
-    for (const [name, snapshot] of newest) terminalSnapshots.set(name, snapshot);
-    sessionStorage.setItem(TERMINAL_SNAPSHOTS_STORAGE_KEY, JSON.stringify(Object.fromEntries(newest)));
-  } catch {
-    // Terminal caching is an acceleration only; storage limits must never
-    // interrupt the live PTY.
-  }
-}
-
 function removeTerminalSnapshot(sessionName) {
-  if (!terminalSnapshots.delete(sessionName)) return;
-  saveTerminalSnapshots();
+  terminalSnapshotCache.remove(sessionName);
 }
 
 function terminalSnapshotSequence(snapshot) {
-  const rows = snapshot.ansiLines.slice(0, Math.max(1, snapshot.rows || snapshot.ansiLines.length));
-  const screen = rows.map((line, index) => `\x1b[${index + 1};1H${line}`).join('');
-  const cursorRow = Math.max(1, Math.min(rows.length || 1, snapshot.cursorRow || 1));
-  const cursorColumn = Math.max(1, Math.min(snapshot.cols || 1, snapshot.cursorColumn || 1));
-  return `\x1b[0m\x1b[2J\x1b[H${screen}\x1b[0m\x1b[${cursorRow};${cursorColumn}H`;
-}
-
-function terminalPaletteCode(color, background) {
-  if (color < 8) return String((background ? 40 : 30) + color);
-  if (color < 16) return String((background ? 100 : 90) + color - 8);
-  return `${background ? 48 : 38};5;${color}`;
-}
-
-function terminalRgbCode(color, background) {
-  return `${background ? 48 : 38};2;${(color >> 16) & 255};${(color >> 8) & 255};${color & 255}`;
-}
-
-function terminalCellStyle(cell) {
-  const codes = [];
-  if (cell.isBold()) codes.push('1');
-  if (cell.isDim()) codes.push('2');
-  if (cell.isItalic()) codes.push('3');
-  if (cell.isUnderline()) codes.push('4');
-  if (cell.isBlink()) codes.push('5');
-  if (cell.isInverse()) codes.push('7');
-  if (cell.isInvisible()) codes.push('8');
-  if (cell.isStrikethrough()) codes.push('9');
-  if (cell.isOverline()) codes.push('53');
-  if (cell.isFgPalette()) codes.push(terminalPaletteCode(cell.getFgColor(), false));
-  else if (cell.isFgRGB()) codes.push(terminalRgbCode(cell.getFgColor(), false));
-  if (cell.isBgPalette()) codes.push(terminalPaletteCode(cell.getBgColor(), true));
-  else if (cell.isBgRGB()) codes.push(terminalRgbCode(cell.getBgColor(), true));
-  return codes.join(';');
-}
-
-function serializeTerminalLine(line, columns) {
-  if (!line) return '';
-  let lastVisibleCell = -1;
-  for (let column = 0; column < columns; column += 1) {
-    const cell = line.getCell(column);
-    if (!cell || cell.getWidth() === 0) continue;
-    if (cell.getChars() || !cell.isAttributeDefault()) lastVisibleCell = column;
-  }
-  if (lastVisibleCell < 0) return '';
-
-  let output = '';
-  let previousStyle;
-  for (let column = 0; column <= lastVisibleCell; column += 1) {
-    const cell = line.getCell(column);
-    if (!cell || cell.getWidth() === 0) continue;
-    const style = terminalCellStyle(cell);
-    if (style !== previousStyle) {
-      output += style ? `\x1b[0;${style}m` : '\x1b[0m';
-      previousStyle = style;
-    }
-    output += cell.getChars() || ' '.repeat(Math.max(1, cell.getWidth()));
-  }
-  return `${output}\x1b[0m`;
+  return terminalSnapshotCache.restoreSequence(snapshot);
 }
 
 function persistTerminalSnapshot(runtime) {
-  if (runtime.disposed || !runtime.hasOutput) return;
-  const buffer = runtime.terminal.buffer.active;
-  const ansiLines = [];
-  const rowCount = Math.max(1, runtime.terminal.rows);
-  for (let row = 0; row < rowCount; row += 1) {
-    const line = buffer.getLine(buffer.viewportY + row);
-    ansiLines.push(serializeTerminalLine(line, runtime.terminal.cols));
-  }
-  const snapshot = {
-    format: 2,
-    ansiLines,
-    cols: runtime.terminal.cols,
-    rows: rowCount,
-    cursorRow: buffer.baseY + buffer.cursorY - buffer.viewportY + 1,
-    cursorColumn: buffer.cursorX + 1,
-    savedAt: Date.now(),
-  };
-  // Keep an individual snapshot bounded even if a terminal is resized to an
-  // extreme geometry.
-  if (JSON.stringify(snapshot).length > 200_000) return;
-  terminalSnapshots.set(runtime.name, snapshot);
-  saveTerminalSnapshots();
+  terminalSnapshotCache.persist(runtime);
 }
 
 function scheduleTerminalSnapshot(runtime) {
-  clearTimeout(runtime.snapshotTimer);
-  runtime.snapshotTimer = setTimeout(() => persistTerminalSnapshot(runtime), 220);
+  terminalSnapshotCache.schedule(runtime);
 }
 
 function saveExpandedProjects() {
@@ -974,7 +895,6 @@ function connectTerminalRuntime(runtime) {
   endpoint.searchParams.set('cols', String(runtime.terminal.cols));
   endpoint.searchParams.set('rows', String(runtime.terminal.rows));
   endpoint.searchParams.set('session', runtime.name);
-  if (token) endpoint.searchParams.set('token', token);
   const nextSocket = new WebSocket(endpoint);
   runtime.socket = nextSocket;
 
@@ -1301,262 +1221,6 @@ function openGraphicsSplit(argv, transport = 'direct', sessionName = activeSessi
   }
 }
 
-function browserPointerPosition(canvas, event, remoteViewport) {
-  const bounds = canvas.getBoundingClientRect();
-  const relativeX = event.clientX - bounds.left;
-  const relativeY = event.clientY - bounds.top;
-  const inside = relativeX >= 0 && relativeY >= 0 && relativeX <= bounds.width && relativeY <= bounds.height;
-  const viewportWidth = remoteViewport?.width || bounds.width;
-  const viewportHeight = remoteViewport?.height || bounds.height;
-  return {
-    x: Math.max(0, Math.min(viewportWidth, (relativeX / bounds.width) * viewportWidth)),
-    y: Math.max(0, Math.min(viewportHeight, (relativeY / bounds.height) * viewportHeight)),
-    inside,
-  };
-}
-
-const browserFrameHeaderBytes = 28;
-
-function parseBrowserFrame(buffer) {
-  if (!(buffer instanceof ArrayBuffer) || buffer.byteLength <= browserFrameHeaderBytes) return undefined;
-  const view = new DataView(buffer);
-  if (String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3)) !== 'OTF1') {
-    return undefined;
-  }
-  return {
-    sequence: view.getUint32(4),
-    viewportGeneration: view.getUint32(8),
-    width: view.getUint32(12),
-    height: view.getUint32(16),
-    pixelWidth: view.getUint32(20),
-    pixelHeight: view.getUint32(24),
-    data: buffer.slice(browserFrameHeaderBytes),
-  };
-}
-
-function legacyBrowserFrameData(data) {
-  const decoded = atob(data);
-  const bytes = new Uint8Array(decoded.length);
-  for (let index = 0; index < decoded.length; index += 1) bytes[index] = decoded.charCodeAt(index);
-  return bytes.buffer;
-}
-
-async function decodeBrowserFrame(data) {
-  const blob = new Blob([data], { type: 'image/jpeg' });
-  if (typeof createImageBitmap === 'function') {
-    try {
-      return await createImageBitmap(blob);
-    } catch {
-      // Some iOS/Safari builds expose createImageBitmap but intermittently
-      // reject JPEG blobs received from a WebSocket. Fall through to the
-      // native image decoder instead of leaving the opening cover forever.
-    }
-  }
-  const url = URL.createObjectURL(blob);
-  try {
-    return await new Promise((resolve, reject) => {
-      const image = new Image();
-      image.decoding = 'async';
-      image.onload = () => resolve(image);
-      image.onerror = reject;
-      image.src = url;
-    });
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-function browserFrameInvalidatesViewport(candidate, displayed) {
-  if (!candidate) return false;
-  const candidateGeneration = Number(candidate.viewportGeneration) || 0;
-  const displayedGeneration = Number(displayed.viewportGeneration) || 0;
-  return candidateGeneration > displayedGeneration;
-}
-
-function queueBrowserFrame(pane, incoming) {
-  const message = typeof incoming.data === 'string'
-    ? { ...incoming, data: legacyBrowserFrameData(incoming.data) }
-    : incoming;
-  const sequence = Number(message.sequence) || 0;
-  const viewportGeneration = Number(message.viewportGeneration) || 0;
-  if (viewportGeneration < pane.frameViewportGeneration ||
-      (sequence && sequence <= pane.displayedFrameSequence)) return;
-  // A browser renderer can be watched by the local desktop and a remote phone
-  // at the same time. They necessarily request different viewport sizes. The
-  // server's newest frame is still authoritative and includes its coordinate
-  // space for pointer mapping, so never discard it merely because another
-  // viewer most recently owned the shared Chrome viewport.
-  pane.pendingFrame = message;
-  if (pane.decodingFrame) return;
-  pane.decodingFrame = true;
-  const decodeNext = async () => {
-    while (pane.pendingFrame && !pane.disposed) {
-      const next = pane.pendingFrame;
-      pane.pendingFrame = undefined;
-      let decoded;
-      try {
-        decoded = await decodeBrowserFrame(next.data);
-      } catch {
-        pane.frameDecodeFailures += 1;
-        if (pane.frameDecodeFailures >= 3) {
-          setGraphicsLoading(pane, 'error', 'This browser could not decode the live frame.');
-        } else {
-          setTimeout(() => {
-            if (!pane.disposed && pane.socket?.readyState === WebSocket.OPEN) {
-              pane.socket.send(JSON.stringify({ type: 'frame-request' }));
-            }
-          }, pane.frameDecodeFailures * 150);
-        }
-        continue;
-      }
-      pane.frameDecodeFailures = 0;
-      if (pane.disposed || browserFrameInvalidatesViewport(pane.pendingFrame, next)) {
-        decoded.close?.();
-        continue;
-      }
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      if (pane.disposed || browserFrameInvalidatesViewport(pane.pendingFrame, next)) {
-        decoded.close?.();
-        continue;
-      }
-      const decodedWidth = decoded.width || decoded.naturalWidth;
-      const decodedHeight = decoded.height || decoded.naturalHeight;
-      const firstFrame = pane.surface.dataset.ready !== 'true';
-      if (pane.frame.width !== decodedWidth || pane.frame.height !== decodedHeight) {
-        pane.frame.width = decodedWidth;
-        pane.frame.height = decodedHeight;
-        pane.frameContext.imageSmoothingEnabled = true;
-        pane.frameContext.imageSmoothingQuality = 'high';
-      }
-      pane.frameContext.drawImage(decoded, 0, 0, pane.frame.width, pane.frame.height);
-      pane.frameViewport = {
-        width: Number(next.width) || decodedWidth,
-        height: Number(next.height) || decodedHeight,
-      };
-      pane.frameViewportGeneration = Number(next.viewportGeneration) || pane.frameViewportGeneration;
-      pane.host.dataset.frameViewportGeneration = String(pane.frameViewportGeneration);
-      pane.displayedFrameSequence = Number(next.sequence) || pane.displayedFrameSequence + 1;
-      pane.host.dataset.frameSequence = String(pane.displayedFrameSequence);
-      pane.host.dataset.frameViewport = `${pane.frameViewport.width}x${pane.frameViewport.height}`;
-      pane.frameVersion += 1;
-      pane.host.dataset.frameVersion = String(pane.frameVersion);
-      pane.host.dataset.frameScale = String(decodedWidth / pane.frameViewport.width);
-      drawBrowserRecordingFrame(pane, pane.frame);
-      decoded.close?.();
-      pane.surface.dataset.ready = 'true';
-      pane.surfaceReady = true;
-      pane.loading.hidden = true;
-      pane.terminalLayer.dataset.surface = 'hidden';
-      if (firstFrame) {
-        pane.revealed = true;
-        updateGraphicsSplit();
-        requestAnimationFrame(() => requestAnimationFrame(fitTerminals));
-      }
-    }
-    pane.decodingFrame = false;
-  };
-  void decodeNext();
-}
-
-function browserRecordingMimeType() {
-  if (typeof MediaRecorder === 'undefined') return '';
-  return ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
-    .find((type) => MediaRecorder.isTypeSupported(type)) || '';
-}
-
-function updateBrowserRecordButton(pane) {
-  if (!pane.recordButton) return;
-  const recording = pane.recording;
-  pane.recordButton.dataset.active = String(Boolean(recording));
-  pane.recordButton.setAttribute('aria-pressed', String(Boolean(recording)));
-  if (!recording) {
-    pane.recordButton.textContent = '● Record';
-    pane.recordButton.title = 'Record this browser pane';
-    return;
-  }
-  const elapsed = Math.max(0, Math.floor((Date.now() - recording.startedAt) / 1000));
-  pane.recordButton.textContent = `■ ${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`;
-  pane.recordButton.title = 'Stop and download recording';
-}
-
-function drawBrowserRecordingFrame(pane, source) {
-  const recording = pane.recording;
-  if (!recording) return;
-  const width = source.width || source.naturalWidth || pane.frame.width;
-  const height = source.height || source.naturalHeight || pane.frame.height;
-  if (!width || !height) return;
-  if (!recording.canvas.width || !recording.canvas.height) {
-    recording.canvas.width = width;
-    recording.canvas.height = height;
-  }
-  recording.context.drawImage(source, 0, 0, recording.canvas.width, recording.canvas.height);
-}
-
-function startBrowserRecording(pane) {
-  if (pane.recording) return;
-  const mimeType = browserRecordingMimeType();
-  if (!mimeType || typeof HTMLCanvasElement.prototype.captureStream !== 'function') {
-    pane.recordButton.title = 'Recording is not supported by this browser';
-    return;
-  }
-  const canvas = document.createElement('canvas');
-  canvas.width = pane.frame.width || Math.max(1, pane.viewport.clientWidth);
-  canvas.height = pane.frame.height || Math.max(1, pane.viewport.clientHeight);
-  const context = canvas.getContext('2d', { alpha: false });
-  if (!context) return;
-  if (pane.surfaceReady && pane.frame.width) context.drawImage(pane.frame, 0, 0, canvas.width, canvas.height);
-  const stream = canvas.captureStream(20);
-  const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 5_000_000 });
-  const recording = {
-    canvas,
-    context,
-    stream,
-    recorder,
-    chunks: [],
-    startedAt: Date.now(),
-    download: true,
-    timer: undefined,
-    frameTimer: undefined,
-  };
-  pane.recording = recording;
-  recorder.addEventListener('dataavailable', (event) => {
-    if (event.data.size > 0) recording.chunks.push(event.data);
-  });
-  recorder.addEventListener('stop', () => {
-    clearInterval(recording.timer);
-    clearInterval(recording.frameTimer);
-    for (const track of stream.getTracks()) track.stop();
-    if (pane.recording === recording) pane.recording = undefined;
-    updateBrowserRecordButton(pane);
-    if (!recording.download || recording.chunks.length === 0) return;
-    const blob = new Blob(recording.chunks, { type: mimeType });
-    const link = document.createElement('a');
-    const safeTitle = (pane.surface.getAttribute('aria-label') || 'browser')
-      .replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'browser';
-    const stamp = new Date(recording.startedAt).toISOString().replaceAll(':', '-').replace(/\.\d{3}Z$/, 'Z');
-    const objectUrl = URL.createObjectURL(blob);
-    link.href = objectUrl;
-    link.download = `${safeTitle}-${stamp}.webm`;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
-  });
-  recorder.start(250);
-  recording.timer = setInterval(() => updateBrowserRecordButton(pane), 500);
-  recording.frameTimer = setInterval(() => {
-    if (pane.surfaceReady && pane.frame.width) drawBrowserRecordingFrame(pane, pane.frame);
-  }, 100);
-  updateBrowserRecordButton(pane);
-}
-
-function stopBrowserRecording(pane, { download = true } = {}) {
-  const recording = pane?.recording;
-  if (!recording) return;
-  recording.download = download;
-  clearInterval(recording.timer);
-  clearInterval(recording.frameTimer);
-  if (recording.recorder.state !== 'inactive') recording.recorder.stop();
-}
-
 function browserDevtoolsUrl(surface) {
   if (!surface?.devtoolsPath || !surface.devtoolsAccess || !surface.targetId) return '';
   const inspectorUrl = new URL(surface.devtoolsPath, location.origin);
@@ -1564,7 +1228,6 @@ function browserDevtoolsUrl(surface) {
   const socketUrl = new URL(`${secure ? 'wss:' : 'ws:'}//${location.host}/devtools-ws`);
   socketUrl.searchParams.set('access', surface.devtoolsAccess);
   socketUrl.searchParams.set('target', surface.targetId);
-  if (token) socketUrl.searchParams.set('token', token);
   inspectorUrl.searchParams.set(secure ? 'wss' : 'ws', `${socketUrl.host}${socketUrl.pathname}${socketUrl.search}`);
   return inspectorUrl.href;
 }
@@ -1858,7 +1521,6 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
   endpoint.searchParams.set('renderer', key);
   endpoint.searchParams.set('cols', String(nextTerminal.cols));
   endpoint.searchParams.set('rows', String(nextTerminal.rows));
-  if (token) endpoint.searchParams.set('token', token);
   const nextSocket = new WebSocket(endpoint);
   nextSocket.binaryType = 'arraybuffer';
   pane.socket = nextSocket;
@@ -3205,61 +2867,14 @@ window.addEventListener('keydown', (event) => {
 });
 installHorizontalResizer(sidebarResizer, 'sidebar');
 installHorizontalResizer(graphicsResizer, 'graphics');
-compactSidebarMedia.addEventListener('change', () => {
+function handleCompactSidebarChange() {
   syncSidebarForViewport();
   updateGraphicsSplit();
-});
+  startRemoteControlForDesktop();
+}
+compactSidebarMedia.addEventListener('change', handleCompactSidebarChange);
 syncSidebarForViewport();
-let visualViewportFrame;
-
-function syncVisualViewport() {
-  if (!window.visualViewport) return;
-  const viewport = window.visualViewport;
-  const root = document.documentElement;
-  const height = Math.max(1, viewport.height);
-  const width = Math.max(1, viewport.width);
-  const offsetTop = Math.max(0, viewport.offsetTop);
-  const offsetLeft = Math.max(0, viewport.offsetLeft);
-  const insetBottom = Math.max(0, window.innerHeight - height - offsetTop);
-  const insetRight = Math.max(0, window.innerWidth - width - offsetLeft);
-  const keyboard = insetBottom > 120;
-  // Keep Safari's fractional animation frames. Rounding every visualViewport
-  // sample made the fixed mobile surface move in visible one-pixel steps.
-  root.style.setProperty('--visual-viewport-height', `${height}px`);
-  root.style.setProperty('--visual-viewport-width', `${width}px`);
-  root.style.setProperty('--visual-viewport-offset-top', `${offsetTop}px`);
-  root.style.setProperty('--visual-viewport-offset-left', `${offsetLeft}px`);
-  // The native mobile conversation remains a full-layout-viewport canvas.
-  // Only its content insets follow the visual viewport. This prevents iOS
-  // Safari from exposing the page underneath while the keyboard animates.
-  root.style.setProperty('--visual-viewport-inset-top', `${offsetTop}px`);
-  root.style.setProperty('--visual-viewport-inset-right', `${insetRight}px`);
-  root.style.setProperty('--visual-viewport-layout-inset-bottom', `${insetBottom}px`);
-  // iOS can report browser/home-indicator chrome as a small bottom inset even
-  // when no keyboard is present. Keep that space in the opaque canvas only;
-  // inset controls upward exclusively for an actual keyboard.
-  root.style.setProperty('--visual-viewport-inset-bottom', `${keyboard ? insetBottom : 0}px`);
-  root.style.setProperty('--visual-viewport-inset-left', `${offsetLeft}px`);
-  root.dataset.visualKeyboard = String(keyboard);
-  document.dispatchEvent(new CustomEvent('agent-remote:visual-viewport', {
-    detail: { height, width, offsetTop, offsetLeft, insetBottom, insetRight, keyboard },
-  }));
-  resize();
-}
-function scheduleVisualViewportSync() {
-  if (visualViewportFrame) return;
-  visualViewportFrame = requestAnimationFrame(() => {
-    visualViewportFrame = undefined;
-    syncVisualViewport();
-  });
-}
-window.visualViewport?.addEventListener('resize', scheduleVisualViewportSync);
-window.visualViewport?.addEventListener('scroll', scheduleVisualViewportSync);
-// Some engines update the layout viewport before (or without) a matching
-// visualViewport notification, especially during rotation and browser chrome
-// changes. Reconcile both coordinate spaces on the regular resize event too.
-window.addEventListener('resize', scheduleVisualViewportSync);
-syncVisualViewport();
+const visualViewportSync = installVisualViewportSync({ onChange: resize });
 requestAnimationFrame(() => requestAnimationFrame(() => {
   delete document.documentElement.dataset.sidebarBooting;
   delete document.documentElement.dataset.initialSidebar;
@@ -3271,11 +2886,8 @@ const poller = setInterval(() => {
   if (!hasPendingMutations()) refreshWorkspace().catch(() => {});
 }, 3000);
 window.addEventListener('beforeunload', () => {
-  compactSidebarMedia.removeEventListener('change', syncSidebarForViewport);
-  window.visualViewport?.removeEventListener('resize', scheduleVisualViewportSync);
-  window.visualViewport?.removeEventListener('scroll', scheduleVisualViewportSync);
-  window.removeEventListener('resize', scheduleVisualViewportSync);
-  cancelAnimationFrame(visualViewportFrame);
+  compactSidebarMedia.removeEventListener('change', handleCompactSidebarChange);
+  visualViewportSync.destroy();
   observer.disconnect();
   clearInterval(poller);
   workspaceEventSource?.close();
@@ -3298,9 +2910,15 @@ window.addEventListener('beforeunload', () => {
 });
 
 restoreCachedActiveSession();
-if (document.querySelector('#remote-button')) {
-  void import('./remote-control.js').then(({ bootstrapRemoteControl }) => bootstrapRemoteControl());
+let remoteControlStarted = false;
+function startRemoteControlForDesktop() {
+  if (remoteControlStarted || compactSidebarMedia.matches || !document.querySelector('#remote-button')) return;
+  remoteControlStarted = true;
+  void import('./remote-control.js')
+    .then(({ bootstrapRemoteControl }) => bootstrapRemoteControl())
+    .catch(() => { remoteControlStarted = false; });
 }
+startRemoteControlForDesktop();
 connectWorkspaceEvents();
 refreshWorkspace().catch((error) => {
   delete document.documentElement.dataset.restoringSession;

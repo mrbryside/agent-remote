@@ -53,4 +53,12 @@ state styling into `ui-components.js`/the component CSS contract before adding
 another local copy. Tests should cover one static and one dynamic consumer plus
 every new variant.
 
+Shared controls and domain modules are different boundaries. Keep reusable
+visual primitives such as IconButton in `ui-components.js`; keep stateful
+conversation behavior in its domain module (`mobile-activity-state.js`,
+`mobile-composer-model.js`, or `mobile-timeline-reconciler.js`). Do not turn
+`ui-components.js` into a general utility collection. See
+[Frontend module boundaries](../architecture/frontend-modules.md) before
+extracting a large UI flow.
+
 Back to [Design system](index.md).

@@ -139,11 +139,11 @@ ALLOWED_CWD_ROOTS="/path/one,/path/two" npm start
 | `TERMINAL_SHELL_ARGS` | `["-l"]` | JSON array of fallback shell arguments |
 | `TERMINAL_CWD` | project directory | Fallback PTY working directory |
 | `ALLOWED_CWD_ROOTS` | home + project | Comma-separated roots exposed to the folder picker |
-| `TERMINAL_TOKEN` | empty | Optional URL token, e.g. `?token=...` |
+| `TERMINAL_TOKEN` | empty | Optional local bootstrap bearer; `/?token=...` is exchanged once for an HttpOnly session cookie |
 | `ALLOWED_ORIGINS` | same origin only | Comma-separated extra browser origins |
-| `MAX_CONNECTIONS` | `20` | Concurrent PTY limit (main terminals plus per-session browser panes) |
+| `MAX_CONNECTIONS` | `20` | Concurrent PTY limit and shared long-lived HTTP/DevTools transport limit |
 
-The default host is loopback-only. The remote gateway is always loopback-only and is exposed externally only through its owned `cloudflared` child. A programmatic test seam can permit an insecure public origin for isolated fixtures; it is not an environment variable, user setting, or production configuration. If binding the local server to a LAN address or reverse proxy, set `TERMINAL_TOKEN` and use HTTPS.
+Both listeners are loopback-only. External access must use the authenticated Remote gateway through its owned `cloudflared` child; direct LAN binding and cleartext reverse-proxy exposure are rejected. A programmatic test seam can permit an insecure public origin for isolated fixtures, but it is not an environment variable, user setting, or production configuration.
 
 ## Tests
 

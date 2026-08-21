@@ -40,7 +40,7 @@ reduced-motion override; do not add component-specific durations or replay an
 entry animation on every streamed snapshot.
 
 The compact conversation is a fixed compositor surface sized and translated
-from the live Visual Viewport variables in `public/app.js`. Its composer takes
+from the live Visual Viewport variables in `public/visual-viewport.js`. Its composer takes
 focus during the initiating touch with `preventScroll`, so iOS Safari cannot
 first pan the layout viewport and expose the page behind the chat before the
 keyboard resize event arrives. Keep the document non-scrollable at compact

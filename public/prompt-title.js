@@ -7,6 +7,7 @@ const SECONDARY_TASK = new RegExp(
   `(?:,\\s*|\\s+)(?:and|then|also)\\s+(?=${ENGLISH_ACTION}\\b)|(?:\\s*[,;]\\s*)?(?:และ|แล้ว|พร้อมทั้ง|รวมทั้ง)(?=${THAI_ACTION})`,
   'iu',
 );
+const SLASH_COMMAND_AT_START = /^\/[A-Za-z0-9][A-Za-z0-9_-]*(?:\s|$)/u;
 
 const REQUEST_PREFIXES = [
   /^(?:(?:can|could|would|will)\s+you(?:\s+please)?|please|kindly|(?:i|we)(?:'d| would) like (?:you )?to|(?:i|we) (?:want|need) (?:you )?to|help (?:me|us)(?:\s+to)?|let(?:'s| us))\s+/iu,
@@ -32,6 +33,11 @@ function stripLineDecoration(value) {
       .trim();
   } while (result !== previous);
   return result;
+}
+
+function startsWithSlashCommand(value) {
+  const [firstLine = ''] = value.split(/\r?\n/u, 1);
+  return SLASH_COMMAND_AT_START.test(stripLineDecoration(firstLine));
 }
 
 function stripRequestPrefix(value) {
@@ -107,5 +113,7 @@ function truncateTitle(value) {
 }
 
 export function derivePromptTitle(value) {
-  return truncateTitle(distillPrimaryTask(stripPromptDecoration(value)));
+  const prompt = stripPromptDecoration(value);
+  if (startsWithSlashCommand(prompt)) return '';
+  return truncateTitle(distillPrimaryTask(prompt));
 }

@@ -1,9 +1,8 @@
-const token = new URLSearchParams(location.search).get('token');
-
-/** Build a same-origin API URL while retaining the optional local API token. */
+/** Build a token-free same-origin API URL. Local bootstrap exchanges a legacy
+ * `/?token=…` navigation for an HttpOnly session cookie before this runs. */
 export function apiUrl(path) {
   const url = new URL(path, location.origin);
-  if (token) url.searchParams.set('token', token);
+  url.searchParams.delete('token');
   return url;
 }
 

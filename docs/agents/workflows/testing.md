@@ -19,6 +19,13 @@ Playwright runs serially because the tmux fixture, browser renderer, SQLite file
 - SQLite schema and migrations: `test/projects.test.js`
 - Session naming, command quoting, and CLI: `test/sessions.test.js`
 - HTTP/WebSocket/PTY/tmux behavior, including compact conversation token frames and watcher cleanup: `test/server.test.js`
+- Local Host/Origin trust, anti-framing headers, token-to-cookie bootstrap,
+  canonical request targets, and bounded HTTP/DevTools transports:
+  `test/http-origin-security.test.js`, `test/http-headers-security.test.js`,
+  `test/local-auth-security.test.js`, `test/request-target-security.test.js`,
+  and `test/transport-limits-security.test.js`
+- Extracted frontend/server module contracts and browser-served module
+  reachability: `test/refactored-modules.test.js` and `test/server.test.js`
 - Project/sidebar/terminal UX and responsive behavior: `test/e2e.spec.js`
 - Grok ACP transport ownership, timestamped persisted-turn reconciliation, real active-turn queue/steer/cancel ordering, all four mobile mode mappings, hidden Plan prompt control, and request/response extensions (leader socket, permissions, questions, and Plan Review): `test/grok-acp.test.js`
 - Provider-neutral timeline mapping, child-thread ownership, and interaction projection: `test/conversation-providers.test.js`
