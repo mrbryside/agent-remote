@@ -56,6 +56,7 @@ function fakeClient(overrides = {}) {
     },
     getTunnelToken: async (_accountId, tunnelId) => { calls.push(`token:${tunnelId}`); return 'run-token'; },
     getDnsRecord: async (_zoneId, recordId) => { calls.push(`getDns:${recordId}`); return undefined; },
+    cleanupTunnelConnections: async (_accountId, tunnelId) => { calls.push(`cleanupTunnel:${tunnelId}`); },
     deleteDnsRoute: async (_zoneId, recordId) => { calls.push(`deleteDns:${recordId}`); },
     deleteTunnel: async (_accountId, tunnelId) => { calls.push(`deleteTunnel:${tunnelId}`); },
     ...overrides,
@@ -63,7 +64,7 @@ function fakeClient(overrides = {}) {
   return { client, calls };
 }
 
-function provisioner({ store = fakeStore(), client = fakeClient().client } = {}) {
+function provisioner({ store = fakeStore(), client = fakeClient().client, ...dependencies } = {}) {
   return createRemoteProvisioner({
     store,
     tokenStore: { read: async () => 'keychain-token' },
@@ -72,6 +73,7 @@ function provisioner({ store = fakeStore(), client = fakeClient().client } = {})
       return client;
     },
     remoteOrigin: 'http://127.0.0.1:3001',
+    ...dependencies,
   });
 }
 
@@ -218,7 +220,48 @@ test('clears only named settings after exact owned Cloudflare removal', async ()
 
   const result = await provisioner({ store, client }).removeNamed();
   assert.deepEqual(result, { removed: true, warnings: [] });
-  assert.deepEqual(calls.filter((call) => call.startsWith('delete')), ['deleteDns:dns-1', 'deleteTunnel:tunnel-1']);
+  assert.deepEqual(calls.filter((call) => /^(cleanup|delete)/.test(call)), [
+    'cleanupTunnel:tunnel-1', 'deleteDns:dns-1', 'deleteTunnel:tunnel-1',
+  ]);
+  assert.equal(store.clears, 1);
+});
+
+test('cleans stale connectors and retries an active tunnel deletion before clearing metadata', async () => {
+  const settings = namedSettings({
+    accountId: 'account-1', zoneId: 'zone-1', zoneName: 'example.com', hostname: 'remote.example.com',
+    tunnelId: 'tunnel-1', tunnelName: 'agent-remote-12345678-123', dnsRecordId: 'dns-1',
+    dnsTarget: 'tunnel-1.cfargotunnel.com', desiredState: 'running',
+  });
+  const store = fakeStore(settings);
+  const waits = [];
+  let deleteAttempts = 0;
+  const { client, calls } = fakeClient({
+    getDnsRecord: async () => ({ id: 'dns-1', name: 'remote.example.com', type: 'CNAME', content: 'tunnel-1.cfargotunnel.com' }),
+    deleteTunnel: async (_accountId, tunnelId) => {
+      calls.push(`deleteTunnel:${tunnelId}`);
+      deleteAttempts += 1;
+      if (deleteAttempts < 3) {
+        throw Object.assign(new Error('connector still active'), {
+          code: 'CLOUDFLARE_API_ERROR', status: 409, operation: 'delete tunnel',
+        });
+      }
+    },
+  });
+
+  const result = await provisioner({
+    store,
+    client,
+    wait: async (milliseconds) => { waits.push(milliseconds); },
+    tunnelDeleteRetryDelaysMs: [25, 50, 100],
+  }).removeNamed();
+
+  assert.deepEqual(result, { removed: true, warnings: [] });
+  assert.deepEqual(waits, [25, 50]);
+  assert.deepEqual(calls.filter((call) => /^(cleanup|delete)/.test(call)), [
+    'cleanupTunnel:tunnel-1', 'deleteDns:dns-1', 'deleteTunnel:tunnel-1',
+    'cleanupTunnel:tunnel-1', 'deleteTunnel:tunnel-1',
+    'cleanupTunnel:tunnel-1', 'deleteTunnel:tunnel-1',
+  ]);
   assert.equal(store.clears, 1);
 });
 

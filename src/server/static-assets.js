@@ -6,6 +6,7 @@ const contentTypes = {
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
+  '.png': 'image/png',
   '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
 
@@ -36,7 +37,8 @@ function stripLocalControls(source) {
 
 function assetRoutes(root, publicDir) {
   const publicAssets = [
-    'manifest.webmanifest', 'document-boot.js', 'workspace-boot.js', 'app.js', 'api-client.js',
+    'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png',
+    'document-boot.js', 'workspace-boot.js', 'app.js', 'api-client.js', 'remote-entry.js',
     'prompt-title.js', 'ui-components.js', 'remote-control.js', 'mobile-conversation.js',
     'mobile-activity-state.js', 'mobile-composer-model.js', 'mobile-timeline-reconciler.js',
     'mobile-file-surface.js', 'mobile-event-renderer.js', 'mobile-interaction-renderer.js',

@@ -119,6 +119,7 @@ test('looks up exact hostnames and resources, then deletes only supplied IDs', a
     response({ success: true, result: { id: 'dns-1', name: 'remote.example.com' } }),
     response({ success: true, result: {} }),
     response({ success: true, result: {} }),
+    response({ success: true, result: {} }),
   ]);
   const client = createCloudflareClient({ fetch, token, apiBase });
 
@@ -129,6 +130,7 @@ test('looks up exact hostnames and resources, then deletes only supplied IDs', a
   });
   assert.equal((await client.getTunnel('account-1', 'tunnel-1')).id, 'tunnel-1');
   assert.equal((await client.getDnsRecord('zone-1', 'dns-1')).id, 'dns-1');
+  await client.cleanupTunnelConnections('account-1', 'tunnel-1');
   await client.deleteDnsRoute('zone-1', 'dns-1');
   await client.deleteTunnel('account-1', 'tunnel-1');
 
@@ -136,23 +138,42 @@ test('looks up exact hostnames and resources, then deletes only supplied IDs', a
   assert.equal(lookup.pathname, '/client/v4/zones/zone-1/dns_records');
   assert.equal(lookup.searchParams.get('name'), 'remote.example.com');
   assert.equal(lookup.searchParams.get('per_page'), '100');
+  assert.equal(requests[3].url, `${apiBase}/accounts/account-1/cfd_tunnel/tunnel-1/connections`);
   assert.equal(requests[3].options.method, 'DELETE');
   assert.equal(requests[4].options.method, 'DELETE');
+  assert.equal(requests[5].options.method, 'DELETE');
 });
 
-test('throws safe errors for non-success responses and accepts only supported API bases', async () => {
+test('throws actionable safe errors for non-success responses and accepts only supported API bases', async () => {
   const { fetch } = fetchRecorder([
-    response({ success: false, errors: [{ message: `backend detail ${token}` }] }, 500),
+    response({ success: false, errors: [{ code: 1033, message: `backend detail ${token}` }] }, 409),
   ]);
   const client = createCloudflareClient({ fetch, token, apiBase });
 
   await assert.rejects(client.deleteTunnel('account-1', 'tunnel-1'), (error) => {
     assert.equal(error.code, 'CLOUDFLARE_API_ERROR');
-    assert.equal(error.status, 500);
+    assert.equal(error.status, 409);
+    assert.equal(error.operation, 'delete tunnel');
+    assert.equal(error.cloudflareCode, 1033);
     assert.equal(error.message.includes(token), false);
+    assert.doesNotMatch(error.message, /backend detail/i);
+    assert.match(error.message, /delete tunnel/i);
+    assert.match(error.message, /HTTP 409/i);
+    assert.match(error.message, /1033/);
     return true;
   });
   assert.throws(() => createCloudflareClient({ fetch, token, apiBase: 'https://example.invalid/v4' }), /api base/i);
+});
+
+test('makes tunnel cleanup and deletion idempotent after Cloudflare already removed the tunnel', async () => {
+  const { fetch } = fetchRecorder([
+    response({ success: false, errors: [{ code: 1003, message: 'not found' }] }, 404),
+    response({ success: false, errors: [{ code: 1003, message: 'not found' }] }, 404),
+  ]);
+  const client = createCloudflareClient({ fetch, token, apiBase });
+
+  await client.cleanupTunnelConnections('account-1', 'tunnel-1');
+  await client.deleteTunnel('account-1', 'tunnel-1');
 });
 
 test('uses the official API base by default and rejects oversized responses before parsing', async () => {

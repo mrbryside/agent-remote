@@ -242,4 +242,7 @@ export async function boot({ fetchFn = globalThis.fetch, location = globalThis.l
   }
 }
 
-if (typeof document !== 'undefined') void boot();
+// The authenticated workspace imports the credential helpers above for
+// in-page session recovery. Only boot the locked entry UI when its document is
+// actually present; importing this module must not navigate or rewrite the app.
+if (typeof document !== 'undefined' && document.querySelector('#entry-title')) void boot();

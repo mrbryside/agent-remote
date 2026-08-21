@@ -1,4 +1,8 @@
 const documentRoot = document.documentElement;
+documentRoot.dataset.standalone = navigator.standalone === true ||
+  matchMedia('(display-mode: standalone)').matches
+  ? 'true'
+  : 'false';
 documentRoot.dataset.sidebarBooting = 'true';
 documentRoot.dataset.initialSidebar = matchMedia('(max-width: 760px)').matches
   ? 'collapsed'

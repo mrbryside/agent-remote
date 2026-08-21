@@ -183,6 +183,21 @@ test.describe('Remote gateway browser fixture', () => {
     await expect(page.getByText(/not paired/i)).toHaveCount(0);
   });
 
+  test('recovers an expired in-page session without reloading the installed app', async ({ page, context, request }) => {
+    await pairInBrowser(page, request);
+    const navigationStartedAt = await page.evaluate(() => performance.timeOrigin);
+    await clearRemoteCookies(context);
+
+    const result = await page.evaluate(async () => {
+      const { api } = await import('/api-client.js');
+      return api('/api/projects');
+    });
+
+    expect(result).toHaveProperty('projects');
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(navigationStartedAt);
+    await expect(page.locator('#new-project')).toBeVisible();
+  });
+
   test('local revocation returns remote HTTP 401, closes an active WebSocket with 4003, and rejects key reuse', async ({ page, context, request }) => {
     const { device } = await pairInBrowser(page, request);
     const socketResult = await page.evaluate(() => new Promise((resolve, reject) => {

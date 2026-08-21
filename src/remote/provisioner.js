@@ -1,6 +1,7 @@
 import { remoteError } from './errors.js';
 
 const LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+const DEFAULT_TUNNEL_DELETE_RETRY_DELAYS_MS = Object.freeze([250, 750, 1_500, 3_000]);
 
 /**
  * Validate the only hostname input Remote accepts: one lower-case ASCII DNS
@@ -19,7 +20,14 @@ export function validateSubdomain(label) {
  * Cloudflare client.  It never derives ownership from a friendly resource name:
  * every destructive or reuse action requires exact stored IDs and live values.
  */
-export function createRemoteProvisioner({ store, tokenStore, createClient, remoteOrigin } = {}) {
+export function createRemoteProvisioner({
+  store,
+  tokenStore,
+  createClient,
+  remoteOrigin,
+  wait = waitFor,
+  tunnelDeleteRetryDelaysMs = DEFAULT_TUNNEL_DELETE_RETRY_DELAYS_MS,
+} = {}) {
   if (!store || typeof store.getSettings !== 'function' || typeof store.saveNamedTunnel !== 'function'
     || typeof store.clearNamedTunnel !== 'function') {
     throw new TypeError('A remote metadata store is required.');
@@ -29,6 +37,12 @@ export function createRemoteProvisioner({ store, tokenStore, createClient, remot
   if (typeof remoteOrigin !== 'string' || !/^http:\/\/127\.0\.0\.1(?::\d+)?$/.test(remoteOrigin)) {
     throw new TypeError('remoteOrigin must be a loopback HTTP origin.');
   }
+  if (typeof wait !== 'function') throw new TypeError('A wait implementation is required.');
+  if (!Array.isArray(tunnelDeleteRetryDelaysMs)
+    || tunnelDeleteRetryDelaysMs.some((delay) => !Number.isFinite(delay) || delay < 0)) {
+    throw new TypeError('Tunnel deletion retry delays must be non-negative numbers.');
+  }
+  const deleteRetryDelays = [...tunnelDeleteRetryDelaysMs];
 
   async function clientForToken(value) {
     const token = typeof value === 'string' ? value.trim() : undefined;
@@ -203,13 +217,41 @@ export function createRemoteProvisioner({ store, tokenStore, createClient, remot
       return { removed: false, warnings: ['Tunnel ownership could not be verified; no Cloudflare resource was deleted.'] };
     }
 
+    // Cloudflare can retain an edge connector briefly after the local
+    // cloudflared process exits. Remove only this exactly owned tunnel's
+    // connectors before deleting its DNS route and retry an eventual-consistency
+    // conflict without weakening any ownership checks above.
+    await client.cleanupTunnelConnections(settings.accountId, settings.tunnelId);
     if (record !== undefined) await client.deleteDnsRoute(settings.zoneId, settings.dnsRecordId);
-    await client.deleteTunnel(settings.accountId, settings.tunnelId);
+    await deleteTunnelWithRetry(client, settings.accountId, settings.tunnelId, deleteRetryDelays, wait);
     store.clearNamedTunnel();
     return { removed: true, warnings: [] };
   }
 
   return { validateToken, checkAvailability, listZones, prepareNamed, removeNamed };
+}
+
+async function deleteTunnelWithRetry(client, accountId, tunnelId, retryDelays, wait) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await client.deleteTunnel(accountId, tunnelId);
+      return;
+    } catch (error) {
+      const delay = retryDelays[attempt];
+      if (delay === undefined || !retryableTunnelDeletion(error)) throw error;
+      await wait(delay);
+      await client.cleanupTunnelConnections(accountId, tunnelId);
+    }
+  }
+}
+
+function retryableTunnelDeletion(error) {
+  if (error?.code !== 'CLOUDFLARE_API_ERROR' || !Number.isInteger(error?.status)) return false;
+  return error.status === 400 || error.status === 409 || error.status === 429 || error.status >= 500;
+}
+
+function waitFor(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function publicAvailability({ hostname, status, suggestions }) {

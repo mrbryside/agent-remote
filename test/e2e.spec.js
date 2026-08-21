@@ -1129,6 +1129,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     const hadMobileConversation = workspace.dataset.mobileConversation;
     delete workspace.dataset.mobileConversation;
     const homeWorkspaceStyle = getComputedStyle(workspace);
+    const homeShellStyle = getComputedStyle(document.querySelector('.terminal-shell'));
     const result = {
       statusBarStyle: document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]')?.content,
       themeColor: document.querySelector('meta[name="theme-color"]')?.content,
@@ -1146,6 +1147,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       safeAreaPadding: conversationStyle.paddingTop,
       safeAreaHeight: safeAreaStyle.height,
       homeSafeAreaPadding: homeWorkspaceStyle.paddingTop,
+      homeShellSafeAreaPadding: homeShellStyle.paddingTop,
       homeSafeAreaBackground: homeWorkspaceStyle.backgroundColor,
       sidebarSafeAreaPadding: sidebarStyle.paddingTop,
       sidebarHeaderHeight: sidebarHeaderStyle.height,
@@ -1169,11 +1171,27 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     chatCanvasBackground: 'rgb(12, 12, 13)',
     safeAreaPadding: '20px',
     safeAreaHeight: '20px',
-    homeSafeAreaPadding: '20px',
+    homeSafeAreaPadding: '0px',
+    homeShellSafeAreaPadding: '20px',
     homeSafeAreaBackground: 'rgb(12, 12, 13)',
     sidebarSafeAreaPadding: '20px',
     sidebarHeaderHeight: '44px',
   });
+  // Standalone Safari can report a small non-keyboard bottom inset for browser
+  // chrome/home indicator. Idle surfaces must keep filling the layout viewport.
+  await page.evaluate(() => window.__setVisualViewport({ height: 810, offsetTop: 0 }));
+  await expect(page.locator('html')).toHaveAttribute('data-visual-keyboard', 'false');
+  await expect.poll(() => page.evaluate(() => {
+    const root = document.querySelector('#mobile-conversation').getBoundingClientRect();
+    const sidebar = document.querySelector('.sidebar').getBoundingClientRect();
+    const composer = document.querySelector('#mobile-conversation-composer').getBoundingClientRect();
+    return {
+      root: [Math.round(root.top), Math.round(root.height)],
+      sidebar: [Math.round(sidebar.top), Math.round(sidebar.height)],
+      composerGap: Math.round(window.innerHeight - composer.bottom),
+    };
+  })).toEqual({ root: [0, 844], sidebar: [0, 844], composerGap: 4 });
+  await page.evaluate(() => window.__setVisualViewport({ height: 844, offsetTop: 0 }));
   await expect(conversation.locator('#mobile-conversation-composer')).toBeVisible();
   await expect(conversation.locator('#mobile-conversation-title')).toBeHidden();
   await expect(conversation.locator('#mobile-conversation-meta')).toBeHidden();

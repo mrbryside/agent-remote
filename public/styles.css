@@ -1268,6 +1268,18 @@ input:focus, select:focus { border-color: #646a68; box-shadow: 0 0 0 3px #7d8783
   .mobile-question-actions button:disabled { opacity: .5; }
   .mobile-question-summary { margin: -2px 0 0; color: var(--color-text-secondary); font: var(--font-size-interaction-body)/1.45 var(--font-family-sans); white-space: pre-wrap; }
 }
+
+/* A standalone iOS PWA paints the hardware safe-area from the root canvas.
+   Continue the open sidebar through that canvas without changing layout
+   height or affecting an ordinary Safari tab. */
+@media (max-width: 760px) {
+  html:has(.workspace[data-sidebar="expanded"]),
+  html:has(.workspace[data-sidebar-peek="true"]) {
+    background: linear-gradient(90deg, var(--color-sidebar) 0 min(90vw, 336px), var(--color-canvas) min(90vw, 336px) 100%);
+  }
+  .sidebar { padding-bottom: min(8px, env(safe-area-inset-bottom, 0px)); }
+  .mobile-conversation-composer { margin-bottom: 4px; }
+}
 @media (hover: hover) and (pointer: fine) {
   .mobile-question-option:hover,
   .mobile-plan-review-actions button:not(:disabled):hover,

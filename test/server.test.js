@@ -149,12 +149,15 @@ async function waitForCondition(predicate, message, timeoutMs = 5000) {
 
 test('serves the frontend and health status', async () => {
   await withServer({}, async (url) => {
-    const [page, manifest, tokens, apiClient, promptTitle, uiComponents, remoteControl, mobileConversation,
+    const [page, manifest, appIcon180, appIcon192, appIcon512, tokens, apiClient, promptTitle, uiComponents, remoteControl, mobileConversation,
       mobileActivityState, mobileComposerModel, mobileTimelineReconciler, mobileFileSurface,
       mobileEventRenderer, mobileInteractionRenderer, terminalSnapshots, visualViewport, browserMedia,
       markdown, syntax, markedVendor, purifierVendor, highlightVendor, health] = await Promise.all([
       fetch(url),
       fetch(`${url}/manifest.webmanifest`),
+      fetch(`${url}/icon-180.png`),
+      fetch(`${url}/icon-192.png`),
+      fetch(`${url}/icon-512.png`),
       fetch(`${url}/tokens.css`),
       fetch(`${url}/api-client.js`),
       fetch(`${url}/prompt-title.js`),
@@ -181,12 +184,24 @@ test('serves the frontend and health status', async () => {
     const pageHtml = await page.text();
     assert.match(pageHtml, /Interactive terminal/);
     assert.match(pageHtml, /apple-mobile-web-app-status-bar-style" content="black-translucent"/);
+    assert.match(pageHtml, /rel="apple-touch-icon" sizes="180x180" href="\/icon-180\.png"/);
+    assert.match(pageHtml, /rel="icon" type="image\/png" href="\/icon-192\.png"/);
     assert.equal(manifest.status, 200);
     assert.match(manifest.headers.get('content-type'), /^application\/manifest\+json/);
     const manifestJson = await manifest.json();
     assert.equal(manifestJson.orientation, 'portrait-primary');
     assert.equal(manifestJson.theme_color, '#0c0c0d');
+    assert.deepEqual(manifestJson.icons, [
+      { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+    ]);
     assert.equal(manifest.headers.get('cache-control'), 'no-store');
+    for (const icon of [appIcon180, appIcon192, appIcon512]) {
+      assert.equal(icon.status, 200);
+      assert.match(icon.headers.get('content-type'), /^image\/png/);
+      assert.equal(icon.headers.get('cache-control'), 'no-store');
+      assert.ok((await icon.arrayBuffer()).byteLength > 0);
+    }
     assert.equal(tokens.status, 200);
     assert.match(tokens.headers.get('content-type'), /^text\/css/);
     assert.equal(tokens.headers.get('cache-control'), 'no-store');

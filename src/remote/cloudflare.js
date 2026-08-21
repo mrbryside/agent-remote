@@ -19,13 +19,13 @@ export function createCloudflareClient({ fetch, token, apiBase = OFFICIAL_API_BA
   const base = normalizeApiBase(apiBase);
 
   async function verifyToken() {
-    await request('/user/tokens/verify', { tokenRequest: true });
+    await request('/user/tokens/verify', { tokenRequest: true, operation: 'verify token' });
   }
 
   async function listZones() {
     const zones = [];
     for (let page = 1; page <= MAX_ZONE_PAGES; page += 1) {
-      const response = await request('/zones', { query: { page, per_page: 50 } });
+      const response = await request('/zones', { query: { page, per_page: 50 }, operation: 'list zones' });
       zones.push(...asArray(response.result));
       const totalPages = positiveInteger(response.result_info?.total_pages, page);
       if (page >= totalPages) return zones;
@@ -36,6 +36,7 @@ export function createCloudflareClient({ fetch, token, apiBase = OFFICIAL_API_BA
   async function checkHostname(zoneId, hostname) {
     const response = await request(`/zones/${pathSegment(zoneId)}/dns_records`, {
       query: { name: hostname, per_page: 100 },
+      operation: 'check DNS hostname',
     });
     return { hostname, records: asArray(response.result) };
   }
@@ -44,6 +45,7 @@ export function createCloudflareClient({ fetch, token, apiBase = OFFICIAL_API_BA
     const response = await request(`/accounts/${pathSegment(accountId)}/cfd_tunnel`, {
       method: 'POST',
       body: { name, config_src: 'cloudflare' },
+      operation: 'create tunnel',
     });
     return response.result;
   }
@@ -51,6 +53,7 @@ export function createCloudflareClient({ fetch, token, apiBase = OFFICIAL_API_BA
   async function configureTunnel(accountId, tunnelId, hostname, service) {
     await request(`/accounts/${pathSegment(accountId)}/cfd_tunnel/${pathSegment(tunnelId)}/configurations`, {
       method: 'PUT',
+      operation: 'configure tunnel',
       body: {
         config: {
           ingress: [
@@ -63,7 +66,9 @@ export function createCloudflareClient({ fetch, token, apiBase = OFFICIAL_API_BA
   }
 
   async function getTunnelToken(accountId, tunnelId) {
-    const response = await request(`/accounts/${pathSegment(accountId)}/cfd_tunnel/${pathSegment(tunnelId)}/token`);
+    const response = await request(`/accounts/${pathSegment(accountId)}/cfd_tunnel/${pathSegment(tunnelId)}/token`, {
+      operation: 'read tunnel token',
+    });
     if (typeof response.result !== 'string' || response.result.length === 0) {
       throw cloudflareError(502, 'Cloudflare returned an invalid tunnel token response.');
     }
@@ -73,6 +78,7 @@ export function createCloudflareClient({ fetch, token, apiBase = OFFICIAL_API_BA
   async function createDnsRoute(zoneId, hostname, tunnelId) {
     const response = await request(`/zones/${pathSegment(zoneId)}/dns_records`, {
       method: 'POST',
+      operation: 'create DNS record',
       body: {
         type: 'CNAME',
         name: hostname,
@@ -85,27 +91,44 @@ export function createCloudflareClient({ fetch, token, apiBase = OFFICIAL_API_BA
   }
 
   async function getTunnel(accountId, tunnelId) {
-    return getOptional(`/accounts/${pathSegment(accountId)}/cfd_tunnel/${pathSegment(tunnelId)}`);
+    return getOptional(`/accounts/${pathSegment(accountId)}/cfd_tunnel/${pathSegment(tunnelId)}`, 'read tunnel');
   }
 
   async function getDnsRecord(zoneId, recordId) {
-    return getOptional(`/zones/${pathSegment(zoneId)}/dns_records/${pathSegment(recordId)}`);
+    return getOptional(`/zones/${pathSegment(zoneId)}/dns_records/${pathSegment(recordId)}`, 'read DNS record');
+  }
+
+  async function cleanupTunnelConnections(accountId, tunnelId) {
+    await request(`/accounts/${pathSegment(accountId)}/cfd_tunnel/${pathSegment(tunnelId)}/connections`, {
+      method: 'DELETE',
+      allowNotFound: true,
+      operation: 'clean up tunnel connections',
+    });
   }
 
   async function deleteDnsRoute(zoneId, recordId) {
-    await request(`/zones/${pathSegment(zoneId)}/dns_records/${pathSegment(recordId)}`, { method: 'DELETE' });
+    await request(`/zones/${pathSegment(zoneId)}/dns_records/${pathSegment(recordId)}`, {
+      method: 'DELETE',
+      operation: 'delete DNS record',
+    });
   }
 
   async function deleteTunnel(accountId, tunnelId) {
-    await request(`/accounts/${pathSegment(accountId)}/cfd_tunnel/${pathSegment(tunnelId)}`, { method: 'DELETE' });
+    await request(`/accounts/${pathSegment(accountId)}/cfd_tunnel/${pathSegment(tunnelId)}`, {
+      method: 'DELETE',
+      allowNotFound: true,
+      operation: 'delete tunnel',
+    });
   }
 
-  async function getOptional(path) {
-    const response = await request(path, { allowNotFound: true });
+  async function getOptional(path, operation) {
+    const response = await request(path, { allowNotFound: true, operation });
     return response ? response.result : undefined;
   }
 
-  async function request(path, { method = 'GET', body, query, tokenRequest = false, allowNotFound = false } = {}) {
+  async function request(path, {
+    method = 'GET', body, query, tokenRequest = false, allowNotFound = false, operation = 'API request',
+  } = {}) {
     const url = new URL(`${base}${path}`);
     for (const [key, value] of Object.entries(query ?? {})) {
       if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
@@ -123,16 +146,18 @@ export function createCloudflareClient({ fetch, token, apiBase = OFFICIAL_API_BA
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch {
-      throw cloudflareError(502, 'Unable to reach the Cloudflare API.');
+      throw cloudflareError(502, `Unable to reach the Cloudflare API while trying to ${operation}.`, { operation });
     }
 
-    const payload = await readResponse(response);
+    const payload = await readResponse(response, operation);
     if (allowNotFound && response.status === 404) return undefined;
     if (!response.ok || payload?.success !== true) {
       if (tokenRequest) {
         throw remoteError('TOKEN_INVALID', 'Cloudflare rejected the API token.', response.status || 401);
       }
-      throw cloudflareError(response.status || 502, 'Cloudflare API request failed.');
+      const status = response.status || 502;
+      const cloudflareCode = firstCloudflareCode(payload);
+      throw cloudflareError(status, failureMessage(operation, status, cloudflareCode), { operation, cloudflareCode });
     }
     return payload;
   }
@@ -147,6 +172,7 @@ export function createCloudflareClient({ fetch, token, apiBase = OFFICIAL_API_BA
     createDnsRoute,
     getTunnel,
     getDnsRecord,
+    cleanupTunnelConnections,
     deleteDnsRoute,
     deleteTunnel,
   };
@@ -181,30 +207,54 @@ function positiveInteger(value, fallback) {
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
-async function readResponse(response) {
+async function readResponse(response, operation) {
   if (!response || typeof response.status !== 'number') {
-    throw cloudflareError(502, 'Cloudflare returned an invalid response.');
+    throw cloudflareError(502, `Cloudflare returned an invalid response while trying to ${operation}.`, { operation });
   }
   const contentLength = Number(response.headers?.get?.('content-length'));
   if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
-    throw cloudflareError(response.status || 502, 'Cloudflare returned an oversized response.');
+    throw cloudflareError(response.status || 502, `Cloudflare returned an oversized response while trying to ${operation}.`, { operation });
   }
   let text;
   try {
     text = typeof response.text === 'function' ? await response.text() : JSON.stringify(await response.json());
   } catch {
-    throw cloudflareError(response.status || 502, 'Cloudflare returned an invalid response.');
+    throw cloudflareError(response.status || 502, `Cloudflare returned an invalid response while trying to ${operation}.`, { operation });
   }
   if (typeof text !== 'string' || text.length > MAX_RESPONSE_BYTES) {
-    throw cloudflareError(response.status || 502, 'Cloudflare returned an oversized response.');
+    throw cloudflareError(response.status || 502, `Cloudflare returned an oversized response while trying to ${operation}.`, { operation });
   }
   try {
     return JSON.parse(text);
   } catch {
-    throw cloudflareError(response.status || 502, 'Cloudflare returned an invalid response.');
+    throw cloudflareError(response.status || 502, `Cloudflare returned an invalid response while trying to ${operation}.`, { operation });
   }
 }
 
-function cloudflareError(status, message) {
-  return remoteError('CLOUDFLARE_API_ERROR', message, status);
+function firstCloudflareCode(payload) {
+  const value = Array.isArray(payload?.errors) ? payload.errors.find((candidate) => candidate?.code !== undefined)?.code : undefined;
+  if (Number.isSafeInteger(value)) return value;
+  if (typeof value === 'string' && /^\d{1,12}$/.test(value)) {
+    const numeric = Number(value);
+    if (Number.isSafeInteger(numeric)) return numeric;
+  }
+  return undefined;
+}
+
+function failureMessage(operation, status, cloudflareCode) {
+  const code = cloudflareCode === undefined ? '' : `, Cloudflare code ${cloudflareCode}`;
+  let hint = '';
+  if (status === 401 || status === 403) {
+    if (/DNS/i.test(operation)) hint = ' Check Zone / DNS / Edit and the selected zone.';
+    else if (/tunnel/i.test(operation)) hint = ' Check Account / Cloudflare Tunnel / Edit and the selected account.';
+    else if (/zone/i.test(operation)) hint = ' Check Zone / Zone / Read and the selected zone.';
+  }
+  return `Cloudflare could not ${operation} (HTTP ${status}${code}).${hint}`;
+}
+
+function cloudflareError(status, message, { operation, cloudflareCode } = {}) {
+  const error = remoteError('CLOUDFLARE_API_ERROR', message, status);
+  if (typeof operation === 'string') error.operation = operation;
+  if (cloudflareCode !== undefined) error.cloudflareCode = cloudflareCode;
+  return error;
 }

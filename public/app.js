@@ -1,4 +1,4 @@
-import { api, apiUrl } from './api-client.js';
+import { api, apiUrl, authenticatedFetch } from './api-client.js';
 import { createMobileConversationView } from './mobile-conversation.js';
 import { derivePromptTitle } from './prompt-title.js';
 import { createTerminalSnapshotCache } from './terminal-snapshots.js';
@@ -187,7 +187,7 @@ const mobileConversation = createMobileConversationView({
         for (let attempt = 0; attempt < 3; attempt += 1) {
           let response;
           try {
-            response = await fetch(apiUrl(`/api/conversations/${encodeURIComponent(sessionName)}/attachments`), {
+            response = await authenticatedFetch(apiUrl(`/api/conversations/${encodeURIComponent(sessionName)}/attachments`), {
               method: 'POST',
               headers: {
                 'content-type': file.type || 'application/octet-stream',
@@ -226,7 +226,7 @@ const mobileConversation = createMobileConversationView({
       if (!attachment) throw new Error('Upload finished without an attachment');
       return attachment;
     } catch (error) {
-      void fetch(apiUrl(`/api/conversations/${encodeURIComponent(sessionName)}/attachments/${uploadId}/upload`), {
+      void authenticatedFetch(apiUrl(`/api/conversations/${encodeURIComponent(sessionName)}/attachments/${uploadId}/upload`), {
         method: 'DELETE',
       }).catch(() => {});
       throw error;
