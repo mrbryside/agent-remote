@@ -5101,6 +5101,59 @@ test('keeps empty projects lean, aligned, and responsive', async ({ page }) => {
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'expanded');
 });
 
+test('keeps desktop Add and Edit Project parents fixed while only the folder list scrolls', async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  const projectScrollOwnership = async () => page.locator('#create-dialog').evaluate((dialog) => {
+    const form = dialog.querySelector('#project-form');
+    const body = dialog.querySelector('.project-sheet-body');
+    const folderList = dialog.querySelector('.folder-list');
+    return {
+      formOverflow: getComputedStyle(form).overflowY,
+      formGutter: getComputedStyle(form).scrollbarGutter,
+      bodyOverflow: getComputedStyle(body).overflowY,
+      folderOverflow: getComputedStyle(folderList).overflowY,
+      folderScrollable: folderList.scrollHeight > folderList.clientHeight,
+    };
+  });
+  const expectedOwnership = {
+    formOverflow: 'hidden',
+    formGutter: 'auto',
+    bodyOverflow: 'clip',
+    folderOverflow: 'auto',
+    folderScrollable: true,
+  };
+
+  await page.locator('#new-project').click();
+  await expect(page.locator('#create-dialog')).toBeVisible();
+  await expect.poll(projectScrollOwnership).toEqual(expectedOwnership);
+  const addBody = page.locator('.project-sheet-body');
+  await page.locator('#project-name').hover();
+  await page.mouse.wheel(0, 420);
+  await expect.poll(() => addBody.evaluate((body) => body.scrollTop)).toBe(0);
+  const addFolderList = page.locator('.folder-list');
+  await addFolderList.hover();
+  await page.mouse.wheel(0, 420);
+  await expect.poll(() => addFolderList.evaluate((list) => list.scrollTop)).toBeGreaterThan(0);
+  await page.locator('#create-dialog').getByRole('button', { name: 'Close', exact: true }).click();
+
+  const project = await createProject(page, { name: 'Desktop project scroll', marker: '__PROJECT_SCROLL__' });
+  await project.locator('.project-header').hover();
+  await project.getByRole('button', { name: 'Edit Desktop project scroll' }).click();
+  await expect(page.locator('#create-dialog')).toBeVisible();
+  await expect(page.locator('#dialog-title')).toHaveText('Edit Desktop project scroll');
+  await expect.poll(projectScrollOwnership).toEqual(expectedOwnership);
+  const editBody = page.locator('.project-sheet-body');
+  await page.locator('#project-name').hover();
+  await page.mouse.wheel(0, 420);
+  await expect.poll(() => editBody.evaluate((body) => body.scrollTop)).toBe(0);
+  const editFolderList = page.locator('.folder-list');
+  await editFolderList.hover();
+  await page.mouse.wheel(0, 420);
+  await expect.poll(() => editFolderList.evaluate((list) => list.scrollTop)).toBeGreaterThan(0);
+});
+
 test('restores persisted sidebar geometry before the first painted frame', async ({ page }) => {
   await page.evaluate(() => {
     localStorage.setItem('agent-remote-sidebar-width', '384');

@@ -16,7 +16,6 @@
 @supports (scrollbar-gutter: stable) {
   :is(
     .project-list,
-    #project-form,
     .folder-list,
     .remote-section,
     .cloudflare-token-guide-scroll,
@@ -350,7 +349,7 @@ dialog[open] { animation: dialog-in .18s ease both; }
 dialog::backdrop { background: #0009; backdrop-filter: blur(5px); }
 #project-form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: clamp(11px, 1.2vw, 15px); max-height: inherit; padding: clamp(14px, 1.6vw, 20px); overflow: hidden; }
 .project-sheet-handle { display: none; }
-.project-sheet-body { display: grid; align-content: start; gap: clamp(11px, 1.2vw, 15px); min-height: 0; overflow: auto; }
+.project-sheet-body { display: grid; align-content: start; gap: clamp(11px, 1.2vw, 15px); min-height: 0; overflow: clip; }
 .dialog-header { display: flex; align-items: start; justify-content: space-between; }
 .dialog-header h2 { margin-top: 3px; color: #d0d0d3; font-size: clamp(17px, 1.5vw, 19px); font-weight: 580; }
 .dialog-kicker { color: #77777e; font: 600 9px/1.2 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }

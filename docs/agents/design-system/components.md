@@ -80,6 +80,11 @@ the domain selector. Install drag-to-dismiss through
 `installMobileSheetDrag()` and call `resetMobileSheet()` before reopening a
 reused static sheet.
 
+The same scroll ownership applies to the desktop Add/Edit Project dialog: the
+form and project-sheet body stay fixed without scrollbar gutters, while the
+folder list is the only vertical scroller. Add and Edit share this one dialog
+contract.
+
 ## Mobile model picker
 
 The mobile model picker is a two-step model → effort interaction. Once opened,
