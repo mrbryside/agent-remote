@@ -718,6 +718,7 @@ button.remote-close-icon:hover { border-color: transparent; background: transpar
   .mobile-conversation-boot { position: absolute; z-index: 4; inset: 0; padding: 24px; }
   .mobile-conversation-boot[hidden] { display: none; }
   .mobile-conversation-header { position: relative; display: flex; flex: 0 0 var(--header-height); height: var(--header-height); min-height: var(--header-height); align-items: center; gap: 8px; padding: 0 10px; border: 0; background: var(--mobile-navbar-background); box-shadow: none; }
+  html[data-desktop-shell="tauri"] .mobile-conversation-header { padding-left: var(--tauri-window-controls-inset); }
   .mobile-conversation-header > button { display: grid; flex: 0 0 31px; width: 31px; height: 31px; place-items: center; padding: 0; border: 1px solid var(--color-border); border-radius: 50%; background: var(--color-surface-subtle); color: var(--color-text); font-size: 18px; }
   #mobile-conversation-menu { border: 0; border-radius: 0; background: transparent; color: var(--color-text-secondary); cursor: pointer; }
   .mobile-conversation-header > button[hidden] { display: none; }

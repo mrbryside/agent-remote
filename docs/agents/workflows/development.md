@@ -62,10 +62,12 @@ and chat headers form the visible top edge and provide the drag regions. Tauri's
 deep drag-region contract makes every non-interactive part of either full header
 draggable and makes a double-click maximize or restore the window without
 treating the header buttons as drag targets. The wrapper marks each loaded
-document as a Tauri surface so only the native sidebar header reserves
-traffic-light space while expanded. When the sidebar is collapsed, the chat
-header reserves that same inset so its hamburger stays clear of the native
-controls; the normal browser layout remains flush left in both states. Keep the
+document as a Tauri surface so the native sidebar header reserves traffic-light
+space while expanded. When the sidebar is collapsed, the chat header reserves
+that same inset; after the window crosses into the compact conversation layout,
+the mobile conversation header reserves it as well so every hamburger stays
+clear of the native controls. The normal browser and PWA layouts remain flush
+left in every state. Keep the
 native window minimum width below the web UI's 760px compact breakpoint so the
 Tauri app can intentionally resize into the mobile conversation surface. Its
 mobile conversation header is also a deep drag region, preserving native drag

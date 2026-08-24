@@ -70,6 +70,35 @@ test('keeps Remote administration out of the compact mobile surface', async ({ p
   expect(remoteAdminRequests).toEqual([]);
 });
 
+test('keeps the Tauri mobile hamburger clear of native window controls', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => {
+    const workspace = document.querySelector('.workspace');
+    workspace.dataset.mobileConversation = 'true';
+    document.querySelector('#mobile-conversation').hidden = false;
+  });
+
+  const header = page.locator('.mobile-conversation-header');
+  const menu = page.locator('#mobile-conversation-menu');
+  const browserGeometry = await header.evaluate((node) => ({
+    height: getComputedStyle(node).height,
+    paddingLeft: getComputedStyle(node).paddingLeft,
+    menuLeft: Math.round(node.querySelector('#mobile-conversation-menu').getBoundingClientRect().left),
+  }));
+  expect(browserGeometry).toEqual({ height: '44px', paddingLeft: '10px', menuLeft: 10 });
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.desktopShell = 'tauri';
+  });
+  await expect.poll(() => header.evaluate((node) => ({
+    height: getComputedStyle(node).height,
+    paddingLeft: getComputedStyle(node).paddingLeft,
+    menuLeft: Math.round(node.querySelector('#mobile-conversation-menu').getBoundingClientRect().left),
+  }))).toEqual({ height: '44px', paddingLeft: '70px', menuLeft: 70 });
+  await expect(menu).toHaveCSS('pointer-events', 'auto');
+  await expect(header).toHaveAttribute('data-tauri-drag-region', 'deep');
+});
+
 test('separates the mobile shell marker from the command draft', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.evaluate(() => {
