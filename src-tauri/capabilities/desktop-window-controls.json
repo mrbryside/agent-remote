@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "desktop-window-controls",
+  "description": "Allow the loopback Agent Remote UI to drag and zoom only its owning Tauri window.",
+  "remote": {
+    "urls": ["http://127.0.0.1:3000/*"]
+  },
+  "local": false,
+  "windows": ["main"],
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
+  ]
+}

@@ -7,7 +7,7 @@ EXPECTED_BUNDLE_ID="com.sirawat.agent-remote"
 DEFAULT_REPO_URL="https://github.com/mrbryside/agent-remote.git"
 RELEASE_TAG="${AGENT_REMOTE_RELEASE_TAG:-v1.0.0}"
 RELEASE_FILENAME="Agent Remote_1.0.0_aarch64.dmg"
-RELEASE_SHA256="${AGENT_REMOTE_DMG_SHA256:-a9dcb6d4e32d0297f60778c7a53c0b187747056a8e997230e7b0730082399ac8}"
+RELEASE_SHA256="${AGENT_REMOTE_DMG_SHA256:-e8715d943cc5d059b06a6077f12cde0d6e983c9c57101a18bf9f8cd27e50cea4}"
 ASSET_BASE_URL="${AGENT_REMOTE_ASSET_BASE_URL:-https://raw.githubusercontent.com/mrbryside/agent-remote/main/releases/$RELEASE_TAG}"
 
 repo_url="${AGENT_REMOTE_REPO_URL:-$DEFAULT_REPO_URL}"

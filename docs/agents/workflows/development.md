@@ -64,6 +64,10 @@ draggable and makes a double-click maximize or restore the window without
 treating the header buttons as drag targets. The wrapper marks each loaded
 document as a Tauri surface so only the native sidebar header reserves
 traffic-light space; the normal browser layout remains flush left.
+Because the runtime document is served from `http://127.0.0.1:3000`, its
+dedicated remote capability must remain limited to native window dragging and
+the internal maximize toggle. Do not broaden that capability to `core:default`,
+shell, opener, filesystem, or a non-loopback URL.
 
 ## Remote-development guardrails
 

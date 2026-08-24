@@ -9,6 +9,9 @@ const tauriDir = join(root, 'src-tauri');
 test('Tauri desktop contract is a local Apple Silicon wrapper', () => {
   const config = JSON.parse(readFileSync(join(tauriDir, 'tauri.conf.json'), 'utf8'));
   const capabilities = readFileSync(join(tauriDir, 'capabilities/default.json'), 'utf8');
+  const windowControls = JSON.parse(readFileSync(
+    join(tauriDir, 'capabilities/desktop-window-controls.json'), 'utf8',
+  ));
   const cargo = readFileSync(join(tauriDir, 'Cargo.toml'), 'utf8');
   const cargoConfig = readFileSync(join(tauriDir, '.cargo/config.toml'), 'utf8');
   const source = readFileSync(join(tauriDir, 'src/main.rs'), 'utf8');
@@ -26,6 +29,13 @@ test('Tauri desktop contract is a local Apple Silicon wrapper', () => {
   assert.doesNotMatch(capabilities, /remote|https?:\/\//i);
   assert.match(capabilities, /"core:default"/);
   assert.doesNotMatch(capabilities, /shell:|opener:/);
+  assert.equal(windowControls.local, false);
+  assert.deepEqual(windowControls.remote.urls, ['http://127.0.0.1:3000/*']);
+  assert.deepEqual(windowControls.windows, ['main']);
+  assert.deepEqual(windowControls.permissions, [
+    'core:window:allow-start-dragging',
+    'core:window:allow-internal-toggle-maximize',
+  ]);
   assert.doesNotMatch(cargo, /tauri-plugin-shell/);
   assert.doesNotMatch(source, /tauri_plugin_shell/);
   assert.match(source, /resolve_packaged_sidecar_path[\s\S]*sidecar_dir\.join\(name\)/);
