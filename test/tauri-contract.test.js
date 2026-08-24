@@ -21,6 +21,10 @@ test('Tauri desktop contract is a local Apple Silicon wrapper', () => {
   assert.equal(config.app.windows[0].titleBarStyle, 'Overlay');
   assert.deepEqual(config.app.windows[0].trafficLightPosition, { x: 12, y: 10 });
   assert.equal(config.app.windows[0].hiddenTitle, true);
+  assert.ok(
+    config.app.windows[0].minWidth > 760,
+    'the Tauri window must stay wider than the mobile conversation breakpoint',
+  );
   assert.deepEqual(config.bundle.externalBin, [
     'binaries/agent-remote-server',
     'binaries/cloudflared',
