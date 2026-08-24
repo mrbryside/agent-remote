@@ -15,6 +15,9 @@ test('Tauri desktop contract is a local Apple Silicon wrapper', () => {
 
   assert.equal(config.identifier, 'com.sirawat.agent-remote');
   assert.equal(config.build.frontendDist, '../desktop');
+  assert.equal(config.app.windows[0].titleBarStyle, 'Overlay');
+  assert.deepEqual(config.app.windows[0].trafficLightPosition, { x: 12, y: 10 });
+  assert.equal(config.app.windows[0].hiddenTitle, true);
   assert.deepEqual(config.bundle.externalBin, [
     'binaries/agent-remote-server',
     'binaries/cloudflared',
@@ -39,6 +42,10 @@ test('Tauri desktop contract is a local Apple Silicon wrapper', () => {
   assert.match(source, /RunEvent::Reopen/);
   assert.match(source, /RunEvent::Exit/);
   assert.match(source, /agent-remote-resume/);
+  assert.match(source, /desktopShell = 'tauri'/);
+  const appDocument = readFileSync(join(root, 'public/index.html'), 'utf8');
+  assert.match(appDocument, /class="sidebar-header" data-tauri-drag-region="deep"/);
+  assert.match(appDocument, /class="topbar" data-tauri-drag-region="deep"/);
   assert.match(source, /UserInitiatedAllowingIdleSystemSleep/);
   assert.match(source, /runtime\.remote_ready/);
   assert.equal(existsSync(join(root, 'desktop/index.html')), true);

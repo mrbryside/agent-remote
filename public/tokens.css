@@ -120,7 +120,7 @@
   /* Sizing and layout */
   --sidebar-width: clamp(252px, 25.5vw, 326px);
   --graphics-width: 50%;
-  --header-height: clamp(40px, 3.45vw, 44px);
+  --header-height: clamp(32px, 2.65vw, 34px);
   --page-gutter: clamp(7px, .95vw, 12px);
   --project-label-offset: 42px;
   --space-1: 4px;

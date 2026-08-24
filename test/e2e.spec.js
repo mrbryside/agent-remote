@@ -4531,7 +4531,8 @@ test('organizes chats by project, titles the first prompt, and clears projects i
   expect(workspaceBox.y + workspaceBox.height).toBe(page.viewportSize().height);
   expect(sidebarHeaderBox.height).toBe(topbarBox.height);
   expect(sidebarHeaderBox.y + sidebarHeaderBox.height).toBe(topbarBox.y + topbarBox.height);
-  expect(sidebarHeaderBox.height).toBe(44);
+  expect(sidebarHeaderBox.height).toBeGreaterThanOrEqual(32);
+  expect(sidebarHeaderBox.height).toBeLessThanOrEqual(34);
   await expect(page.locator('.sidebar-header')).toHaveCSS('border-bottom-width', '0px');
   await expect(page.locator('.topbar')).toHaveCSS('border-bottom-width', '0px');
   const sidebarCollapse = page.locator('.sidebar-header #toggle-sidebar');
@@ -4565,7 +4566,7 @@ test('organizes chats by project, titles the first prompt, and clears projects i
     outlineRemoved: true,
     accentFades: true,
     accentTransition: true,
-    accentWidth: '4px',
+    accentWidth: '2px',
   });
   const terminalTokens = await page.locator('#terminal').evaluate((terminal) => ({
     declaredBackground: getComputedStyle(document.documentElement)
@@ -4715,13 +4716,21 @@ test('keeps the terminal row remainder seamless while the window height changes'
   const desktopFrame = await page.evaluate(() => {
     const workspace = document.querySelector('.workspace').getBoundingClientRect();
     const shell = document.querySelector('.terminal-shell').getBoundingClientRect();
+    const sidebar = document.querySelector('.sidebar').getBoundingClientRect();
+    const sidebarHeader = document.querySelector('.sidebar-header').getBoundingClientRect();
     const topbar = document.querySelector('.topbar').getBoundingClientRect();
+    const resizer = document.querySelector('.sidebar-resizer').getBoundingClientRect();
     const stage = document.querySelector('.terminal-stage').getBoundingClientRect();
     return {
       bodyPadding: getComputedStyle(document.body).padding,
       workspace: { top: workspace.top, right: workspace.right, bottom: workspace.bottom, left: workspace.left },
       viewport: { width: window.innerWidth, height: window.innerHeight },
       shellBottom: shell.bottom,
+      sidebarRight: sidebar.right,
+      sidebarHeaderHeight: sidebarHeader.height,
+      shellLeft: shell.left,
+      resizer: { left: resizer.left, width: resizer.width },
+      topbarHeight: topbar.height,
       stageHeight: stage.height,
       expectedStageHeight: shell.height - topbar.height,
     };
@@ -4734,6 +4743,10 @@ test('keeps the terminal row remainder seamless while the window height changes'
     left: 0,
   });
   expect(desktopFrame.shellBottom).toBe(desktopFrame.viewport.height);
+  expect(desktopFrame.shellLeft).toBe(desktopFrame.sidebarRight);
+  expect(desktopFrame.resizer).toEqual({ left: desktopFrame.sidebarRight, width: 5 });
+  expect(desktopFrame.topbarHeight).toBeLessThanOrEqual(34);
+  expect(desktopFrame.sidebarHeaderHeight).toBe(desktopFrame.topbarHeight);
   expect(Math.abs(desktopFrame.stageHeight - desktopFrame.expectedStageHeight)).toBeLessThanOrEqual(1);
 
   const measureTerminal = async () => page.locator('#terminal').evaluate((terminal) => {

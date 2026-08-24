@@ -56,6 +56,14 @@ when the port is free, and leaves a foreign listener untouched. Window close
 hides the app while its backend supervisor stays active; resume/reopen probes
 and reconciles the frontend. Tray Quit terminates only the wrapper-owned child,
 and the bundled Node process independently exits if its Tauri parent vanishes.
+The macOS window uses a hidden overlay titlebar: native traffic-light controls
+sit at a fixed inset inside the compact sidebar header, while the web sidebar
+and chat headers form the visible top edge and provide the drag regions. Tauri's
+deep drag-region contract makes every non-interactive part of either full header
+draggable and makes a double-click maximize or restore the window without
+treating the header buttons as drag targets. The wrapper marks each loaded
+document as a Tauri surface so only the native sidebar header reserves
+traffic-light space; the normal browser layout remains flush left.
 
 ## Remote-development guardrails
 

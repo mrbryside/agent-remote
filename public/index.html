@@ -29,7 +29,7 @@
     <main class="workspace" data-sidebar="expanded" data-view="empty">
       <script src="/workspace-boot.js"></script>
       <aside class="sidebar" aria-label="Projects">
-        <div class="sidebar-header">
+        <div class="sidebar-header" data-tauri-drag-region="deep">
           <button id="toggle-sidebar" class="ui-icon-button sidebar-toggle" data-ui-variant="bare" data-ui-size="sm" type="button" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar (Ctrl/Cmd+B)">
             <svg class="sidebar-nav-icon" viewBox="0 0 20 20" fill="none" stroke="#aaaab0" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M10 4.75 4.75 10 10 15.25"></path>
@@ -58,7 +58,7 @@
       <div id="sidebar-resizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
 
       <section class="terminal-shell">
-        <header class="topbar">
+        <header class="topbar" data-tauri-drag-region="deep">
           <button id="open-sidebar" class="ui-icon-button sidebar-toggle sidebar-open" data-ui-variant="bare" data-ui-size="sm" type="button" aria-label="Expand sidebar" aria-expanded="false" title="Expand sidebar (Ctrl/Cmd+B)">
             <svg class="sidebar-nav-icon" viewBox="0 0 20 20" fill="none" stroke="#aaaab0" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M2 6.25h16"></path>

@@ -18,6 +18,7 @@ use serde::Deserialize;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
+    webview::PageLoadEvent,
     AppHandle, Manager, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_opener::OpenerExt;
@@ -543,6 +544,11 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
 
 fn main() {
     let app = tauri::Builder::default()
+        .on_page_load(|webview, payload| {
+            if payload.event() == PageLoadEvent::Finished {
+                let _ = webview.eval("document.documentElement.dataset.desktopShell = 'tauri'");
+            }
+        })
         .manage(DesktopState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {

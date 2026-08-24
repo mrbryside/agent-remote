@@ -41,7 +41,7 @@ button, input { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, [role="separator"]:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
 body { padding: 0; background: var(--color-canvas); }
-.workspace { position: relative; display: grid; grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr); width: 100%; height: 100%; overflow: hidden; border: 0; border-radius: 0; background: var(--color-surface); box-shadow: none; transition: grid-template-columns 260ms var(--ease-out); }
+.workspace { position: relative; display: grid; grid-template-columns: var(--sidebar-width) 0 minmax(0, 1fr); width: 100%; height: 100%; overflow: hidden; border: 0; border-radius: 0; background: var(--color-surface); box-shadow: none; transition: grid-template-columns 260ms var(--ease-out); }
 .workspace[data-file-drop="ready"]::after,
 .workspace[data-file-drop="uploading"]::after,
 .workspace[data-file-drop="error"]::after { position: absolute; z-index: 100; inset: 10px; display: grid; place-items: center; border: 1px dashed var(--color-accent); border-radius: 18px; background: color-mix(in srgb, var(--color-canvas) 82%, transparent); color: var(--color-text-strong); content: 'Drop files to attach to Grok'; font: 600 13px/1.3 var(--font-family-sans); pointer-events: none; }
@@ -51,7 +51,7 @@ html[data-sidebar-booting="true"] .workspace,
 html[data-sidebar-booting="true"] .sidebar { transition: none; }
 body[data-resizing] .workspace { transition: none; user-select: none; }
 .workspace[data-sidebar="collapsed"] { grid-template-columns: 0 0 minmax(0, 1fr); }
-.sidebar { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; border-right: 1px solid var(--color-border-faint); background: var(--color-sidebar); opacity: 1; transition: opacity 180ms var(--ease-standard), transform 260ms var(--ease-out), visibility 260ms; }
+.sidebar { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; min-width: 0; overflow: hidden; border-right: 0; background: var(--color-sidebar); opacity: 1; transition: opacity 180ms var(--ease-standard), transform 260ms var(--ease-out), visibility 260ms; }
 .workspace[data-sidebar="collapsed"] .sidebar { visibility: hidden; transform: translateX(-22px); opacity: 0; pointer-events: none; }
 /* `document-boot.js` reads persisted layout before CSS or body parsing. Keep
    that root-level state authoritative until the workspace bootstrap request
@@ -97,7 +97,8 @@ html[data-sidebar-booting="true"][data-initial-sidebar="collapsed"] .sidebar-ope
   .sidebar-edge-trigger:not([hidden]) { display: block; }
   .workspace[data-sidebar="collapsed"][data-sidebar-peek="true"] .sidebar { position: absolute; z-index: 40; inset: 0 auto 0 0; visibility: visible; width: min(var(--sidebar-width), calc(100% - 44px)); transform: none; opacity: 1; pointer-events: auto; }
 }
-.sidebar-header { display: flex; flex: 0 0 var(--header-height); height: var(--header-height); align-items: center; padding: 6px 12px; }
+.sidebar-header { display: flex; flex: 0 0 var(--header-height); height: var(--header-height); align-items: center; padding: 1px 8px; }
+html[data-desktop-shell="tauri"] .sidebar-header { padding-left: 70px; }
 .sidebar-section-header { display: flex; flex: 0 0 clamp(42px, 3.75vw, 48px); min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 9px 3px 14px; }
 .sidebar-heading { display: flex; min-width: 0; align-items: center; padding: 5px 7px; border: 0; border-radius: var(--radius-md); background: transparent; cursor: pointer; text-align: left; transition: background var(--duration-fast) var(--ease-standard), transform var(--duration-fast) var(--ease-standard); }
 .sidebar-heading:hover { background: var(--color-surface-subtle); }
@@ -540,7 +541,7 @@ button.remote-close-icon:hover { border-color: transparent; background: transpar
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 @media (max-width: 1100px) and (min-width: 761px) {
-  .workspace { grid-template-columns: min(var(--sidebar-width), 34vw) 5px minmax(0, 1fr); }
+  .workspace { grid-template-columns: min(var(--sidebar-width), 34vw) 0 minmax(0, 1fr); }
   .workspace[data-sidebar="collapsed"] { grid-template-columns: 0 0 minmax(0, 1fr); }
   .graphics-split { min-width: 240px; max-width: calc(100% - 240px); }
   .browser-tab { max-width: 150px; }
@@ -1475,6 +1476,9 @@ button.remote-close-icon:hover { border-color: transparent; background: transpar
   .empty-state p, .session-loading p { margin-top: 7px; line-height: 1.45; }
   .folder-picker { min-height: 160px; }
   .folder-list { min-height: 105px; max-height: 145px; }
+}
+@media (max-height: 620px) and (min-width: 761px) {
+  :root { --header-height: 32px; }
 }
 @media (max-height: 460px) {
   .empty-state .empty-orbit, .empty-state p, .session-loading p { display: none; }
