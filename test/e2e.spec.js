@@ -4712,6 +4712,30 @@ test('keeps the terminal row remainder seamless while the window height changes'
   await createProject(page, { name: 'Responsive', marker: '__HEIGHT_RESIZE__' });
   await expect(page.locator('#session-loading')).toBeHidden({ timeout: 8_000 });
 
+  const desktopFrame = await page.evaluate(() => {
+    const workspace = document.querySelector('.workspace').getBoundingClientRect();
+    const shell = document.querySelector('.terminal-shell').getBoundingClientRect();
+    const topbar = document.querySelector('.topbar').getBoundingClientRect();
+    const stage = document.querySelector('.terminal-stage').getBoundingClientRect();
+    return {
+      bodyPadding: getComputedStyle(document.body).padding,
+      workspace: { top: workspace.top, right: workspace.right, bottom: workspace.bottom, left: workspace.left },
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      shellBottom: shell.bottom,
+      stageHeight: stage.height,
+      expectedStageHeight: shell.height - topbar.height,
+    };
+  });
+  expect(desktopFrame.bodyPadding).toBe('0px');
+  expect(desktopFrame.workspace).toEqual({
+    top: 0,
+    right: desktopFrame.viewport.width,
+    bottom: desktopFrame.viewport.height,
+    left: 0,
+  });
+  expect(desktopFrame.shellBottom).toBe(desktopFrame.viewport.height);
+  expect(Math.abs(desktopFrame.stageHeight - desktopFrame.expectedStageHeight)).toBeLessThanOrEqual(1);
+
   const measureTerminal = async () => page.locator('#terminal').evaluate((terminal) => {
     const xterm = terminal.querySelector('.xterm');
     const viewport = terminal.querySelector('.xterm-viewport');

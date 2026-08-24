@@ -61,8 +61,8 @@ export async function sessionExists(command, name) {
   }
 }
 
-export async function stabilizeManagedSessionSize(command, name) {
-  await tmux(command, ['set-window-option', '-t', target(name), 'window-size', 'largest']);
+export async function followActiveManagedSessionSize(command, name) {
+  await tmux(command, ['set-window-option', '-t', target(name), 'window-size', 'latest']);
 }
 
 export async function managedSessionProcessId(command, name) {
@@ -224,7 +224,7 @@ export async function startManagedSession({
     // shrinks the shared window and fills the desktop client with padding.
     // `largest` keeps the biggest connected viewport authoritative while
     // tmux safely crops the same pane for smaller clients.
-    await stabilizeManagedSessionSize(tmuxCommand, name);
+    await followActiveManagedSessionSize(tmuxCommand, name);
     await tmux(tmuxCommand, ['set-option', '-t', target(name), '@agent_remote_label', requestedName || label]);
     await tmux(tmuxCommand, ['set-option', '-t', target(name), '@agent_remote_command', commandLine.replace(/[\r\n]+/g, ' ')]);
     if (conversationThreadId) {

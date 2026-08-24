@@ -1,6 +1,6 @@
 import * as pty from 'node-pty';
 import { WebSocket } from 'ws';
-import { stabilizeManagedSessionSize } from '../sessions.js';
+import { followActiveManagedSessionSize } from '../sessions.js';
 
 const rendererKeyPattern = /^(?:builtin:(?:shell|graphics)|session:[A-Za-z0-9_.-]{1,64})$/;
 
@@ -113,7 +113,7 @@ export function installTerminalSocket({
         await execFileAsync(config.tmuxCommand, ['set-option', '-t', launch.session, 'status', 'off']).catch(() => {});
         // Also migrate sessions created by older agent-remote versions when
         // their first browser reconnects.
-        await stabilizeManagedSessionSize(config.tmuxCommand, launch.session).catch(() => {});
+        await followActiveManagedSessionSize(config.tmuxCommand, launch.session).catch(() => {});
       }
       const terminalEnv = {
         ...process.env,

@@ -40,8 +40,8 @@ html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; -webkit-tex
 button, input { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, [role="separator"]:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
-body { padding: var(--page-gutter) var(--page-gutter) 0; background: var(--color-canvas); }
-.workspace { position: relative; display: grid; grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr); height: 100%; overflow: hidden; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-xl) var(--radius-xl) 0 0; background: var(--color-surface); box-shadow: 0 20px 70px #0008; transition: grid-template-columns 260ms var(--ease-out); }
+body { padding: 0; background: var(--color-canvas); }
+.workspace { position: relative; display: grid; grid-template-columns: var(--sidebar-width) 5px minmax(0, 1fr); width: 100%; height: 100%; overflow: hidden; border: 0; border-radius: 0; background: var(--color-surface); box-shadow: none; transition: grid-template-columns 260ms var(--ease-out); }
 .workspace[data-file-drop="ready"]::after,
 .workspace[data-file-drop="uploading"]::after,
 .workspace[data-file-drop="error"]::after { position: absolute; z-index: 100; inset: 10px; display: grid; place-items: center; border: 1px dashed var(--color-accent); border-radius: 18px; background: color-mix(in srgb, var(--color-canvas) 82%, transparent); color: var(--color-text-strong); content: 'Drop files to attach to Grok'; font: 600 13px/1.3 var(--font-family-sans); pointer-events: none; }
@@ -215,8 +215,8 @@ button.close-button--destructive { --ui-icon-button-hover-color: var(--color-clo
 .sidebar-resizer::after { content: ""; position: absolute; inset: 0 2px; background: transparent; transition: background .15s; }
 .sidebar-resizer:hover::after, body[data-resizing="sidebar"] .sidebar-resizer::after { background: #5f6563; }
 .workspace[data-sidebar="collapsed"] .sidebar-resizer { pointer-events: none; }
-.terminal-shell { grid-column: 3; grid-row: 1; width: 100%; min-width: 0; height: 100%; overflow: hidden; background: var(--color-surface); }
-.topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; height: var(--header-height); padding: 0 10px 0 14px; background: var(--color-surface-raised); color: var(--color-text-tertiary); }
+.terminal-shell { grid-column: 3; grid-row: 1; display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: var(--color-surface); }
+.topbar { display: grid; flex: 0 0 var(--header-height); grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; height: var(--header-height); padding: 0 10px 0 14px; background: var(--color-surface-raised); color: var(--color-text-tertiary); }
 .workspace[data-sidebar="collapsed"] .topbar { grid-template-columns: 31px minmax(0, 1fr) auto auto; gap: 8px; }
 .sidebar-toggle { display: grid; width: 31px; height: 31px; padding: 0; place-items: center; border: 1px solid transparent; border-radius: 8px; background: transparent; color: #7d7d84; cursor: pointer; font: 15px/1 ui-monospace, monospace; transition: background .15s, color .15s, transform .15s; }
 .sidebar-nav-icon { width: 18px; height: 18px; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
@@ -242,7 +242,7 @@ button.close-button--destructive { --ui-icon-button-hover-color: var(--color-clo
 .graphics-pane-toggle:hover, .graphics-pane-toggle:focus-visible { outline: 0; background: var(--color-surface-subtle); color: var(--color-text); }
 .graphics-pane-toggle:active { transform: scale(.9); }
 .graphics-pane-toggle[aria-expanded="false"] { color: var(--color-text-faint); }
-.terminal-stage { position: relative; display: flex; width: 100%; height: calc(100% - var(--header-height)); min-width: 0; overflow: hidden; }
+.terminal-stage { position: relative; display: flex; flex: 1 1 auto; width: 100%; min-width: 0; min-height: 0; height: auto; overflow: hidden; }
 .primary-terminal-pane { position: relative; flex: 1 1 auto; min-width: 0; height: 100%; overflow: hidden; background: var(--color-terminal-background); }
 #terminal { position: absolute; inset: 0; min-width: 0; overflow: hidden; padding: clamp(8px, .95vw, 12px) clamp(8px, .8vw, 10px); background: var(--color-terminal-background); }
 #terminal[hidden] { display: none; }

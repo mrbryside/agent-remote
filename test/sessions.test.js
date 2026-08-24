@@ -64,7 +64,7 @@ test('agent-remote CLI starts, lists, and stops a managed command session', (con
     const listed = execFileSync(process.execPath, ['bin/agent-remote.js', 'list'], { encoding: 'utf8' });
     assert.match(listed, new RegExp(`${name}\\t${label}\\tprintf __CLI_OK__`));
     const windowSize = execFileSync('tmux', ['show-options', '-A', '-w', '-t', name, '-v', 'window-size'], { encoding: 'utf8' }).trim();
-    assert.equal(windowSize, 'largest');
+    assert.equal(windowSize, 'latest');
     const stopped = execFileSync(process.execPath, ['bin/agent-remote.js', 'stop', name], { encoding: 'utf8' });
     assert.match(stopped, new RegExp(`Stopped ${name}`));
   } finally {

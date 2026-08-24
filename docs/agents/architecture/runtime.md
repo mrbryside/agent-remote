@@ -45,16 +45,17 @@
 5. The server attaches a PTY to tmux; xterm writes input and consumes output over the socket.
 6. Disconnecting the page closes the PTY attachment, not the tmux session. Reconnect restores it.
 
-Managed tmux windows use `window-size largest`. A phone and desktop can view
-the same pane without the most recently active phone shrinking the shared
-window and filling the desktop with tmux padding. Smaller clients receive
-tmux's cropped view. On touch devices, a short stationary terminal tap focuses
-xterm's text input, while a drag keeps input unfocused and pans the per-client
-tmux viewport without changing the desktop or shared pane. Visual-viewport
-changes refit the terminal when the software keyboard opens. When a provider
-can map the selected agent process, the phone replaces xterm with native message
-history and a textarea composer; desktop remains attached to xterm. Unsupported
-standalone commands retain the terminal fallback.
+Managed tmux windows use `window-size latest`, so the most recently active web
+or Tauri client owns the shared pane geometry. This keeps the active client's
+bottom rows and prompt inside its viewport instead of cropping them when a
+taller client is also attached. On touch devices, a short stationary terminal
+tap focuses xterm's text input, while a drag keeps input unfocused and pans the
+per-client tmux viewport. Visual-viewport changes refit the terminal when the
+software keyboard opens. When a provider can map the selected agent process,
+the phone replaces xterm with native message history and a textarea composer;
+desktop remains attached to xterm. Unsupported standalone commands retain the
+terminal fallback. Existing managed sessions are migrated to the active-client
+policy on their next browser connection.
 
 Desktop Grok startup is also provider-gated. Its xterm runtime may attach and
 buffer output behind one opaque startup surface until the conversation endpoint
