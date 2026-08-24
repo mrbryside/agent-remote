@@ -13,7 +13,7 @@ async function cleanWorkspace(request) {
       'Refresh cache', 'Agent loading', 'Recent activity', 'Pinned open A', 'Pinned open B', 'Responsive',
       'Grok ACP gate', 'Preserve A', 'Preserve B', 'Renamed B', 'Renamed from home', 'Mobile keyboard',
       'Mobile conversation', 'Mobile ACP startup', 'Lifecycle status',
-      'Cross device sync',
+      'Cross device sync', 'Model picker',
     ].includes(project.name));
     for (const project of testProjects) await request.delete(`/api/projects/${encodeURIComponent(project.id)}`);
   }
@@ -99,6 +99,100 @@ test('separates the mobile shell marker from the command draft', async ({ page }
   await input.fill('echo !');
   await expect(prefix).toBeHidden();
   await expect(input).toHaveValue('echo !');
+});
+
+test('keeps the mobile effort step open across live model metadata refreshes', async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeWebSocket = window.WebSocket;
+    window.WebSocket = class ModelPickerWebSocket {
+      static CONNECTING = NativeWebSocket.CONNECTING;
+      static OPEN = NativeWebSocket.OPEN;
+      static CLOSING = NativeWebSocket.CLOSING;
+      static CLOSED = NativeWebSocket.CLOSED;
+
+      constructor(url) {
+        if (!String(url).includes('/conversation-ws')) return new NativeWebSocket(url);
+        this.url = String(url);
+        this.readyState = NativeWebSocket.CONNECTING;
+        this.listeners = new Map();
+        window.__modelPickerSocket = this;
+        queueMicrotask(() => {
+          this.readyState = NativeWebSocket.OPEN;
+          this.dispatch('open', {});
+        });
+      }
+
+      addEventListener(type, listener) {
+        const listeners = this.listeners.get(type) || [];
+        listeners.push(listener);
+        this.listeners.set(type, listeners);
+      }
+
+      dispatch(type, event) {
+        for (const listener of this.listeners.get(type) || []) listener(event);
+      }
+
+      emit(conversation) {
+        this.dispatch('message', { data: JSON.stringify({ type: 'conversation', conversation }) });
+      }
+
+      close(code = 1000, reason = '') {
+        if (this.readyState === NativeWebSocket.CLOSED) return;
+        this.readyState = NativeWebSocket.CLOSED;
+        this.dispatch('close', { code, reason });
+      }
+    };
+  });
+  await page.reload();
+  const project = await createProject(page, { name: 'Model picker', marker: '__MODEL_PICKER__' });
+  const sessionName = await project.locator('.session-row').getAttribute('data-session');
+  const conversation = {
+    provider: { id: 'grok', label: 'Grok' },
+    thread: { id: 'picker-root', title: 'Model picker', agentName: 'grok', model: 'qwen-local', status: 'idle' },
+    parent: null,
+    rootThreadId: 'picker-root',
+    items: [],
+    children: [],
+    queue: [],
+    activity: { active: false },
+    controls: { model: {
+      currentId: 'qwen-local',
+      options: [
+        { id: 'qwen-local', label: 'Qwen', provider: { id: 'local', label: 'Local' } },
+        { id: 'grok-4.6', label: 'Grok 4.6', provider: { id: 'xai', label: 'xAI' },
+          description: 'Frontier model', currentEffortId: 'high', efforts: [
+            { id: 'high', value: 'high', label: 'High Effort' },
+            { id: 'low', value: 'low', label: 'Low Effort' },
+          ] },
+      ],
+    } },
+    capabilities: { send: true, children: false },
+  };
+  await page.route(`**/api/conversations/${sessionName}**`, (route) => route.fulfill({
+    json: { conversation },
+  }));
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  const mobileConversation = page.locator('#mobile-conversation');
+  await expect(mobileConversation).toBeVisible();
+  const input = mobileConversation.locator('#mobile-conversation-input');
+  await input.click();
+  const modelButton = mobileConversation.locator('#mobile-conversation-model');
+  const modelList = mobileConversation.locator('#mobile-conversation-model-list');
+  await modelButton.click();
+  await modelList.getByRole('option', { name: /Grok 4\.6/ }).click();
+  await expect(modelList).toHaveAttribute('aria-label', 'Choose effort for Grok 4.6');
+
+  const refreshedConversation = structuredClone(conversation);
+  refreshedConversation.controls.model.options[1].description = 'Live metadata refresh';
+  await page.evaluate((nextConversation) => {
+    window.__modelPickerSocket.emit(nextConversation);
+  }, refreshedConversation);
+
+  await expect(modelList).toBeVisible();
+  await expect(modelButton).toHaveAttribute('aria-expanded', 'true');
+  await expect(modelList).toHaveAttribute('aria-label', 'Choose effort for Grok 4.6');
+  await expect(modelList.getByRole('option')).toHaveCount(2);
 });
 
 test('dismisses every native modal only from its outside backdrop', async ({ page }) => {
@@ -4396,6 +4490,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 120, { steps: 4 });
   await page.mouse.up();
   await expect(sheet).toBeHidden();
+
   await expect(page.locator('#terminal')).toBeHidden();
   expect(sessionName).toMatch(/^ar-/);
 });

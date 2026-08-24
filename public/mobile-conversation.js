@@ -680,7 +680,11 @@ export function createMobileConversationView({
     const nextSignature = JSON.stringify({ currentId: control.currentId, options });
     if (nextSignature !== modelOptionsSignature) {
       modelOptionsSignature = nextSignature;
-      paintModelOptions(control);
+      // Keep the open picker structurally stable until the user closes it or
+      // commits an effort. A live metadata snapshot can otherwise replace the
+      // tapped model between pointerdown and click on iOS, resetting the
+      // second step and making the first tap appear to dismiss the picker.
+      if (modelList.hidden) paintModelOptions(control);
     }
 
   }

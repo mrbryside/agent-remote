@@ -80,6 +80,13 @@ the domain selector. Install drag-to-dismiss through
 `installMobileSheetDrag()` and call `resetMobileSheet()` before reopening a
 reused static sheet.
 
+## Mobile model picker
+
+The mobile model picker is a two-step model → effort interaction. Once opened,
+its option DOM stays stable while live conversation metadata arrives; apply the
+latest options the next time the picker opens. Replacing the open list can
+invalidate an in-flight iOS tap and reset the effort step.
+
 ## Mobile composer shell mode
 
 When the first draft character is `!`, the mobile composer consumes it into a
