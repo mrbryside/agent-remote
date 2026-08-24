@@ -17,7 +17,15 @@
 - `src/server/request-target.js` is the single request-target parser for HTTP and WebSocket entrypoints. It accepts canonical origin-form targets only and returns a bounded `400` rejection for malformed, absolute-form, encoded-separator, or dot-normalized paths. Every async HTTP entrypoint must terminate rejected promises with a generic response; malformed input must never reach Node's unhandled-rejection boundary.
 - Local HTTP and WebSocket authorization validates the request `Host` against the actual listener address/port before considering `Origin`; equality between two client-controlled headers is not trust. Both workspace documents deny framing. Node request/header/keep-alive limits are explicit, and workspace SSE, conversation HTTP SSE, and DevTools WebSockets share the normalized `MAX_CONNECTIONS` capacity.
 - `src/remote/` owns Remote persistence, macOS Keychain credentials, Cloudflare API/DNS ownership checks, tunnel child lifecycle, device authentication, and remote gateway policy. Read [Remote access](remote-access.md) before changing these boundaries.
-- `src-tauri/src/main.rs` is a thin macOS wrapper. It attaches to a compatible local backend or owns a spawned sidecar; it does not duplicate backend behavior or grant the webview privileged IPC.
+- `src-tauri/src/main.rs` is a thin macOS wrapper. It attaches only to a
+  compatible local backend whose runtime response confirms that both the local
+  frontend and Remote listener are ready, or owns a spawned sidecar; it does
+  not duplicate backend behavior or grant the webview privileged IPC. A
+  background supervisor probes that boundary every three seconds, restarts
+  only the exact child handle it owns, and reloads the webview only when the
+  backend incarnation changed. Resume, reopen, tray Show, and app focus all
+  trigger an immediate probe. Native resume also tells the loaded frontend to
+  reconcile workspace, terminal, conversation, renderer, and Remote status.
 - `src/sessions.js` creates and discovers only tmux sessions carrying the `@agent_remote` marker. Those sessions outlive browser connections.
 - `src/agents.js` owns the project-agent catalog. Project APIs accept an agent ID, and only the server resolves it to a launch command. Browser responses never expose those commands.
 - `public/app.js` composes mounted xterm runtimes, optimistic project/chat UI,
@@ -125,8 +133,8 @@ clients can synchronously clear their selection and runtime artifacts.
 
 ## Startup and shutdown order
 
-As soon as both listeners bind, the backend begins restoring a persisted named tunnel whose desired state is `running`, before unrelated terminal-browser startup cleanup and without waiting for the local UI to open. Direct Node startup emits its machine-readable readiness line independently; a slow or failed restore must not block local readiness. Quick Tunnels are never recreated because their URL changes.
+As soon as both listeners bind, the backend begins restoring a persisted named tunnel whose desired state is `running`, before unrelated terminal-browser startup cleanup and without waiting for the local UI to open. Direct Node startup emits its machine-readable readiness line independently; a slow or failed restore must not block local readiness. Quick Tunnels are never recreated because their URL changes. A Tauri-owned backend receives the wrapper PID and shuts itself down if it is reparented or the wrapper disappears, so a forced native termination cannot leave either listener or cloudflared orphaned.
 
-`app.close()` closes renderer and client sockets, closes the remote gateway and WebSocket servers, closes both HTTP listeners, stops its `cloudflared` child, then closes Remote auth/store and the project store. It never stops user-owned tmux sessions. Tauri follows the same boundary: Quit stops only a sidecar it owns, not a compatible backend it attached to.
+`app.close()` closes renderer and client sockets, closes the remote gateway and WebSocket servers, closes both HTTP listeners, stops its `cloudflared` child, then closes Remote auth/store and the project store. It never stops user-owned tmux sessions. Tauri follows the same boundary: Quit stops only a sidecar it owns, not a compatible backend it attached to. Window close hides the wrapper while its supervisor and a macOS background activity assertion keep the service reachable without preventing normal system sleep.
 
 [Back to architecture index](index.md)

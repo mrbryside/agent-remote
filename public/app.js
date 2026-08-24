@@ -1918,6 +1918,25 @@ function handleGraphicsOnline() {
   resumeGraphicsFromBackground({ force: true });
 }
 
+function handleDesktopResume() {
+  workspaceEventSource?.close();
+  workspaceEventSource = undefined;
+  connectWorkspaceEvents();
+  invalidateWorkspaceRefresh();
+  if (!hasPendingMutations()) refreshWorkspace().catch((error) => showNotice(error.message));
+  for (const runtime of terminalRuntimes.values()) {
+    if (runtime.disposed || runtime.suspended) continue;
+    runtime.generation += 1;
+    clearTimeout(runtime.reconnectTimer);
+    const socket = runtime.socket;
+    runtime.socket = undefined;
+    runtime.ready = false;
+    if (socket?.readyState < WebSocket.CLOSING) socket.close(1000, 'Desktop resumed');
+    connectTerminalRuntime(runtime);
+  }
+  handleGraphicsOnline();
+}
+
 function setStatus(state, text) {
   statusElement.dataset.state = state;
   statusText.textContent = text;
@@ -3169,6 +3188,7 @@ window.addEventListener('pagehide', suspendGraphicsForBackground);
 window.addEventListener('pageshow', handleGraphicsPageShow);
 window.addEventListener('focus', handleGraphicsWindowFocus);
 window.addEventListener('online', handleGraphicsOnline);
+window.addEventListener('agent-remote-resume', handleDesktopResume);
 const graphicsForegroundProbe = setInterval(probeGraphicsForegroundLiveness, 2_000);
 window.addEventListener('beforeunload', () => {
   compactSidebarMedia.removeEventListener('change', handleCompactSidebarChange);
@@ -3183,6 +3203,7 @@ window.addEventListener('beforeunload', () => {
   window.removeEventListener('pageshow', handleGraphicsPageShow);
   window.removeEventListener('focus', handleGraphicsWindowFocus);
   window.removeEventListener('online', handleGraphicsOnline);
+  window.removeEventListener('agent-remote-resume', handleDesktopResume);
   workspaceEventSource?.close();
   workspaceEventSource = undefined;
   mobileConversation.destroy();

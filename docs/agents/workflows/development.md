@@ -12,6 +12,17 @@ npm start
 
 Open `http://127.0.0.1:3000`. `npm run dev` restarts the Node server on source changes. Both start modes repair the machine terminal-browser shim before launching.
 
+For a normal macOS app installation, use `./init.sh`. It supports an interactive
+choice of `/Applications`, `~/Applications`, or a custom destination, as well as
+non-interactive `--install-dir`, positional destination, and
+`AGENT_REMOTE_INSTALL_DIR` forms. `--source-dir` either uses an Agent Remote
+checkout or clones the configured repository into that folder; when the script
+is piped without a checkout it uses an automatically cleaned temporary clone.
+`--app-bundle` installs a prebuilt validated bundle. Replacement requires an
+interactive confirmation or `--yes`, and `--no-launch` suppresses opening the
+installed app. Keep the bundle-ID and all four bundled executable checks when
+changing the installer.
+
 `npm start` and the Tauri app use the same Node backend: both start local control on `127.0.0.1:3000` and the Remote gateway on `127.0.0.1:3001` by default. Browser mode discovers `cloudflared` through `CLOUDFLARED_BIN` or `PATH`; a missing or old binary affects only Remote controls, not local terminal startup. Remote accepts Cloudflare version 2025.4.0 or newer.
 
 ## Desktop sidecar workflow
@@ -27,7 +38,18 @@ npm run desktop:build
 
 `desktop:prepare` obtains the pinned `cloudflared` 2026.8.2 asset, checks its SHA-256 from `src-tauri/sidecars.lock.json`, and installs the executable expected by Tauri. `sidecar:build` creates a native ARM64 launcher and packages the exact Node 22 runtime, application files, and native PTY assets. Do not replace this layout with a single-file `pkg` bundle: a real smoke test found that pkg's virtual filesystem cannot run `node-pty`'s `spawn-helper`.
 
-The Tauri wrapper first probes the local runtime. It attaches if it finds compatible agent-remote, starts an owned sidecar only when the port is free, and leaves a foreign listener untouched. Window close hides the app; tray Quit terminates only the wrapper-owned child.
+The desktop bundle and PWA intentionally use the same icon artwork.
+`public/icon-512.png` is the source asset and must remain byte-for-byte identical
+to `src-tauri/icons/icon.png`; it is an RGBA PNG because Tauri rejects RGB-only
+bundle icons. The Tauri contract test prevents the two copies from drifting.
+
+The Tauri wrapper first probes the local runtime. Compatibility requires the
+Agent Remote identity plus a live Remote listener. It attaches without taking
+ownership when that complete contract is present, starts an owned sidecar only
+when the port is free, and leaves a foreign listener untouched. Window close
+hides the app while its backend supervisor stays active; resume/reopen probes
+and reconciles the frontend. Tray Quit terminates only the wrapper-owned child,
+and the bundled Node process independently exits if its Tauri parent vanishes.
 
 ## Remote-development guardrails
 

@@ -95,7 +95,7 @@ export function createTunnelManager(dependencies = {}) {
   const remoteOrigin = dependencies.remoteOrigin ?? 'http://127.0.0.1:3001';
   const startupTimeoutMs = dependencies.startupTimeoutMs ?? 15_000;
   const killTimeoutMs = dependencies.killTimeoutMs ?? 5_000;
-  const retryDelaysMs = dependencies.retryDelaysMs ?? [1_000, 2_000, 4_000];
+  const retryDelaysMs = dependencies.retryDelaysMs ?? [1_000, 2_000, 4_000, 10_000, 30_000, 60_000];
   const schedule = dependencies.setTimeout ?? globalThis.setTimeout;
   const cancelSchedule = dependencies.clearTimeout ?? globalThis.clearTimeout;
   const listeners = new Set();
@@ -153,8 +153,11 @@ export function createTunnelManager(dependencies = {}) {
       record.reject?.(remoteError('TUNNEL_EXITED', 'The Quick Tunnel stopped unexpectedly.'));
       return;
     }
-    if (record.attempt < retryDelaysMs.length) {
-      const delay = retryDelaysMs[record.attempt];
+    if (retryDelaysMs.length > 0) {
+      // A named tunnel represents persisted desired state. Keep retrying at
+      // the final bounded interval until Stop changes that state; otherwise a
+      // Mac sleep or a long network outage can leave Remote permanently down.
+      const delay = retryDelaysMs[Math.min(record.attempt, retryDelaysMs.length - 1)];
       publish({ mode: 'named', state: 'starting', publicUrl: record.publicUrl, hostname: record.hostname });
       retryTimer = schedule(() => {
         retryTimer = undefined;

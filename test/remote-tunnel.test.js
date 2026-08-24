@@ -123,7 +123,7 @@ test('stops children with TERM followed by KILL only after the grace period', as
   assert.deepEqual(manager.status(), { mode: 'none', state: 'stopped' });
 });
 
-test('keeps named tokens in the child environment, uses the configured hostname, and retries unexpected exits three times', async () => {
+test('keeps named tokens private and retries unexpected named exits until explicit Stop', async () => {
   const fake = childSpawner();
   const store = settingsStore();
   const manager = createTunnelManager({
@@ -149,11 +149,11 @@ test('keeps named tokens in the child environment, uses the configured hostname,
   fake.calls[2].child.exit(1);
   await new Promise((resolve) => setTimeout(resolve, 10));
   fake.calls[3].child.exit(1);
-  await new Promise((resolve) => setTimeout(resolve, 1));
-  assert.equal(fake.calls.length, 4);
-  assert.equal(manager.status().state, 'error');
-  assert.equal(manager.status().error.code, 'TUNNEL_EXITED');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(fake.calls.length, 5);
+  assert.equal(manager.status().state, 'running');
   await manager.stop();
+  assert.deepEqual(fake.calls[4].child.kills, ['SIGTERM']);
   assert.equal(store.states.at(-1), 'stopped');
 });
 

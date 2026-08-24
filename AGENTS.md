@@ -2,7 +2,7 @@
 
 Local persistent agent workspace with browser terminals, native mobile conversations, tmux, SQLite, Cloudflare Remote access, and a macOS Tauri wrapper.
 
-`Last documented commit: 002704ba4761b43a2567eb3f21982d4c02ca668b`
+`Last documented commit: 72187ff4f50557081fb633ae7fa0b52863cf832e`
 
 ## Project structure
 
@@ -18,6 +18,7 @@ Local persistent agent workspace with browser terminals, native mobile conversat
 | `src-tauri/` | Apple Silicon Tauri wrapper, capabilities, icons, sidecar manifest, and Rust lifecycle code. |
 | `test/` | Node unit/integration tests, Playwright projects, Remote fixtures, and packaging contracts. |
 | `docs/agents/` | Focused agent documentation organized as category indexes and subtopics. |
+| `init.sh` | Interactive or unattended Apple Silicon app builder/installer with custom source and destination support. |
 | `package.json` | Runtime constraints, CLI entry, dependencies, and development/test commands. |
 | `playwright.config.js` | Serial local and Remote E2E configuration. |
 

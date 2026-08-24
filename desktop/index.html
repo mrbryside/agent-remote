@@ -27,6 +27,8 @@
         error.textContent = message;
         error.hidden = false;
       };
+      const startupError = new URLSearchParams(location.search).get('error');
+      if (startupError) window.showDesktopError(startupError);
     </script>
   </body>
 </html>

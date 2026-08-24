@@ -3300,6 +3300,7 @@ export function createMobileConversationView({
   window.addEventListener('blur', suspendForBackground);
   window.addEventListener('focus', handleWindowFocus);
   window.addEventListener('online', handleOnline);
+  window.addEventListener('agent-remote-resume', handleOnline);
   foregroundProbeTimer = setInterval(probeForegroundLiveness, 2_000);
   renderShellMode();
   autoSizeInput();
@@ -3531,6 +3532,7 @@ export function createMobileConversationView({
       window.removeEventListener('blur', suspendForBackground);
       window.removeEventListener('focus', handleWindowFocus);
       window.removeEventListener('online', handleOnline);
+      window.removeEventListener('agent-remote-resume', handleOnline);
     },
   };
 }

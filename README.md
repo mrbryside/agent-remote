@@ -4,7 +4,40 @@ A local multi-session browser terminal built with xterm.js, WebSocket, Node.js, 
 
 The frontend supports Kitty graphics through xterm's image addon. For `terminal-browser`, a dedicated PTY launches the browser and the web UI streams its page surface directly over CDP for smooth, unclipped rendering.
 
-## One-time setup
+## Easy macOS installation
+
+On an Apple Silicon Mac, run the installer from a checkout:
+
+```bash
+./init.sh
+```
+
+It installs build dependencies, builds the self-contained Tauri app, validates
+its bundle and bundled sidecars, then lets you choose `/Applications`,
+`~/Applications`, or another folder. You can also run it without cloning first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mrbryside/agent-remote/main/init.sh | sh
+```
+
+For an unattended install or a path containing spaces, pass the destination
+explicitly. A custom source folder is supported too; the installer clones into
+it when it does not already contain Agent Remote:
+
+```bash
+./init.sh --install-dir "$HOME/My Apps" --yes
+curl -fsSL https://raw.githubusercontent.com/mrbryside/agent-remote/main/init.sh \
+  | sh -s -- --source-dir "$HOME/Source/agent-remote" --install-dir "$HOME/My Apps" --yes
+```
+
+Use `--no-launch` when the app should not open after installation. Building
+requires macOS 13+, Node.js 22.5+, Rust/Cargo, and Xcode Command Line Tools.
+`tmux` remains a machine dependency for persistent terminal sessions; install
+it with `brew install tmux` if the installer prints that warning. The installed
+app bundles its own Node runtime and pinned `cloudflared`, so the source folder
+and build tools are not needed when launching it later.
+
+## Manual development setup
 
 ```bash
 cd agent-remote

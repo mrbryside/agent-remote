@@ -645,6 +645,7 @@ export function createTerminalServer(options = {}) {
     rendererForDevtoolsAccess,
     proxyDevtoolsAsset,
     closeRenderer,
+    remoteReady: () => remoteServer.listening,
   });
 
   const handleHttpFailure = (response) => {
@@ -894,6 +895,20 @@ export function createTerminalServer(options = {}) {
   };
 }
 
+export function desktopParentIsAlive(parentPid, {
+  ppid = process.ppid,
+  signal = process.kill,
+} = {}) {
+  if (!Number.isSafeInteger(parentPid) || parentPid <= 1) return true;
+  if (ppid !== parentPid) return false;
+  try {
+    signal(parentPid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const app = createTerminalServer();
   app.listen().then(({ url }) => {
@@ -904,10 +919,21 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       : 'Session manager ready. Create one with: agent-remote <command>');
   });
 
+  let shuttingDown = false;
+  let parentWatch;
   const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    clearInterval(parentWatch);
     await app.close();
     process.exit(0);
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  const desktopParentPid = Number.parseInt(process.env.AGENT_REMOTE_PARENT_PID || '', 10);
+  if (Number.isSafeInteger(desktopParentPid) && desktopParentPid > 1) {
+    parentWatch = setInterval(() => {
+      if (!desktopParentIsAlive(desktopParentPid)) void shutdown();
+    }, 1_000);
+  }
 }

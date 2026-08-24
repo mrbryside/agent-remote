@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { WebSocket } from 'ws';
 import { commandExists } from '../src/config.js';
-import { createTerminalServer, selectRendererViewport } from '../src/server.js';
+import { createTerminalServer, desktopParentIsAlive, selectRendererViewport } from '../src/server.js';
 
 async function withServer(options, run) {
   const stateRoot = mkdtempSync(join(tmpdir(), 'agent-remote-state-'));
@@ -36,6 +36,22 @@ async function withServer(options, run) {
     rmSync(stateRoot, { recursive: true, force: true });
   }
 }
+
+test('desktop sidecar recognizes an exited or reparented Tauri owner', () => {
+  let probes = 0;
+  assert.equal(desktopParentIsAlive(undefined, {
+    ppid: 10,
+    signal: () => { probes += 1; },
+  }), true);
+  assert.equal(probes, 0);
+  assert.equal(desktopParentIsAlive(42, { ppid: 42, signal: () => { probes += 1; } }), true);
+  assert.equal(desktopParentIsAlive(42, { ppid: 1, signal: () => { probes += 1; } }), false);
+  assert.equal(desktopParentIsAlive(42, {
+    ppid: 42,
+    signal: () => { throw new Error('missing'); },
+  }), false);
+  assert.equal(probes, 1);
+});
 
 async function pairRemoteDevice(app, publicUrl = 'https://remote.example.test') {
   const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
@@ -745,8 +761,10 @@ test('remote gateway listens separately while preserving the local url compatibi
     assert.equal(addresses.localUrl, url);
     assert.match(addresses.remoteUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
     assert.notEqual(addresses.remoteUrl, url);
-    assert.deepEqual(await (await fetch(`${url}/api/runtime`)).json(), {
-      product: 'agent-remote', version: 1, surface: 'local', desktopMode: false,
+    const runtimeResponse = await fetch(`${url}/api/runtime`);
+    assert.equal(Number(runtimeResponse.headers.get('content-length')) > 0, true);
+    assert.deepEqual(await runtimeResponse.json(), {
+      product: 'agent-remote', version: 1, surface: 'local', desktopMode: false, remoteReady: true,
     });
     assert.equal(app.server.listening, true);
     assert.equal(app.remoteServer.listening, true);

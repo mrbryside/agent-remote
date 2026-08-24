@@ -9,6 +9,7 @@ export function createWorkspaceHttpHandler({
   handleConversationFileRoute, handleConversationControlRoute,
   handleConversationMessageRoute, handleProjectRoute, serveStaticAsset,
   rendererForDevtoolsAccess, proxyDevtoolsAsset, closeRenderer,
+  remoteReady = () => false,
 }) {
   async function handleWorkspaceRequest(request, response, surface = 'local') {
     const url = parseRequestUrl(request);
@@ -57,7 +58,13 @@ export function createWorkspaceHttpHandler({
     }
 
     if (surface === 'local' && pathname === '/api/runtime') {
-      json(response, 200, { product: 'agent-remote', version: 1, surface: 'local', desktopMode: config.desktopMode });
+      json(response, 200, {
+        product: 'agent-remote',
+        version: 1,
+        surface: 'local',
+        desktopMode: config.desktopMode,
+        remoteReady: remoteReady() === true,
+      });
       return;
     }
 

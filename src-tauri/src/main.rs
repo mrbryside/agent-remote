@@ -6,7 +6,10 @@ use std::{
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{mpsc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -22,6 +25,9 @@ use url::Url;
 
 const LOCAL_URL: &str = "http://127.0.0.1:3000";
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
+const BACKEND_HEALTH_INTERVAL: Duration = Duration::from_secs(3);
+const BACKEND_UNHEALTHY_GRACE: Duration = Duration::from_secs(6);
+const STARTUP_URL: &str = "tauri://localhost/";
 
 type DesktopResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -36,11 +42,15 @@ enum RuntimeProbe {
 struct RuntimeState {
     owned_child: Option<Child>,
     local_url: Option<String>,
+    unhealthy_since: Option<Instant>,
 }
 
 #[derive(Default)]
 struct DesktopState {
     runtime: Mutex<RuntimeState>,
+    ensure_lock: Mutex<()>,
+    recovery_running: AtomicBool,
+    stopping: AtomicBool,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +58,8 @@ struct RuntimeResponse {
     product: String,
     version: u8,
     surface: String,
+    #[serde(rename = "remoteReady")]
+    remote_ready: bool,
 }
 
 #[derive(Deserialize)]
@@ -58,6 +70,20 @@ struct ReadinessMessage {
     local_url: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BackendOutcome {
+    local_url: String,
+    changed: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RecoveryAction {
+    Monitor,
+    Resume,
+    Show,
+    OpenBrowser,
+}
+
 fn desktop_error(message: impl Into<String>) -> Box<dyn Error + Send + Sync> {
     Box::new(io::Error::new(io::ErrorKind::Other, message.into()))
 }
@@ -65,7 +91,10 @@ fn desktop_error(message: impl Into<String>) -> Box<dyn Error + Send + Sync> {
 fn is_compatible_runtime_body(body: &str) -> bool {
     serde_json::from_str::<RuntimeResponse>(body)
         .map(|runtime| {
-            runtime.product == "agent-remote" && runtime.version == 1 && runtime.surface == "local"
+            runtime.product == "agent-remote"
+                && runtime.version == 1
+                && runtime.surface == "local"
+                && runtime.remote_ready
         })
         .unwrap_or(false)
 }
@@ -193,15 +222,45 @@ fn stop_child_gracefully(mut child: Child) {
 }
 
 fn stop_owned_child(state: &DesktopState) {
-    let child = state
-        .runtime
-        .lock()
-        .expect("desktop state lock poisoned")
-        .owned_child
-        .take();
+    let child = {
+        let mut runtime = state.runtime.lock().expect("desktop state lock poisoned");
+        runtime.local_url = None;
+        runtime.unhealthy_since = None;
+        runtime.owned_child.take()
+    };
     if let Some(child) = child {
         stop_child_gracefully(child);
     }
+}
+
+fn owned_child_is_running(state: &DesktopState) -> bool {
+    let mut runtime = state.runtime.lock().expect("desktop state lock poisoned");
+    let Some(child) = runtime.owned_child.as_mut() else {
+        return false;
+    };
+    match child.try_wait() {
+        Ok(None) => true,
+        Ok(Some(_)) | Err(_) => {
+            runtime.owned_child.take();
+            runtime.local_url = None;
+            runtime.unhealthy_since = None;
+            false
+        }
+    }
+}
+
+fn owned_child_should_restart(state: &DesktopState) -> bool {
+    let mut runtime = state.runtime.lock().expect("desktop state lock poisoned");
+    let since = runtime.unhealthy_since.get_or_insert_with(Instant::now);
+    since.elapsed() >= BACKEND_UNHEALTHY_GRACE
+}
+
+fn mark_backend_healthy(state: &DesktopState) {
+    state
+        .runtime
+        .lock()
+        .expect("desktop state lock poisoned")
+        .unhealthy_since = None;
 }
 
 #[cfg(test)]
@@ -220,6 +279,11 @@ fn spawn_owned_backend(state: &DesktopState) -> DesktopResult<String> {
     let mut child = Command::new(&server)
         .env("AGENT_REMOTE_DESKTOP", "1")
         .env("CLOUDFLARED_BIN", &cloudflared)
+        .env("HOST", "127.0.0.1")
+        .env("PORT", "3000")
+        .env("REMOTE_HOST", "127.0.0.1")
+        .env("REMOTE_PORT", "3001")
+        .env("AGENT_REMOTE_PARENT_PID", std::process::id().to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
@@ -236,9 +300,10 @@ fn spawn_owned_backend(state: &DesktopState) -> DesktopResult<String> {
     let (lines, receiver) = mpsc::channel();
     thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if lines.send(line).is_err() {
-                break;
-            }
+            // Keep draining stdout for the entire child lifetime. Closing this
+            // pipe after readiness can make a later Node log hit EPIPE and kill
+            // an otherwise healthy background server.
+            let _ = lines.send(line);
         }
     });
 
@@ -265,22 +330,52 @@ fn spawn_owned_backend(state: &DesktopState) -> DesktopResult<String> {
     ))
 }
 
-fn ensure_backend(state: &DesktopState) -> DesktopResult<String> {
-    let local_url = match probe_runtime() {
-        RuntimeProbe::Compatible(local_url) => local_url,
-        RuntimeProbe::Free => spawn_owned_backend(state)?,
-        RuntimeProbe::Foreign => {
-            return Err(desktop_error(
-                "Port 3000 is already being used by another service. Agent Remote did not change it.",
-            ));
-        }
-    };
-    state
+fn ensure_backend(state: &DesktopState) -> DesktopResult<BackendOutcome> {
+    let _ensure = state
+        .ensure_lock
+        .lock()
+        .expect("desktop ensure lock poisoned");
+    if state.stopping.load(Ordering::Acquire) {
+        return Err(desktop_error("Agent Remote is shutting down."));
+    }
+
+    let previous_url = state
         .runtime
         .lock()
         .expect("desktop state lock poisoned")
-        .local_url = Some(local_url.clone());
-    Ok(local_url)
+        .local_url
+        .clone();
+    let owned_running = owned_child_is_running(state);
+    let mut probe = probe_runtime();
+
+    if matches!(probe, RuntimeProbe::Compatible(_)) {
+        mark_backend_healthy(state);
+    } else if owned_running {
+        if !owned_child_should_restart(state) {
+            return Err(desktop_error(
+                "The owned Agent Remote backend is temporarily unavailable.",
+            ));
+        }
+        // Only recycle the child whose handle this wrapper owns. An attached
+        // backend or a foreign listener is never signalled.
+        stop_owned_child(state);
+        probe = probe_runtime();
+    }
+
+    let (local_url, started) = match probe {
+        RuntimeProbe::Compatible(local_url) => (local_url, false),
+        RuntimeProbe::Free => (spawn_owned_backend(state)?, true),
+        RuntimeProbe::Foreign => {
+            return Err(desktop_error(
+                "Port 3000 is already being used by another service, or its Remote listener is unavailable. Agent Remote did not change it.",
+            ));
+        }
+    };
+    let changed = started || previous_url.as_deref() != Some(local_url.as_str());
+    let mut runtime = state.runtime.lock().expect("desktop state lock poisoned");
+    runtime.local_url = Some(local_url.clone());
+    runtime.unhealthy_since = None;
+    Ok(BackendOutcome { local_url, changed })
 }
 
 fn show_main_window(app: &AppHandle) {
@@ -297,17 +392,134 @@ fn navigate_to_backend(window: &WebviewWindow, local_url: &str) -> DesktopResult
 }
 
 fn show_startup_error(window: &WebviewWindow, message: &str) {
-    let message = serde_json::to_string(message).expect("error text is serializable");
-    let _ = window.eval(&format!("window.showDesktopError({message})"));
+    let Ok(mut url) = Url::parse(STARTUP_URL) else {
+        return;
+    };
+    url.query_pairs_mut().append_pair("error", message);
+    let _ = window.navigate(url);
 }
+
+fn notify_frontend_resume(window: &WebviewWindow) {
+    let _ = window.eval("window.dispatchEvent(new Event('agent-remote-resume'))");
+}
+
+fn apply_recovery_result(
+    app: &AppHandle,
+    action: RecoveryAction,
+    result: Result<BackendOutcome, String>,
+) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    match result {
+        Ok(outcome) => {
+            if outcome.changed {
+                let _ = navigate_to_backend(&window, &outcome.local_url);
+            } else if action != RecoveryAction::Monitor {
+                notify_frontend_resume(&window);
+            }
+            match action {
+                RecoveryAction::Show => show_main_window(app),
+                RecoveryAction::OpenBrowser => {
+                    let _ = app.opener().open_url(outcome.local_url, None::<&str>);
+                }
+                RecoveryAction::Monitor | RecoveryAction::Resume => {}
+            }
+        }
+        Err(message) => {
+            if matches!(action, RecoveryAction::Show | RecoveryAction::OpenBrowser) {
+                show_startup_error(&window, &message);
+                show_main_window(app);
+            }
+        }
+    }
+}
+
+fn request_backend_recovery(app: &AppHandle, action: RecoveryAction) {
+    if action == RecoveryAction::Show {
+        show_main_window(app);
+    }
+    let state = app.state::<DesktopState>();
+    if state.stopping.load(Ordering::Acquire) {
+        return;
+    }
+    if state.recovery_running.swap(true, Ordering::AcqRel) {
+        if action == RecoveryAction::OpenBrowser {
+            let local_url = state
+                .runtime
+                .lock()
+                .expect("desktop state lock poisoned")
+                .local_url
+                .clone();
+            if let Some(local_url) = local_url {
+                let _ = app.opener().open_url(local_url, None::<&str>);
+            }
+        }
+        return;
+    }
+
+    let app = app.clone();
+    thread::spawn(move || {
+        let result =
+            ensure_backend(app.state::<DesktopState>().inner()).map_err(|error| error.to_string());
+        app.state::<DesktopState>()
+            .recovery_running
+            .store(false, Ordering::Release);
+        if app.state::<DesktopState>().stopping.load(Ordering::Acquire) {
+            return;
+        }
+        let ui_app = app.clone();
+        let _ = app.run_on_main_thread(move || apply_recovery_result(&ui_app, action, result));
+    });
+}
+
+fn start_backend_supervisor(app: AppHandle) {
+    thread::spawn(move || loop {
+        thread::sleep(BACKEND_HEALTH_INTERVAL);
+        if app.state::<DesktopState>().stopping.load(Ordering::Acquire) {
+            break;
+        }
+        request_backend_recovery(&app, RecoveryAction::Monitor);
+    });
+}
+
+fn shutdown_backend(state: &DesktopState) {
+    state.stopping.store(true, Ordering::Release);
+    let _ensure = state
+        .ensure_lock
+        .lock()
+        .expect("desktop ensure lock poisoned");
+    stop_owned_child(state);
+}
+
+#[cfg(target_os = "macos")]
+fn keep_remote_service_active() {
+    use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
+
+    let reason = NSString::from_str("Keep Agent Remote reachable while its window is hidden");
+    let activity = NSProcessInfo::processInfo().beginActivityWithOptions_reason(
+        NSActivityOptions::UserInitiatedAllowingIdleSystemSleep,
+        &reason,
+    );
+    // The assertion intentionally lasts until process exit. It prevents App
+    // Nap while still allowing the Mac itself to sleep normally.
+    std::mem::forget(activity);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keep_remote_service_active() {}
 
 fn configure_window_lifecycle(window: &WebviewWindow) {
     let window_for_event = window.clone();
-    window.on_window_event(move |event| {
-        if let WindowEvent::CloseRequested { api, .. } = event {
+    window.on_window_event(move |event| match event {
+        WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
             let _ = window_for_event.hide();
         }
+        WindowEvent::Focused(true) => {
+            request_backend_recovery(window_for_event.app_handle(), RecoveryAction::Monitor);
+        }
+        _ => {}
     });
 }
 
@@ -320,19 +532,8 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
         .tooltip("Agent Remote")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "show" => show_main_window(app),
-            "open" => {
-                let local_url = app
-                    .state::<DesktopState>()
-                    .runtime
-                    .lock()
-                    .expect("desktop state lock poisoned")
-                    .local_url
-                    .clone();
-                if let Some(local_url) = local_url {
-                    let _ = app.opener().open_url(local_url, None::<&str>);
-                }
-            }
+            "show" => request_backend_recovery(app, RecoveryAction::Show),
+            "open" => request_backend_recovery(app, RecoveryAction::OpenBrowser),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -345,7 +546,7 @@ fn main() {
         .manage(DesktopState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            show_main_window(app);
+            request_backend_recovery(app, RecoveryAction::Show);
         }))
         .setup(|app| -> Result<(), Box<dyn Error>> {
             let window = app.get_webview_window("main").ok_or_else(|| {
@@ -354,18 +555,31 @@ fn main() {
             configure_window_lifecycle(&window);
             install_tray(app)?;
             match ensure_backend(app.state::<DesktopState>().inner()) {
-                Ok(local_url) => navigate_to_backend(&window, &local_url)
+                Ok(outcome) => navigate_to_backend(&window, &outcome.local_url)
                     .map_err(|error| io::Error::new(io::ErrorKind::Other, error.to_string()))?,
                 Err(error) => show_startup_error(&window, &error.to_string()),
             }
+            start_backend_supervisor(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building Agent Remote");
-    app.run(|app: &AppHandle, event| {
-        if let tauri::RunEvent::ExitRequested { .. } = event {
-            stop_owned_child(app.state::<DesktopState>().inner());
+    keep_remote_service_active();
+    app.run(|app: &AppHandle, event| match event {
+        tauri::RunEvent::ExitRequested { .. } => {
+            shutdown_backend(app.state::<DesktopState>().inner());
         }
+        tauri::RunEvent::Exit => {
+            shutdown_backend(app.state::<DesktopState>().inner());
+        }
+        tauri::RunEvent::Resumed => {
+            request_backend_recovery(app, RecoveryAction::Resume);
+        }
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            request_backend_recovery(app, RecoveryAction::Show);
+        }
+        _ => {}
     });
 }
 
@@ -376,10 +590,16 @@ mod tests {
     #[test]
     fn accepts_only_a_compatible_runtime_probe() {
         assert!(is_compatible_runtime_body(
-            r#"{"product":"agent-remote","version":1,"surface":"local","desktopMode":false}"#
+            r#"{"product":"agent-remote","version":1,"surface":"local","desktopMode":true,"remoteReady":true}"#
         ));
         assert!(!is_compatible_runtime_body(
             r#"{"product":"another-app","version":1,"surface":"local"}"#
+        ));
+        assert!(!is_compatible_runtime_body(
+            r#"{"product":"agent-remote","version":1,"surface":"local","remoteReady":false}"#
+        ));
+        assert!(!is_compatible_runtime_body(
+            r#"{"product":"agent-remote","version":1,"surface":"local"}"#
         ));
     }
 

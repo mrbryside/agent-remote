@@ -953,5 +953,12 @@ export async function bootstrapRemoteControl() {
       void refresh;
     }
   });
+  window.addEventListener('agent-remote-resume', () => {
+    schedulePolling();
+    const refresh = state.loading
+      ? setupPromise
+      : dialog.open ? refreshStatus({ devices: true }) : refreshTunnelStatus();
+    void refresh;
+  });
   await setupPromise;
 }

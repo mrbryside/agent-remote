@@ -6,7 +6,7 @@
 | --- | --- |
 | `npm test` | Node unit and backend integration tests in `test/*.test.js` |
 | `npm run test:e2e` | Serial Playwright UI, real PTY/tmux, Remote pairing, refresh, resize, optimistic action, and browser-pane tests |
-| `npm run sidecar:smoke` | Packaged ARM64 launcher, both listeners, real PTY WebSocket output, and child cleanup |
+| `npm run sidecar:smoke` | Packaged ARM64 launcher, served frontend, both listeners, runtime Remote readiness, real PTY WebSocket output, and child cleanup |
 | `cargo test --manifest-path src-tauri/Cargo.toml` | Tauri backend attach/ownership/readiness and lifecycle tests |
 | `npm run desktop:build` | Apple Silicon Tauri `.app` packaging gate |
 | `npm run test:all` | Required full suite |
@@ -40,7 +40,11 @@ Playwright runs serially because the tmux fixture, browser renderer, SQLite file
 - Keychain, Cloudflare API, ownership provisioning, auth, controller, and tunnel state machines: `test/remote-*.test.js`
 - Local/remote listener boundary, remote routes, WebSockets, and shutdown: `test/server.test.js`
 - Remote pairing, returning-device, revocation, and fake named-domain flows: `test/remote-e2e.spec.js`
-- Tauri configuration and wrapper lifecycle: `test/tauri-contract.test.js` and `src-tauri/src/main.rs` tests
+- Installer syntax, custom folders, validated-bundle copy, and safe replacement:
+  `test/init-script.test.js`
+- Tauri configuration, owned-sidecar supervision, resume/reopen behavior,
+  parent-PID cleanup, and wrapper lifecycle: `test/tauri-contract.test.js`,
+  `test/server.test.js`, and `src-tauri/src/main.rs` tests
 
 Tests that create tmux sessions, projects, remote stores, or child tunnels must clean up even after failure. Use unique project/session markers, temporary SQLite paths, and fake cloudflared processes; the Grok leader socket follows the temporary database path so tests cannot attach to a user's default leader. Assert Remote Stop/close leaves no orphaned child. Avoid relying on execution order beyond the suite's explicit serial configuration. Run sidecar and desktop checks only on Darwin ARM64.
 

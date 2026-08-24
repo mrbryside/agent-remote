@@ -7,12 +7,14 @@ export function authorized(request, config) {
 }
 
 export function json(response, status, payload) {
+  const body = JSON.stringify(payload);
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
+    'content-length': String(Buffer.byteLength(body)),
     'cache-control': 'no-store',
     'x-content-type-options': 'nosniff',
   });
-  response.end(JSON.stringify(payload));
+  response.end(body);
 }
 
 export async function readJson(request) {

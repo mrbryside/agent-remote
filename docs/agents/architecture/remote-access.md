@@ -16,7 +16,17 @@ node src/server.js                app probes local runtime
 
 `src/server.js` owns both listeners, so they share the project store, tmux sessions, renderer registry, connection limit, and shutdown path. The Remote listener accepts only `127.0.0.1`; `cloudflared` is the only supported external path to it.
 
-Tauri has no privileged Remote IPC. It probes local `/api/runtime`, attaches to a compatible server without taking ownership, and displays an error rather than disturbing a foreign service on port 3000. Its native ARM64 server launcher starts the bundled Node 22 runtime and resources. The earlier single-file `pkg` option is intentionally not used: its virtual filesystem failed a real `node-pty` `spawn-helper` smoke test. The desktop preparation step verifies the pinned `cloudflared` 2026.8.2 release-asset checksum before packaging it.
+Tauri has no privileged Remote IPC. It probes local `/api/runtime` and attaches
+only when that response identifies Agent Remote and reports `remoteReady: true`;
+the latter is derived from the real Remote listener state. It starts an owned
+sidecar only when port 3000 is free and displays an error rather than disturbing
+a foreign service. The owned process receives fixed loopback ports 3000/3001
+instead of inheriting ambient shell port variables. Its native ARM64 server
+launcher starts the bundled Node 22 runtime and resources. The earlier
+single-file `pkg` option is intentionally not used: its virtual filesystem
+failed a real `node-pty` `spawn-helper` smoke test. The desktop preparation step
+verifies the pinned `cloudflared` 2026.8.2 release-asset checksum before
+packaging it.
 
 ## Local vs. remote security boundary
 
@@ -56,7 +66,7 @@ Remote uses a scoped Cloudflare **user API token**: Account / Cloudflare Tunnel 
 
 Only one lower-case ASCII subdomain label and one stored named tunnel are supported. An existing record is reusable only after exact ownership verification; every other record is a conflict and must remain untouched. When the user changes an owned Custom Domain, validate the new hostname before changing state, then stop the old process, remove only the exact owned DNS/tunnel resources, and create the replacement automatically. A conflicting target or unverifiable old ownership must leave the existing resources intact. Named setup writes remotely managed tunnel ingress to the remote listener, creates a proxied automatic-TTL CNAME, then starts `cloudflared tunnel --no-autoupdate run` with the tunnel token in its environment.
 
-Quick mode runs `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:3001`, extracts its random `trycloudflare.com` URL within 15 seconds, and never auto-recreates after exit. A new Quick URL is a new browser origin, so each browser profile must pair again. Named mode persists `desired_state`; only `running` named configurations are restored at Node startup. Unexpected named exits retry after 1, 2, and 4 seconds, and Stop cancels those retries.
+Quick mode runs `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:3001`, extracts its random `trycloudflare.com` URL within 15 seconds, and never auto-recreates after exit. A new Quick URL is a new browser origin, so each browser profile must pair again. Named mode persists `desired_state`; only `running` named configurations are restored at Node startup. Unexpected named exits retry after 1, 2, 4, 10, 30, and 60 seconds, then continue at the bounded 60-second interval until Stop changes the desired state.
 
 **Stop** sends TERM (then KILL after five seconds if needed), sets a named tunnel to stopped, and preserves Cloudflare resources. Process shutdown terminates the same child without changing `desired_state`, so a named tunnel that was On reconnects when the server starts again while an explicitly stopped tunnel stays Off. While Remote is running, changing the connection type, zone, or subdomain turns the header action into **Update & Restart**; the replacement endpoint validates first and performs the restart. These fields are dialog-local drafts and closing the dialog without updating restores the persisted active configuration. The local setup UI does not expose a destructive Custom Domain removal action.
 
@@ -64,6 +74,16 @@ The retained `DELETE /api/remote/tunnels/named` backend operation stops first, r
 
 ## Shutdown sequence
 
-On application close: close renderer/client sockets, close Remote gateway tracking and WebSocket servers, close both HTTP listeners, stop the tunnel manager and cloudflared child, then close Remote auth/store and the project store. Managed tmux sessions are deliberately left running. Tauri Quit applies this only to its owned sidecar; a backend it merely attached to is untouched.
+On application close: close renderer/client sockets, close Remote gateway tracking and WebSocket servers, close both HTTP listeners, stop the tunnel manager and cloudflared child, then close Remote auth/store and the project store. Managed tmux sessions are deliberately left running. Tauri Quit applies this only to its owned sidecar; a backend it merely attached to is untouched. The wrapper also handles both requested and final native exit events, while an independent parent-PID watchdog makes an owned Node sidecar self-terminate after an abrupt wrapper death.
+
+While the wrapper remains open, macOS may hide or nap its window but must not
+remove the Remote service. The wrapper holds a background activity assertion
+that still permits normal system sleep, keeps draining sidecar stdout, and
+probes backend health every three seconds. A dead owned child is replaced
+immediately; a still-running but unhealthy owned child receives a six-second
+grace period before replacement. A compatible attached backend is never
+signalled. When the server incarnation changes, the WebView navigates back to
+the local frontend; otherwise resume dispatches a reconciliation event without
+discarding the current page state.
 
 [Back to architecture index](index.md)

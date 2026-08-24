@@ -29,5 +29,22 @@ test('Tauri desktop contract is a local Apple Silicon wrapper', () => {
   assert.match(source, /Show Agent Remote/);
   assert.match(source, /Open in Browser/);
   assert.match(source, /Quit/);
+  assert.match(source, /\.env\("HOST", "127\.0\.0\.1"\)/);
+  assert.match(source, /\.env\("PORT", "3000"\)/);
+  assert.match(source, /\.env\("REMOTE_HOST", "127\.0\.0\.1"\)/);
+  assert.match(source, /\.env\("REMOTE_PORT", "3001"\)/);
+  assert.match(source, /AGENT_REMOTE_PARENT_PID/);
+  assert.match(source, /start_backend_supervisor/);
+  assert.match(source, /RunEvent::Resumed/);
+  assert.match(source, /RunEvent::Reopen/);
+  assert.match(source, /RunEvent::Exit/);
+  assert.match(source, /agent-remote-resume/);
+  assert.match(source, /UserInitiatedAllowingIdleSystemSleep/);
+  assert.match(source, /runtime\.remote_ready/);
   assert.equal(existsSync(join(root, 'desktop/index.html')), true);
+  assert.deepEqual(
+    readFileSync(join(tauriDir, 'icons/icon.png')),
+    readFileSync(join(root, 'public/icon-512.png')),
+    'the Tauri app icon must be the exact PWA icon asset',
+  );
 });

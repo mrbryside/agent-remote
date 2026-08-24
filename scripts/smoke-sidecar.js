@@ -193,6 +193,10 @@ async function main() {
       return JSON.parse(response.body);
     }, 'local control health surface');
     assert.equal(runtime.surface, 'local');
+    assert.equal(runtime.remoteReady, true);
+    const frontend = await httpJson(localUrl);
+    assert.equal(frontend.status, 200);
+    assert.match(frontend.body, /<title>Agent Remote<\/title>/);
     await waitFor(() => tcpOpen(remotePort), 'remote gateway listener');
     await exercisePty(localUrl);
     await exitsAfterSignal(child);
