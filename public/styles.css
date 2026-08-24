@@ -1049,7 +1049,7 @@ button.remote-close-icon:hover { border-color: transparent; background: transpar
   .mobile-event-tool > .mobile-event-toggle > span:first-child > small { display: none; }
   .mobile-event-tool > .mobile-event-toggle .mobile-event-heading > strong { color: var(--color-text-muted); font: 500 14px/1.4 var(--font-family-sans); }
   .mobile-tool-details { box-sizing: border-box; max-height: none; margin: 0 0 var(--space-2); overflow: visible; padding: var(--space-3); border: 1px solid var(--color-border-strong); border-radius: var(--radius-lg); background: var(--color-surface-subtle); }
-  .mobile-event-tool > .mobile-event-panel .mobile-tool-command { max-height: min(38dvh, 300px); }
+  .mobile-event-tool > .mobile-event-panel .mobile-tool-command { max-height: none; overflow: visible; }
   .mobile-tool-details :is(.mobile-event-change, .mobile-event-file) { background: color-mix(in srgb, var(--color-canvas) 82%, var(--color-surface-subtle)); }
   .mobile-tool-group { margin-block: -4px 16px; overflow: visible; border: 0; border-radius: 0; background: transparent; }
   .mobile-tool-group-toggle { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto 14px; align-items: center; gap: 7px; width: 100%; min-height: 44px; padding: 8px 2px; border: 0; background: transparent; color: var(--color-text-secondary); text-align: left; cursor: pointer; }
@@ -1080,17 +1080,17 @@ button.remote-close-icon:hover { border-color: transparent; background: transpar
   .mobile-tool-group-panel .mobile-event-toggle > span:first-child > small { display: none; }
   .mobile-tool-group-panel .mobile-event-heading > strong { color: var(--color-text-muted); font: 500 13px/1.4 var(--font-family-sans); }
   .mobile-tool-group-panel .mobile-tool-details { margin-bottom: calc(var(--space-1) + 1px); }
-  .mobile-tool-group-panel .mobile-event-change-scroll, .mobile-tool-group-panel .mobile-file-lines, .mobile-tool-group-panel .mobile-tool-detail pre { max-height: none; overflow-x: auto; overflow-y: hidden; }
-  .mobile-tool-group-panel .mobile-tool-command { max-height: none; overflow: hidden; }
+  .mobile-tool-group-panel .mobile-event-change-scroll, .mobile-tool-group-panel .mobile-file-lines { max-height: none; overflow-x: auto; overflow-y: hidden; }
+  .mobile-tool-group-panel .mobile-tool-command { max-height: none; overflow: visible; }
   .mobile-tool-detail { display: grid; gap: 6px; min-width: 0; padding: 0; }
   .mobile-tool-detail + .mobile-tool-detail { padding-top: var(--space-3); border-top: 1px solid var(--color-border-faint); }
   .mobile-tool-detail > small { color: var(--color-text-muted); font: 600 8px/1.2 var(--font-family-mono); letter-spacing: .06em; text-transform: uppercase; }
-  .mobile-tool-detail > pre { box-sizing: border-box; width: 100%; max-width: 100%; max-height: min(38dvh, 300px); margin: 0; overflow: auto; color: var(--color-text-secondary); font: var(--font-size-tool-detail)/1.5 var(--font-family-mono); white-space: pre; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .mobile-tool-detail > pre { box-sizing: border-box; width: 100%; max-width: 100%; max-height: none; margin: 0; overflow: visible; color: var(--color-text-secondary); font: var(--font-size-tool-detail)/1.5 var(--font-family-mono); overflow-wrap: anywhere; white-space: pre-wrap; word-break: break-word; }
   .mobile-tool-detail[data-variant="file"], .mobile-tool-detail[data-variant="change"], .mobile-tool-detail[data-variant="search"] { display: block; }
-  .mobile-tool-command { width: 100%; max-width: 100%; overflow: hidden; color: var(--color-text-secondary); font: var(--font-size-tool-detail)/1.5 var(--font-family-mono); }
-  .mobile-tool-command-line { display: grid; grid-template-columns: 18px minmax(max-content, 1fr); gap: 4px; width: 100%; max-width: 100%; box-sizing: border-box; overflow-x: auto; overflow-y: hidden; }
+  .mobile-tool-command { width: 100%; max-width: 100%; overflow: visible; color: var(--color-text-secondary); font: var(--font-size-tool-detail)/1.5 var(--font-family-mono); }
+  .mobile-tool-command-line { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 4px; width: 100%; max-width: 100%; box-sizing: border-box; overflow: visible; }
   .mobile-tool-command-icon { align-self: center; width: 15px; height: 15px; overflow: visible; color: var(--color-text-muted); }
-  .mobile-tool-command-line > code { color: inherit; font: inherit; white-space: pre; }
+  .mobile-tool-command-line > code { min-width: 0; color: inherit; font: inherit; overflow-wrap: anywhere; white-space: pre-wrap; word-break: break-word; }
   .mobile-tool-command-output { color: var(--color-text-secondary); }
   .mobile-conversation-messages:has(> :is(.mobile-conversation-empty, .mobile-conversation-loading):only-child) { display: grid; grid-template-rows: minmax(0, 1fr); overflow-y: hidden; overscroll-behavior: none; }
   .mobile-conversation-messages:has(> :is(.mobile-conversation-empty, .mobile-conversation-loading):only-child)::before { content: none; }

@@ -884,7 +884,8 @@ test('uses semantic tool summaries while keeping complete calls in details', asy
         },
         {
           id: 'summary-list', type: 'tool', kind: 'list', status: 'completed', title: 'List Files',
-          summary: 'Inspect source files', input: '{"target_directory":"src","depth":2}', output: 'app.js',
+          summary: 'Inspect source files', input: '{"target_directory":"src","depth":2}',
+          output: ['app.js', ...Array.from({ length: 80 }, (_, index) => `nested/result-${index}.js`)].join('\n'),
         },
         {
           id: 'fallback-command', type: 'tool', kind: 'execute', status: 'completed', title: 'Shell',
@@ -909,6 +910,10 @@ test('uses semantic tool summaries while keeping complete calls in details', asy
   await expect(commandCard.locator('.mobile-tool-detail')).toHaveCount(2);
   await expect(commandCard.locator('.mobile-tool-detail').nth(0)).toContainText('Input');
   await expect(commandCard.locator('.mobile-tool-detail').nth(1)).toContainText('Output');
+  await expect.poll(() => commandCard.locator('.mobile-tool-command-line').evaluate((line) => ({
+    overflowX: getComputedStyle(line).overflowX,
+    whiteSpace: getComputedStyle(line.querySelector('code')).whiteSpace,
+  }))).toEqual({ overflowX: 'visible', whiteSpace: 'pre-wrap' });
   await expect.poll(() => page.evaluate(() => window.__toolRevealCalls)).toContain('summary-command');
 
   const listCard = page.locator('[data-event-id="summary-list"]');
@@ -917,6 +922,26 @@ test('uses semantic tool summaries while keeping complete calls in details', asy
   await expect(listCard.locator('.mobile-tool-detail').filter({ hasText: 'Input' }))
     .toContainText('{"target_directory":"src","depth":2}');
   await expect(listCard.locator('.mobile-tool-detail').filter({ hasText: 'Output' })).toContainText('app.js');
+  await expect.poll(() => listCard.locator('.mobile-tool-detail').evaluateAll((details) => details.map((detail) => {
+    const content = detail.querySelector('pre');
+    return {
+      maxHeight: getComputedStyle(content).maxHeight,
+      overflowX: getComputedStyle(content).overflowX,
+      overflowY: getComputedStyle(content).overflowY,
+      ownsHorizontalScroll: content.scrollWidth > content.clientWidth,
+      ownsVerticalScroll: content.scrollHeight > content.clientHeight,
+      whiteSpace: getComputedStyle(content).whiteSpace,
+    };
+  }))).toEqual([
+    {
+      maxHeight: 'none', overflowX: 'visible', overflowY: 'visible',
+      ownsHorizontalScroll: false, ownsVerticalScroll: false, whiteSpace: 'pre-wrap',
+    },
+    {
+      maxHeight: 'none', overflowX: 'visible', overflowY: 'visible',
+      ownsHorizontalScroll: false, ownsVerticalScroll: false, whiteSpace: 'pre-wrap',
+    },
+  ]);
   await expect.poll(() => listCard.locator(':scope > .mobile-event-panel').evaluate((panel) => ({
     background: getComputedStyle(panel).backgroundColor,
     padding: [getComputedStyle(panel).paddingLeft, getComputedStyle(panel).paddingRight],

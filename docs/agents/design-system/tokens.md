@@ -127,10 +127,11 @@ composer controls or the unauthenticated pairing entry surface.
 
 Expanded mobile Tool groups own their vertical scrolling and reserve scrollbar
 space on both edges with `scrollbar-gutter: stable both-edges`, so opening a
-group cannot shift its status column. A child Tool detail may scroll
-horizontally for long code, command output, or a diff, but it must not create a
-second vertical scrollbar inside the group. Standalone Tool details may apply a
-bounded vertical scroll only to the content surface that actually needs it.
+group cannot shift its status column. Input, output, and command text expand to
+their full height and wrap instead of owning horizontal or vertical scrollbars;
+the enclosing Tool panel handles navigation. Specialized diff and file views
+may still scroll horizontally, but they must not create a second vertical
+scrollbar inside the group.
 Search Tools summarize the pattern, scope, and result count in their disclosure
 row. Expanded matches are a padded, continuous result list with subtle row
 dividers; do not wrap the Search panel or each match in another card frame.
