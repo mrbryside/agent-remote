@@ -902,7 +902,7 @@ test('provides shared mobile sheet slots and drag behavior', async ({ page }) =>
   await expect(sheet).toBeHidden();
 });
 
-test('auto-reveals tool details only when they fall below the visible area', async ({ page }) => {
+test('auto-reveals tool details only when none of the panel is visible', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const result = await page.evaluate(async () => {
     const { disclosureNeedsReveal } = await import('/mobile-conversation.js?disclosure-visibility-test');
@@ -916,28 +916,52 @@ test('auto-reveals tool details only when they fall below the visible area', asy
     document.body.replaceChildren(messages);
     messages.getBoundingClientRect = () => ({ top: 80, bottom: 700 });
     group.getBoundingClientRect = () => ({ top: 120, bottom: 620 });
+    let panelTop = 180;
     let panelBottom = 560;
-    panel.getBoundingClientRect = () => ({ top: 180, bottom: panelBottom });
+    panel.getBoundingClientRect = () => ({ top: panelTop, bottom: panelBottom });
     const anchoring = {
       messages: getComputedStyle(messages).overflowAnchor,
       group: getComputedStyle(group).overflowAnchor,
     };
     const alreadyVisible = disclosureNeedsReveal(panel, messages);
     panelBottom = 660;
-    const clippedByGroup = disclosureNeedsReveal(panel, messages);
+    const partiallyVisibleInGroup = disclosureNeedsReveal(panel, messages);
+    panelTop = 621;
+    panelBottom = 760;
+    const belowGroup = disclosureNeedsReveal(panel, messages);
     group.removeAttribute('class');
+    panelTop = 180;
     panelBottom = 690;
     const visibleInMessages = disclosureNeedsReveal(panel, messages);
-    panelBottom = 730;
+    panelTop = 690;
+    panelBottom = 820;
+    const partiallyVisibleInMessages = disclosureNeedsReveal(panel, messages);
+    panelTop = 701;
+    panelBottom = 840;
     const belowMessages = disclosureNeedsReveal(panel, messages);
-    return { anchoring, alreadyVisible, clippedByGroup, visibleInMessages, belowMessages };
+    panelTop = 20;
+    panelBottom = 79;
+    const aboveMessages = disclosureNeedsReveal(panel, messages);
+    return {
+      anchoring,
+      alreadyVisible,
+      partiallyVisibleInGroup,
+      belowGroup,
+      visibleInMessages,
+      partiallyVisibleInMessages,
+      belowMessages,
+      aboveMessages,
+    };
   });
   expect(result).toEqual({
     anchoring: { messages: 'none', group: 'none' },
     alreadyVisible: false,
-    clippedByGroup: true,
+    partiallyVisibleInGroup: false,
+    belowGroup: true,
     visibleInMessages: false,
+    partiallyVisibleInMessages: false,
     belowMessages: true,
+    aboveMessages: true,
   });
 });
 
@@ -952,7 +976,7 @@ test('uses semantic tool summaries while keeping complete calls in details', asy
         open: async () => {}, filePreviewNode: emptyNode, searchMatchesNode: emptyNode,
         changeNode: emptyNode, changeStatsNode: emptyNode,
       },
-      expandedItems: new Set(['summary-group']), autoExpandedItems: new Set(),
+      expandedItems: new Set(), autoExpandedItems: new Set(),
       initializeDisclosure(toggle, panel, open) {
         toggle.setAttribute('aria-expanded', String(open));
         panel.hidden = !open;
@@ -993,6 +1017,12 @@ test('uses semantic tool summaries while keeping complete calls in details', asy
     }));
     document.body.replaceChildren(root);
   });
+
+  const groupToggle = page.locator('[data-event-id="summary-group"] > .mobile-tool-group-toggle');
+  await expect(groupToggle).toHaveAttribute('aria-expanded', 'false');
+  await groupToggle.click();
+  await expect(groupToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => page.evaluate(() => window.__toolRevealCalls)).toContain('summary-group');
 
   const commandCard = page.locator('[data-event-id="summary-command"]');
   const commandToggle = commandCard.locator(':scope > .mobile-event-toggle');

@@ -76,16 +76,24 @@ export function disclosureNeedsReveal(panel, messages) {
   const panelBox = panel.getBoundingClientRect();
   const messagesBox = messages.getBoundingClientRect();
   const viewport = window.visualViewport;
+  let visibleTop = Math.max(
+    messagesBox.top,
+    viewport ? viewport.offsetTop : 0,
+  );
   let visibleBottom = Math.min(
     messagesBox.bottom,
     viewport ? viewport.offsetTop + viewport.height : window.innerHeight,
   );
   let ancestor = panel.parentElement?.closest('.mobile-tool-group-panel:not([hidden])');
   while (ancestor) {
-    visibleBottom = Math.min(visibleBottom, ancestor.getBoundingClientRect().bottom);
+    const ancestorBox = ancestor.getBoundingClientRect();
+    visibleTop = Math.max(visibleTop, ancestorBox.top);
+    visibleBottom = Math.min(visibleBottom, ancestorBox.bottom);
     ancestor = ancestor.parentElement?.closest('.mobile-tool-group-panel:not([hidden])');
   }
-  return panelBox.bottom > visibleBottom + 1;
+  const visibleHeight = Math.min(panelBox.bottom, visibleBottom) -
+    Math.max(panelBox.top, visibleTop);
+  return visibleHeight <= 1;
 }
 
 export function createMobileConversationView({

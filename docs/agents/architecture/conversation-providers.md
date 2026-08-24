@@ -418,7 +418,11 @@ click target between pointer down and click. Opening or switching a root convers
 the message viewport at its latest item synchronously, with no smooth initial
 scroll animation. Later stream updates follow the tail only while the reader
 is already there. Scrolling up reveals a jump-to-latest control; that explicit
-action scrolls smoothly unless the device requests reduced motion.
+action scrolls smoothly unless the device requests reduced motion. Expanding a
+tool or tool group preserves the reader's position whenever any meaningful part
+of the opened panel is already visible inside the message viewport (and inside
+an enclosing tool-group scroller). It auto-reveals only a panel that is wholly
+outside those visible bounds.
 
 The sidebar consumes the same provider lifecycle as the native conversation.
 Each live snapshot records when it was observed; a slower `/api/sessions` poll
