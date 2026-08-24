@@ -898,7 +898,7 @@ test('Grok provider streams file changes through the provider-neutral registry',
   assert.equal(updates.at(-1).conversation.provider.id, 'grok');
 });
 
-test('Grok provider publishes every live agent chunk and completion synchronously', async () => {
+test('Grok 4.6-shaped streams publish thought and answer chunks incrementally and settle thinking', async (t) => {
   const data = await fixture();
   const registry = createConversationRegistry({
     providers: [createGrokConversationProvider({ acpClient: data.acpClient })],
@@ -907,17 +907,41 @@ test('Grok provider publishes every live agent chunk and completion synchronousl
     name: 'ar-chat', cwd: data.cwd,
     command: `grok --leader --session-id ${data.parentId}`, conversationThreadId: data.parentId,
   };
+  const root = data.snapshots.get(data.parentId);
+  root.metadata._meta['x.ai/sessionDetail'].currentModelId = 'grok-4.6';
   const updates = [];
   const stop = await registry.watch(session, {}, (event) => updates.push(event));
-  const root = data.snapshots.get(data.parentId);
+  t.after(stop);
   root.turn = { active: true, cancelRequested: false, changedAt: 8_000 };
   const before = updates.length;
+  for (const [offset, text] of ['First line.\n', 'Second line.\n', 'Third line.'].entries()) {
+    data.acpClient.append(data.parentId, { timestamp: 8 + offset, params: { update: {
+      sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text },
+    } } });
+  }
+  const thoughtChunks = updates.slice(before);
+  assert.equal(thoughtChunks.length, 3, 'no provider timer may collapse live thought chunks');
+  assert.deepEqual(thoughtChunks.map((event) => event.stream), [
+    { kind: 'agent_thought_chunk', delta: 'First line.\n' },
+    { kind: 'agent_thought_chunk', delta: 'Second line.\n' },
+    { kind: 'agent_thought_chunk', delta: 'Third line.' },
+  ]);
+  assert.deepEqual(thoughtChunks.map((event) => event.conversation.items.at(-1).text), [
+    'First line.\n',
+    'First line.\nSecond line.\n',
+    'First line.\nSecond line.\nThird line.',
+  ]);
+  assert.deepEqual(thoughtChunks.map((event) => event.conversation.activity.phase), [
+    'thinking', 'thinking', 'thinking',
+  ]);
+
+  const answerStart = updates.length;
   for (const [offset, text] of ['A', 'B', 'C'].entries()) {
     data.acpClient.append(data.parentId, { timestamp: 8 + offset, params: { update: {
       sessionUpdate: 'agent_message_chunk', content: { type: 'text', text },
     } } });
   }
-  const chunks = updates.slice(before);
+  const chunks = updates.slice(answerStart);
   assert.equal(chunks.length, 3, 'no provider timer may collapse live chunks');
   assert.deepEqual(chunks.map((event) => event.stream), [
     { kind: 'agent_message_chunk', delta: 'A' },
@@ -926,9 +950,15 @@ test('Grok provider publishes every live agent chunk and completion synchronousl
   ]);
   assert.deepEqual(chunks.map((event) => event.conversation.items.at(-1).text), ['A', 'AB', 'ABC']);
   assert.deepEqual(chunks.map((event) => event.conversation.activity.turnId), [8_000, 8_000, 8_000]);
+  assert.equal(chunks[0].conversation.thread.model, 'grok-4.6');
+  const completedThought = chunks[0].conversation.items.find((item) => item.type === 'thought' &&
+    item.text === 'First line.\nSecond line.\nThird line.');
+  assert.equal(completedThought.status, 'completed', 'the first answer token must stop the thinking spinner');
+  assert.equal(chunks[0].conversation.activity.phase, 'responding');
 
   data.acpClient.publish(data.parentId);
-  assert.equal(updates.length, before + 3, 'republishing one ACP snapshot must not duplicate its last chunk');
+  assert.equal(updates.length, answerStart + 3,
+    'republishing one ACP snapshot must not duplicate its last chunk');
 
   root.turn = { active: false, cancelRequested: false, changedAt: 12_000 };
   data.acpClient.append(data.parentId, { timestamp: 12, params: { update: {
@@ -937,7 +967,6 @@ test('Grok provider publishes every live agent chunk and completion synchronousl
   assert.equal(updates.at(-1).stream.kind, 'turn_completed');
   assert.equal(updates.at(-1).conversation.activity.active, false);
   assert.equal(updates.at(-1).conversation.thread.status, 'idle');
-  await stop();
 });
 
 test('Grok provider never lets a slow active snapshot overwrite a completed turn', async () => {

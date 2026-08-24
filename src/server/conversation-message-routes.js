@@ -1,4 +1,5 @@
 import { resolveProjectFiles } from '../conversations/files.js';
+import { compactConversationStreamEvent } from './conversation-stream.js';
 import { json, readJson } from './http.js';
 
 const inputRequestRetentionMs = 15 * 60_000;
@@ -163,7 +164,7 @@ export function createConversationMessageRouteHandler({
     let stopWatching = async () => {};
     let untrackRemoteStream = () => {};
     let closed = false;
-    let streamedMessageId;
+    let streamedItemKey;
     const close = async () => {
       if (closed) return;
       closed = true;
@@ -193,19 +194,9 @@ export function createConversationMessageRouteHandler({
     try {
       stopWatching = await registry.watch(session, options, (event) => {
         if (closed || response.writableEnded) return;
-        let outgoing = event;
-        if (event.stream?.kind === 'agent_message_chunk') {
-          const message = [...(event.conversation?.items || [])].reverse().find(
-            (item) => item.type === 'message' && item.role === 'assistant',
-          );
-          const stream = {
-            ...event.stream,
-            threadId: event.conversation?.thread?.id,
-            messageId: message?.id,
-          };
-          outgoing = message?.id && streamedMessageId === message.id ? { stream } : { ...event, stream };
-          streamedMessageId = message?.id;
-        } else streamedMessageId = undefined;
+        const compacted = compactConversationStreamEvent(event, streamedItemKey);
+        streamedItemKey = compacted.streamKey;
+        const outgoing = compacted.outgoing;
         response.write(`event: conversation\ndata: ${JSON.stringify(outgoing)}\n\n`);
         response.flush?.();
       });

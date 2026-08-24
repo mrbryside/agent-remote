@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
@@ -29,6 +30,7 @@ import {
   rendererScale,
   selectRendererViewport,
 } from '../src/server/renderer-protocol.js';
+import { compactConversationStreamEvent } from '../src/server/conversation-stream.js';
 
 function memoryStorage(seed = {}) {
   const values = new Map(Object.entries(seed));
@@ -138,6 +140,74 @@ test('compact conversation chunks paint once per render tick without losing orde
   batcher.discard();
   assert.equal(flushed.length, 1);
   assert.ok(cancelled.length >= 1);
+});
+
+test('compact thought chunks batch by their item identity without merging into answer chunks', () => {
+  const callbacks = new Map();
+  const flushed = [];
+  let nextFrame = 1;
+  const batcher = createCompactStreamBatcher({
+    requestFrame(callback) { callbacks.set(nextFrame, callback); return nextFrame++; },
+    cancelFrame(id) { callbacks.delete(id); },
+    onFlush(stream) { flushed.push(stream); },
+  });
+  batcher.push({
+    kind: 'agent_thought_chunk', threadId: 'root', itemId: 'thought-1', delta: 'Line one.\n',
+  });
+  batcher.push({
+    kind: 'agent_thought_chunk', threadId: 'root', itemId: 'thought-1', delta: 'Line two.',
+  });
+  batcher.push({
+    kind: 'agent_message_chunk', threadId: 'root', itemId: 'answer-1', messageId: 'answer-1', delta: 'Done.',
+  });
+  assert.deepEqual(flushed, [{
+    kind: 'agent_thought_chunk', threadId: 'root', itemId: 'thought-1',
+    delta: 'Line one.\nLine two.',
+  }]);
+  callbacks.values().next().value();
+  assert.equal(flushed[1].kind, 'agent_message_chunk');
+  assert.equal(flushed[1].delta, 'Done.');
+});
+
+test('conversation transports compact repeated thought chunks but send the answer transition in full', () => {
+  const thoughtConversation = {
+    thread: { id: 'root' },
+    items: [{ id: 'thought-1', type: 'thought', status: 'working', text: 'One' }],
+  };
+  const first = compactConversationStreamEvent({
+    conversation: thoughtConversation,
+    stream: { kind: 'agent_thought_chunk', delta: 'One' },
+  });
+  assert.equal(first.outgoing.conversation, thoughtConversation);
+  assert.equal(first.outgoing.stream.itemId, 'thought-1');
+  const second = compactConversationStreamEvent({
+    conversation: thoughtConversation,
+    stream: { kind: 'agent_thought_chunk', delta: ' two' },
+  }, first.streamKey);
+  assert.equal(second.outgoing.conversation, undefined);
+  assert.equal(second.outgoing.stream.itemId, 'thought-1');
+
+  const answerConversation = {
+    thread: { id: 'root' },
+    items: [
+      { id: 'thought-1', type: 'thought', status: 'completed', text: 'One two' },
+      { id: 'answer-1', type: 'message', role: 'assistant', text: 'Done' },
+    ],
+  };
+  const answer = compactConversationStreamEvent({
+    conversation: answerConversation,
+    stream: { kind: 'agent_message_chunk', delta: 'Done' },
+  }, second.streamKey);
+  assert.equal(answer.outgoing.conversation, answerConversation,
+    'the first answer frame must carry the completed thought lifecycle');
+  assert.equal(answer.outgoing.stream.itemId, 'answer-1');
+  assert.equal(answer.outgoing.stream.messageId, 'answer-1');
+});
+
+test('mobile thought detail wraps vertically inside one capped scrolling panel', async () => {
+  const css = await readFile(new URL('../public/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.mobile-event-thought > \.mobile-event-panel \{[^}]*max-height:[^}]*overflow-x: hidden;[^}]*overflow-y: auto;/);
+  assert.match(css, /\.mobile-event-thought > \.mobile-event-panel \.mobile-event-detail pre \{[^}]*max-height: none;[^}]*overflow: visible;[^}]*overflow-wrap: anywhere;[^}]*white-space: pre-wrap;/);
 });
 
 test('compact stream bursts drain in bounded Markdown line batches before settling', () => {

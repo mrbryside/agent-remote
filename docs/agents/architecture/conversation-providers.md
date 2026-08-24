@@ -125,10 +125,13 @@ remains anchored until Jump to latest is chosen again. Scroll events caused by
 Safari's visual-viewport resize or replacement of the pending row do not
 release the submitted turn's tail latch.
 The dedicated `/conversation-ws` connection sends one complete snapshot when
-an assistant message starts, then sends compact
-`{ threadId, messageId, delta }` frames for
-subsequent text chunks. Tool, interaction, and lifecycle changes still carry a
-complete snapshot. This keeps a long conversation from being serialized,
+an assistant message or thought starts, then sends compact
+`{ threadId, itemId, delta }` frames for subsequent chunks of that same item
+(`messageId` remains as the assistant-message compatibility alias). Changing
+from thought to answer sends another complete snapshot so the thought becomes
+completed and its spinner clears before answer-only compact frames begin. Tool,
+interaction, and other lifecycle changes still carry a complete snapshot. This
+keeps a long conversation from being serialized,
 transferred, parsed, and traversed again for every token, which otherwise lets
 mobile Safari fall progressively behind the desktop UI. A reconnect starts
 with another complete snapshot so the compact frames never depend on state
@@ -159,8 +162,8 @@ add another tunnel handshake and can miss fast start/completion boundaries.
 The parallel snapshot remains a recovery path, while only backgrounding,
 watchdog expiry, thread changes, or a real disconnect replace the socket.
 The server still sends every ACP token as its own WebSocket frame. On the
-phone, contiguous compact suffixes for the same assistant message coalesce on
-a short visual cadence; this prevents a burst of hundreds of WebSocket
+phone, contiguous compact suffixes for the same assistant message or thought
+coalesce on a short visual cadence; this prevents a burst of hundreds of WebSocket
 tasks from starving browser paint while preserving the exact ordered text. A
 paint batch that completes Markdown structure (a line break,
 list/heading marker, emphasis, inline code, link, table, or fence) reparses only
@@ -173,7 +176,9 @@ snapshots may still update metadata and tools but cannot replace or duplicate
 the live text. Newly appended text and Markdown elements receive one restrained
 shared-token fade/translate entrance; existing content never replays that
 animation during a reparse, and reduced-motion keeps the same DOM contract. A
-completed snapshot becomes authoritative again.
+completed snapshot becomes authoritative again. Reasoning appends as plain text
+inside one capped vertical panel; it wraps long lines and never owns a second
+horizontal or nested text scroller.
 ACP `session/load` can replay a completed turn without replaying Grok's final
 lifecycle notification. When the replay batch reaches its persisted boundary,
 the client settles the live `turn.active` flag together with the synthesized
@@ -391,7 +396,7 @@ browser disconnects or the server stops. Every live ACP notification for the
 selected thread is translated synchronously from the client's in-memory event
 snapshot and written to SSE immediately; it does not wait for the filesystem
 poll, child graph hydration, an animation-frame batch, or a synthetic
-typewriter timer. Agent-message updates use the exact ACP suffix, keeping the
+typewriter timer. Agent-message and thought updates use the exact ACP suffix, keeping the
 provider hot path O(chunk) rather than reparsing the complete session history.
 The slower persisted-session read remains a 250 ms fallback
 for desktop-originated lifecycle boundaries that some Grok versions omit from
@@ -403,8 +408,8 @@ or unavailable child can never delay the main agent's `turn_completed`,
 activity indicator, or Send/Stop state.
 
 The mobile renderer keeps timeline nodes keyed by message/event id and
-reconciles changing contents in place. While the last assistant message is
-active, each SSE chunk appends only its new suffix to the existing text node;
+reconciles changing contents in place. While the last assistant message or
+thought is active, each stream chunk appends only its new suffix to the existing text node;
 it does not replace the article or the existing code viewport. A newly opened
 or closed fenced block is reparsed once at that structural boundary; code
 inside an open fence then appends in place so it remains scrollable. When `turn_completed`

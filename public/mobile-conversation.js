@@ -191,7 +191,7 @@ export function createMobileConversationView({
     requestFrame: (callback) => setTimeout(callback, 32),
     cancelFrame: (frame) => clearTimeout(frame),
     onFlush: (stream) => {
-      if (!applyStreamTextDelta(undefined, stream)) schedule(0);
+      if (!applyStreamDelta(undefined, stream)) schedule(0);
     },
     onIdle: () => {
       if (!deferredConversationPayload) return;
@@ -1125,7 +1125,7 @@ export function createMobileConversationView({
     return content;
   }
 
-  function applyStreamTextDelta(conversation, stream) {
+  function applyAgentMessageStreamDelta(conversation, stream) {
     if (stream?.kind !== 'agent_message_chunk' || !lastConversation) return false;
     const compact = !conversation;
     const currentThreadId = lastConversation.thread?.id;
@@ -1170,10 +1170,56 @@ export function createMobileConversationView({
     return true;
   }
 
+  function applyThoughtStreamDelta(conversation, stream) {
+    if (stream?.kind !== 'agent_thought_chunk' || !lastConversation) return false;
+    const compact = !conversation;
+    const currentThreadId = lastConversation.thread?.id;
+    if (compact ? stream.threadId !== currentThreadId : conversation.thread?.id !== currentThreadId) return false;
+    const itemId = stream.itemId;
+    const previous = (lastConversation.items || []).find((item) => item.id === itemId);
+    const next = compact
+      ? previous
+      : (conversation.items || []).find((item) => item.id === itemId);
+    if (!previous || !next || previous.type !== 'thought' || next.type !== 'thought') return false;
+    const previousText = previous.text;
+    const nextText = compact ? `${previousText}${stream.delta || ''}` : next.text;
+    if (typeof previousText !== 'string' || typeof nextText !== 'string' ||
+        !nextText.startsWith(previousText) || nextText === previousText) return false;
+
+    const source = conversation || lastConversation;
+    const isRoot = !source.parent && currentThreadId === rootThreadId;
+    const targetMessages = isRoot ? messages : sheetMessages || messages;
+    const article = [...targetMessages.querySelectorAll('[data-event-id]')]
+      .find((node) => node.dataset.eventId === itemId);
+    const panel = article?.querySelector(':scope > .mobile-event-panel');
+    const content = panel?.querySelector('.mobile-event-detail > pre');
+    if (!content || content.textContent !== previousText) return false;
+
+    const followTimeline = distanceFromBottom(targetMessages) <= 48;
+    const followPanel = !panel.hidden && panel.scrollHeight - panel.scrollTop - panel.clientHeight <= 24;
+    content.append(document.createTextNode(nextText.slice(previousText.length)));
+    if (compact) previous.text = nextText;
+    else lastConversation = conversation;
+    const renderedItem = compact ? previous : next;
+    article.__mobileItemSignature = JSON.stringify(renderedItem);
+    if (followPanel) panel.scrollTop = panel.scrollHeight;
+    if (followTimeline || (isRoot && (followStreamTail || submittedTurnFollow))) {
+      targetMessages.scrollTop = targetMessages.scrollHeight;
+    }
+    if (isRoot) updateJumpToLatest();
+    return true;
+  }
+
+  function applyStreamDelta(conversation, stream) {
+    if (stream?.kind === 'agent_message_chunk') return applyAgentMessageStreamDelta(conversation, stream);
+    if (stream?.kind === 'agent_thought_chunk') return applyThoughtStreamDelta(conversation, stream);
+    return false;
+  }
+
   function applyFullConversationPayload(payload) {
     if (payload.conversation) providerId = payload.conversation.provider.id;
     compactStreamBatcher.discard();
-    if (!applyStreamTextDelta(payload.conversation, payload.stream)) {
+    if (!applyStreamDelta(payload.conversation, payload.stream)) {
       if (payload.conversation) render(payload.conversation, { animate: true, fromStream: true });
       else schedule(0);
     }
@@ -1693,12 +1739,15 @@ export function createMobileConversationView({
           refreshRevision += 1;
           const payloadThreadId = payload.conversation?.thread?.id || payload.stream?.threadId;
           if (payloadThreadId !== threadId) return;
-          if (!payload.conversation && payload.stream?.kind === 'agent_message_chunk') {
+          if (!payload.conversation && (payload.stream?.kind === 'agent_message_chunk' ||
+              payload.stream?.kind === 'agent_thought_chunk')) {
             // Claim text ownership as soon as the compact frame arrives, not
             // after its visual batch paints. A fallback snapshot can land in
             // that short window and otherwise seed the message with stale,
             // partially replayed text that later deltas cannot repair.
-            compactMessageId = payload.stream.messageId;
+            if (payload.stream.kind === 'agent_message_chunk') {
+              compactMessageId = payload.stream.messageId;
+            }
             compactStreamBatcher.push(payload.stream);
             setBooting(false);
             return;

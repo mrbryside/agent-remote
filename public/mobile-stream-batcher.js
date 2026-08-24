@@ -30,7 +30,10 @@ export function createCompactStreamBatcher({
 
   function push(stream) {
     if (!stream) return;
-    if (pending && pending.threadId === stream.threadId && pending.messageId === stream.messageId) {
+    const pendingItemId = pending?.itemId ?? pending?.messageId;
+    const streamItemId = stream.itemId ?? stream.messageId;
+    if (pending && pending.kind === stream.kind && pending.threadId === stream.threadId &&
+        pendingItemId === streamItemId) {
       pending.delta += stream.delta || '';
     } else {
       if (pending) {

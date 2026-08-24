@@ -79,7 +79,7 @@ test('visual viewport synchronization resets accidental document scrolling', () 
   }
 });
 
-test('visual viewport synchronization marks only viewport expansion for smooth dismissal', async () => {
+test('visual viewport synchronization follows every keyboard dismissal sample without delayed motion', async () => {
   const visualViewportState = { height: 510, width: 390, offsetTop: 24, offsetLeft: 0 };
   const visualViewport = new EventTarget();
   for (const property of Object.keys(visualViewportState)) {
@@ -106,16 +106,25 @@ test('visual viewport synchronization marks only viewport expansion for smooth d
     root: documentObject.documentElement,
   });
   try {
-    Object.assign(visualViewportState, { height: 844, offsetTop: 0 });
-    visualViewport.dispatchEvent(new Event('resize'));
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.equal(documentObject.documentElement.dataset.visualViewportMotion, 'expanding');
-    assert.equal(documentObject.documentElement.values.get('--visual-viewport-height'), '844px');
+    for (const sample of [
+      { height: 560, offsetTop: 20 },
+      { height: 650, offsetTop: 14 },
+      { height: 744, offsetTop: 7 },
+      { height: 844, offsetTop: 0 },
+    ]) {
+      Object.assign(visualViewportState, sample);
+      visualViewport.dispatchEvent(new Event('resize'));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.equal(documentObject.documentElement.values.get('--visual-viewport-height'), `${sample.height}px`);
+      assert.equal(documentObject.documentElement.values.get('--visual-viewport-offset-top'), `${sample.offsetTop}px`);
+      assert.equal(documentObject.documentElement.values.get('--visual-viewport-layout-inset-bottom'), '0px');
+      assert.equal(documentObject.documentElement.dataset.visualViewportMotion, undefined);
+    }
 
-    Object.assign(visualViewportState, { height: 510, offsetTop: 24 });
+    Object.assign(visualViewportState, { height: 810, offsetTop: 0 });
     visualViewport.dispatchEvent(new Event('resize'));
     await new Promise((resolve) => setTimeout(resolve, 5));
-    assert.equal(documentObject.documentElement.dataset.visualViewportMotion, undefined);
+    assert.equal(documentObject.documentElement.values.get('--visual-viewport-layout-inset-bottom'), '34px');
   } finally {
     sync.destroy();
     globalThis.requestAnimationFrame = previousRequestAnimationFrame;

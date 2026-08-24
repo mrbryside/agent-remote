@@ -766,6 +766,61 @@ test('uses a safe-area aware near-edge Remote modal on a 390x844 viewport', asyn
   }))).toEqual({ overflowY: 'auto', scrollable: true });
 });
 
+test('tracks iOS keyboard dismissal samples without a delayed viewport transition', async ({ page }) => {
+  await page.addInitScript(() => {
+    const state = { width: 390, height: 510, offsetTop: 24, offsetLeft: 0, scale: 1 };
+    const visualViewport = new EventTarget();
+    for (const property of Object.keys(state)) {
+      Object.defineProperty(visualViewport, property, { get: () => state[property] });
+    }
+    window.__setKeyboardViewport = (next) => {
+      Object.assign(state, next);
+      visualViewport.dispatchEvent(new Event('resize'));
+      visualViewport.dispatchEvent(new Event('scroll'));
+    };
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: visualViewport });
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await page.evaluate(() => {
+    const workspace = document.querySelector('.workspace');
+    workspace.dataset.mobileConversation = 'true';
+    document.querySelector('#mobile-conversation').hidden = false;
+    document.querySelector('#mobile-conversation-composer').hidden = false;
+  });
+  expect(await page.locator('#mobile-conversation-composer').evaluate((composer) => ({
+    composerTransition: getComputedStyle(composer).transitionProperty,
+    toolbarTransition: getComputedStyle(composer.querySelector('.mobile-conversation-compose-toolbar'))
+      .transitionProperty,
+  }))).toEqual({ composerTransition: 'border-color', toolbarTransition: 'opacity' });
+
+  for (const geometry of [
+    { height: 560, offsetTop: 20 },
+    { height: 650, offsetTop: 14 },
+    { height: 744, offsetTop: 7 },
+    { height: 844, offsetTop: 0 },
+  ]) {
+    await page.evaluate((next) => new Promise((resolve) => {
+      window.__setKeyboardViewport(next);
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    }), geometry);
+    expect(await page.locator('#mobile-conversation').evaluate((node) => {
+      const bounds = node.getBoundingClientRect();
+      return {
+        top: Math.round(bounds.top),
+        height: Math.round(bounds.height),
+        transitionDuration: getComputedStyle(node).transitionDuration,
+        delayedMotion: document.documentElement.dataset.visualViewportMotion || '',
+      };
+    })).toEqual({
+      top: geometry.offsetTop,
+      height: geometry.height,
+      transitionDuration: '0s',
+      delayedMotion: '',
+    });
+  }
+});
+
 test('shows image and video attachments in a scrollable mobile media gallery', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.route('**/__media_preview__/**', (route) => {

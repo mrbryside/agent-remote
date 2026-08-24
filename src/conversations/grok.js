@@ -1330,7 +1330,11 @@ export function createGrokConversationProvider({
   function appendLiveAgentChunk(previous, snapshot, delta) {
     if (!delta) return previous;
     const items = previous.items.slice();
-    const last = items.at(-1);
+    let last = items.at(-1);
+    if (last?.type === 'thought' && last.status === 'working') {
+      last = { ...last, status: 'completed' };
+      items[items.length - 1] = last;
+    }
     if (last?.type === 'message' && last.role === 'assistant') {
       items[items.length - 1] = { ...last, text: `${last.text}${delta}` };
     } else {
@@ -1347,6 +1351,32 @@ export function createGrokConversationProvider({
       thread: { ...previous.thread, status: 'working' },
       activity: {
         active: true, phase: 'responding', label: 'Responding…', canCancel: true,
+        cancelRequested: false,
+        ...(activeTurnId !== undefined ? { turnId: activeTurnId } : {}),
+      },
+    };
+  }
+
+  function appendLiveThoughtChunk(previous, snapshot, delta) {
+    if (!delta) return previous;
+    const items = previous.items.slice();
+    const last = items.at(-1);
+    if (last?.type === 'thought' && last.status === 'working') {
+      items[items.length - 1] = { ...last, text: `${last.text}${delta}`, status: 'working' };
+    } else {
+      const index = Math.max(0, (snapshot.events?.length || 1) - 1);
+      items.push({
+        id: `thought-${index}`, type: 'thought', title: 'Thought', text: delta,
+        status: 'working', timestamp: snapshot.events?.at(-1)?.timestamp,
+      });
+    }
+    const activeTurnId = turnId(snapshot);
+    return {
+      ...previous,
+      items,
+      thread: { ...previous.thread, status: 'working' },
+      activity: {
+        active: true, phase: 'thinking', label: 'Thinking…', canCancel: true,
         cancelRequested: false,
         ...(activeTurnId !== undefined ? { turnId: activeTurnId } : {}),
       },
@@ -1389,13 +1419,30 @@ export function createGrokConversationProvider({
     let contextRefreshesRemaining = 0;
     const subscriptions = new Map();
     const lastPublishedEvent = new Map();
+    const lastPublishedSnapshotState = new Map();
     const selectedThreadId = options?.threadId || handle.rootThreadId;
 
+    const snapshotState = (snapshot) => ({
+      active: snapshot.turn?.active,
+      cancelRequested: snapshot.turn?.cancelRequested,
+      changedAt: snapshot.turn?.changedAt,
+      model: snapshot.metadata?.models?.currentModelId ??
+        snapshot.metadata?._meta?.['x.ai/sessionDetail']?.currentModelId,
+      mode: snapshot.metadata?._meta?.['x.ai/sessionDetail']?.currentModeId,
+      queue: (snapshot.queue || []).map((item) => item.id).join(','),
+    });
+    const sameSnapshotState = (left, right) => left && right &&
+      left.active === right.active && left.cancelRequested === right.cancelRequested &&
+      left.changedAt === right.changedAt && left.model === right.model &&
+      left.mode === right.mode && left.queue === right.queue;
+
     const emit = (conversation, stream) => {
-      const signature = JSON.stringify(conversation);
+      const compactDelta = (stream?.kind === 'agent_message_chunk' ||
+        stream?.kind === 'agent_thought_chunk') && typeof stream.delta === 'string';
+      const signature = compactDelta ? undefined : JSON.stringify(conversation);
       if (!stream && signature === latestSignature) return;
       latestConversation = conversation;
-      latestSignature = signature;
+      if (!compactDelta) latestSignature = signature;
       listener(conversation, stream);
     };
 
@@ -1424,20 +1471,28 @@ export function createGrokConversationProvider({
           const event = snapshot.events?.at(-1);
           const newEvent = lastPublishedEvent.get(id) !== event;
           lastPublishedEvent.set(id, event);
+          const nextSnapshotState = snapshotState(snapshot);
+          const stateChanged = !sameSnapshotState(lastPublishedSnapshotState.get(id), nextSnapshotState);
+          lastPublishedSnapshotState.set(id, nextSnapshotState);
+          if (!newEvent && !stateChanged) return;
           const update = event?.params?.update;
-          const delta = newEvent && update?.sessionUpdate === 'agent_message_chunk'
+          const textChunk = update?.sessionUpdate === 'agent_message_chunk' ||
+            update?.sessionUpdate === 'agent_thought_chunk';
+          const delta = newEvent && textChunk
             ? textContent(update.content) : '';
-          // Agent text is the hot path. Mutate the provider-neutral snapshot
+          // Agent text and reasoning are the hot paths. Mutate the provider-neutral snapshot
           // by the exact ACP suffix so cost stays O(chunk), not O(history),
           // even after a long conversation. Other event kinds still rebuild
           // the in-memory timeline because they can alter grouping/lifecycle.
-          const conversation = delta
+          const conversation = delta && update.sessionUpdate === 'agent_message_chunk'
             ? appendLiveAgentChunk(latestConversation, snapshot, delta)
+            : delta && update.sessionUpdate === 'agent_thought_chunk'
+              ? appendLiveThoughtChunk(latestConversation, snapshot, delta)
             : update?.sessionUpdate === 'turn_completed'
               ? completeLiveTurn(latestConversation, snapshot)
               : liveConversation(handle, options, snapshot, latestConversation);
-          const stream = newEvent && update?.sessionUpdate === 'agent_message_chunk'
-            ? { kind: 'agent_message_chunk', delta }
+          const stream = newEvent && textChunk
+            ? { kind: update.sessionUpdate, delta }
             : newEvent && update?.sessionUpdate ? { kind: update.sessionUpdate } : undefined;
           emit(conversation, stream);
           if (conversation.activity?.active) {

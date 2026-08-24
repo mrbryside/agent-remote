@@ -1,4 +1,5 @@
 import { WebSocket } from 'ws';
+import { compactConversationStreamEvent } from './conversation-stream.js';
 
 export function installConversationSocket({
   conversationWss, conversationStreams, remoteDeviceSockets, remoteGateway,
@@ -35,7 +36,7 @@ export function installConversationSocket({
 
     let stopWatching = async () => {};
     let closed = false;
-    let streamedMessageId;
+    let streamedItemKey;
     const send = (message) => {
       if (!closed && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
     };
@@ -67,23 +68,9 @@ export function installConversationSocket({
       // snapshot immediately, and an uncached first visit performed the HTTP
       // readiness read before opening this socket.
       stopWatching = await conversationRegistry.watch(session, conversationOptions, (event) => {
-        let outgoing = event;
-        if (event.stream?.kind === 'agent_message_chunk') {
-          const message = [...(event.conversation?.items || [])].reverse().find(
-            (item) => item.type === 'message' && item.role === 'assistant',
-          );
-          const stream = {
-            ...event.stream,
-            threadId: event.conversation?.thread?.id,
-            messageId: message?.id,
-          };
-          outgoing = message?.id && streamedMessageId === message.id
-            ? { stream }
-            : { ...event, stream };
-          streamedMessageId = message?.id;
-        } else {
-          streamedMessageId = undefined;
-        }
+        const compacted = compactConversationStreamEvent(event, streamedItemKey);
+        streamedItemKey = compacted.streamKey;
+        const outgoing = compacted.outgoing;
         send({ type: 'conversation', ...outgoing });
       });
       if (closed) await stopWatching();
@@ -95,4 +82,3 @@ export function installConversationSocket({
   });
 
 }
-

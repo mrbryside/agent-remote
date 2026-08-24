@@ -667,6 +667,7 @@ test('streams provider-neutral conversation updates and releases its watcher on 
     assert.ok(streamed.indexOf('event: conversation') > 2_048);
     assert.match(streamed, /"live chunk"/);
     assert.match(streamed, /"messageId":"a-1"/);
+    assert.match(streamed, /"itemId":"a-1"/);
     assert.equal((streamed.match(/"conversation":/g) || []).length, 1);
     assert.match(response.headers.get('cache-control'), /no-transform/);
     const split = await fetch(`${url}/api/control/split`, {
@@ -734,6 +735,7 @@ test('streams conversation updates as websocket messages and releases its watche
     assert.match(conversationMessages.find((message) => message.stream?.delta === 'live chunk').conversation.items[0].text, /live chunk/);
     assert.equal(conversationMessages.find((message) => message.stream?.delta === ' two').conversation, undefined);
     assert.equal(conversationMessages.find((message) => message.stream?.delta === ' two').stream.messageId, 'a-1');
+    assert.equal(conversationMessages.find((message) => message.stream?.delta === ' two').stream.itemId, 'a-1');
     assert.equal(reads, 0, 'websocket watch owns its initial snapshot without a duplicate read');
 
     const split = await fetch(`${url}/api/control/split`, {

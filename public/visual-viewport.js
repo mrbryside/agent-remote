@@ -46,40 +46,19 @@ export function installVisualViewportSync({
 } = {}) {
   if (!windowObject.visualViewport) return { sync() {}, destroy() {} };
   let frame;
-  let motionTimer;
-  let previousGeometry;
+  let keyboardActive = false;
 
-  function updateViewportMotion(geometry) {
-    const previousBottom = previousGeometry
-      ? previousGeometry.offsetTop + previousGeometry.height
-      : undefined;
-    const nextBottom = geometry.offsetTop + geometry.height;
-    const delta = previousBottom === undefined ? 0 : nextBottom - previousBottom;
-    previousGeometry = geometry;
-
-    if (delta > 1) {
-      // iOS may publish keyboard-dismissal geometry as one large update or a
-      // handful of uneven steps. Keep one CSS transition active across the
-      // whole expansion so the fixed conversation and its composer travel as
-      // one surface instead of jumping before the composer finishes folding.
-      root.dataset.visualViewportMotion = 'expanding';
-      clearTimeout(motionTimer);
-      motionTimer = setTimeout(() => {
-        if (root.dataset.visualViewportMotion === 'expanding') {
-          delete root.dataset.visualViewportMotion;
-        }
-        motionTimer = undefined;
-      }, 300);
-      return;
+  function keyboardGeometry(geometry) {
+    const focused = documentObject.activeElement;
+    const textEntryFocused = focused?.matches?.(
+      'input:not([type="button"]):not([type="checkbox"]):not([type="radio"]), textarea, [contenteditable="true"]',
+    ) === true;
+    if (geometry.keyboard || (textEntryFocused && geometry.insetBottom > 48)) {
+      keyboardActive = true;
+    } else if (!keyboardActive || geometry.insetBottom <= 48) {
+      keyboardActive = false;
     }
-
-    if (delta < -1) {
-      // Keyboard opening must remain immediate so the application never
-      // animates through or temporarily underneath the software keyboard.
-      clearTimeout(motionTimer);
-      motionTimer = undefined;
-      delete root.dataset.visualViewportMotion;
-    }
+    return geometry.keyboard === keyboardActive ? geometry : { ...geometry, keyboard: keyboardActive };
   }
 
   function resetDocumentScroll() {
@@ -97,8 +76,13 @@ export function installVisualViewportSync({
   }
 
   function sync() {
-    const geometry = viewportGeometry(windowObject);
-    updateViewportMotion(geometry);
+    const geometry = keyboardGeometry(viewportGeometry(windowObject));
+    // Safari already animates visualViewport while its keyboard moves. Apply
+    // each reported sample directly: a second CSS transition retargets on
+    // every sample, trails behind the native keyboard, then snaps at the end.
+    // Keep a detected keyboard latched until only ordinary browser chrome is
+    // left, otherwise the 120px detection threshold creates another mid-close
+    // jump while the native dismissal animation is still moving.
     applyViewportGeometry(root, geometry);
     resetDocumentScroll();
     documentObject.dispatchEvent(new CustomEvent('agent-remote:visual-viewport', { detail: geometry }));
@@ -129,8 +113,6 @@ export function installVisualViewportSync({
       windowObject.removeEventListener('resize', schedule);
       windowObject.removeEventListener('scroll', resetDocumentScroll);
       cancelAnimationFrame(frame);
-      clearTimeout(motionTimer);
-      delete root.dataset.visualViewportMotion;
     },
   };
 }
