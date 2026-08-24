@@ -22,8 +22,8 @@ test('Tauri desktop contract is a local Apple Silicon wrapper', () => {
   assert.deepEqual(config.app.windows[0].trafficLightPosition, { x: 12, y: 10 });
   assert.equal(config.app.windows[0].hiddenTitle, true);
   assert.ok(
-    config.app.windows[0].minWidth > 760,
-    'the Tauri window must stay wider than the mobile conversation breakpoint',
+    config.app.windows[0].minWidth <= 760,
+    'the Tauri window must be able to enter the mobile conversation layout',
   );
   assert.deepEqual(config.bundle.externalBin, [
     'binaries/agent-remote-server',
@@ -60,6 +60,7 @@ test('Tauri desktop contract is a local Apple Silicon wrapper', () => {
   const appDocument = readFileSync(join(root, 'public/index.html'), 'utf8');
   assert.match(appDocument, /class="sidebar-header" data-tauri-drag-region="deep"/);
   assert.match(appDocument, /class="topbar" data-tauri-drag-region="deep"/);
+  assert.match(appDocument, /class="mobile-conversation-header" data-tauri-drag-region="deep"/);
   assert.match(source, /UserInitiatedAllowingIdleSystemSleep/);
   assert.match(source, /runtime\.remote_ready/);
   assert.equal(existsSync(join(root, 'desktop/index.html')), true);

@@ -66,10 +66,12 @@ document as a Tauri surface so only the native sidebar header reserves
 traffic-light space while expanded. When the sidebar is collapsed, the chat
 header reserves that same inset so its hamburger stays clear of the native
 controls; the normal browser layout remains flush left in both states. Keep the
-native window minimum width above the web UI's 760px compact breakpoint so a
-resized Tauri window always retains the desktop terminal, headers, drag regions,
-and double-click maximize behavior. Phone browsers and the PWA still use the
-mobile conversation surface below that breakpoint.
+native window minimum width below the web UI's 760px compact breakpoint so the
+Tauri app can intentionally resize into the mobile conversation surface. Its
+mobile conversation header is also a deep drag region, preserving native drag
+and double-click maximize/restore behavior after the desktop headers disappear.
+The drag-region attribute is inert in phone browsers and the PWA because those
+surfaces do not run inside Tauri.
 Because the runtime document is served from `http://127.0.0.1:3000`, its
 dedicated remote capability must remain limited to native window dragging and
 the internal maximize toggle. Do not broaden that capability to `core:default`,

@@ -13,7 +13,7 @@
         "title": "Agent Remote",
         "width": 1040,
         "height": 720,
-        "minWidth": 800,
+        "minWidth": 390,
         "minHeight": 480,
         "resizable": true,
         "titleBarStyle": "Overlay",
