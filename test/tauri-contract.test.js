@@ -15,6 +15,7 @@ test('Tauri desktop contract is a local Apple Silicon wrapper', () => {
   const cargo = readFileSync(join(tauriDir, 'Cargo.toml'), 'utf8');
   const cargoConfig = readFileSync(join(tauriDir, '.cargo/config.toml'), 'utf8');
   const source = readFileSync(join(tauriDir, 'src/main.rs'), 'utf8');
+  const styles = readFileSync(join(root, 'public/styles.css'), 'utf8');
 
   assert.equal(config.identifier, 'com.sirawat.agent-remote');
   assert.equal(config.build.frontendDist, '../desktop');
@@ -57,6 +58,16 @@ test('Tauri desktop contract is a local Apple Silicon wrapper', () => {
   assert.match(source, /RunEvent::Exit/);
   assert.match(source, /agent-remote-resume/);
   assert.match(source, /desktopShell = 'tauri'/);
+  assert.match(
+    styles,
+    /html\[data-desktop-shell="tauri"\] \.mobile-conversation \{[^}]*transform: none;[^}]*contain: none;[^}]*will-change: auto;/,
+    'compact Tauri must not retain the mobile visual-viewport compositor layer',
+  );
+  assert.match(
+    styles,
+    /html\[data-desktop-shell="tauri"\] \.mobile-conversation-messages,[\s\S]*?-webkit-overflow-scrolling: auto;/,
+    'compact Tauri scrolling must stay in the normal WKWebView paint layer',
+  );
   const appDocument = readFileSync(join(root, 'public/index.html'), 'utf8');
   assert.match(appDocument, /class="sidebar-header" data-tauri-drag-region="deep"/);
   assert.match(appDocument, /class="topbar" data-tauri-drag-region="deep"/);

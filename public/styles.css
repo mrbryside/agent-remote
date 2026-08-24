@@ -709,6 +709,16 @@ button.remote-close-icon:hover { border-color: transparent; background: transpar
   .remote-device strong { font-size: 13px; }
   .remote-device span, .remote-empty { font-size: 12px; }
   .mobile-conversation { position: fixed; z-index: 25; top: 0; left: 0; display: flex; width: var(--visual-viewport-width, 100vw); height: calc(var(--visual-viewport-height, 100dvh) + var(--visual-viewport-layout-inset-bottom, 0px)); padding: var(--mobile-safe-area-top) 0 var(--visual-viewport-inset-bottom, 0px); flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; transform: translate3d(var(--visual-viewport-offset-left, 0px), var(--visual-viewport-offset-top, 0px), 0); background: var(--color-canvas); backface-visibility: hidden; contain: layout paint style; isolation: isolate; will-change: transform, width, height, padding; }
+  /* iOS needs the visual-viewport transform while its software keyboard moves.
+     A compact Tauri window has no mobile browser chrome, and keeping the whole
+     conversation in that accelerated paint-contained layer makes WKWebView
+     retain stale tiles while a long timeline is resized. The result is ghosted
+     rows and a completed turn that still looks like it is running until a
+     scroll happens. Let macOS paint the conversation in the normal window
+     layer; keep the visual-viewport path isolated to real mobile browsers. */
+  html[data-desktop-shell="tauri"] .mobile-conversation { width: 100vw; height: 100dvh; padding-block: 0; transform: none; backface-visibility: visible; contain: none; isolation: auto; will-change: auto; }
+  html[data-desktop-shell="tauri"] .mobile-conversation-messages,
+  html[data-desktop-shell="tauri"] :is(.mobile-event-panel, .mobile-event-detail pre, .mobile-event-change-scroll, .mobile-tool-group-panel) { -webkit-overflow-scrolling: auto; }
   .mobile-conversation[data-dragover="true"]::after { position: absolute; z-index: 4; inset: 10px; display: grid; place-items: center; border: 1px dashed var(--color-accent); border-radius: 18px; background: color-mix(in srgb, var(--color-canvas) 82%, transparent); color: var(--color-text-strong); content: 'Drop files to attach to Grok'; font: 600 13px/1.3 var(--font-family-sans); pointer-events: none; }
   .mobile-conversation:has(.mobile-subagent-sheet:not([hidden])) { z-index: 36; }
   .mobile-conversation[hidden] { display: none; }

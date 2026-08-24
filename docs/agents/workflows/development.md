@@ -73,6 +73,10 @@ native window minimum width below the web UI's 760px compact breakpoint so the
 Tauri app can intentionally resize into the mobile conversation surface. Its
 mobile conversation header is also a deep drag region, preserving native drag
 and double-click maximize/restore behavior after the desktop headers disappear.
+The compact Tauri conversation deliberately does not inherit the accelerated
+visual-viewport compositor layer used by iOS Safari: the macOS window has no
+software-keyboard viewport translation, and normal painting prevents stale or
+ghosted long-timeline tiles while the native window is resized.
 The drag-region attribute is inert in phone browsers and the PWA because those
 surfaces do not run inside Tauri.
 Because the runtime document is served from `http://127.0.0.1:3000`, its

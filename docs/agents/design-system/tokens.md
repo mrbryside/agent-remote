@@ -45,7 +45,11 @@ focus during the initiating touch with `preventScroll`, so iOS Safari cannot
 first pan the layout viewport and expose the page behind the chat before the
 keyboard resize event arrives. Keep the document non-scrollable at compact
 widths and preserve this focus path when changing the composer or viewport
-layout.
+layout. This accelerated, paint-contained surface is for mobile browsers only.
+At compact widths Tauri must use normal window painting (`transform: none`, no
+paint containment or persistent `will-change`) and normal overflow layers;
+otherwise macOS WKWebView can retain stale timeline tiles during resize and
+visually leave completed controls in their running state.
 
 At compact widths the unfocused composer collapses to one centered row:
 attachment, one-line input, and send. Focusing the input expands the existing
