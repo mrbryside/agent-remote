@@ -71,6 +71,9 @@ topbar must stay equal in height, and the resize handle overlays their shared
 edge instead of reserving a visible gutter. The shared
 `--tauri-window-controls-inset` applies to whichever header owns the sidebar
 toggle: the sidebar header while expanded and the chat topbar while collapsed.
+The Tauri shell keeps this rhythm at exactly 34px even below the compact
+breakpoint so its native traffic lights and every sidebar toggle share the same
+17px center line; phone browsers and the PWA retain the 44px touch rhythm.
 
 Browser, Plan, and Agents share one compact activity dock in normal document
 flow above the composer. Its hidden-state affordance uses a tab/panel glyph,

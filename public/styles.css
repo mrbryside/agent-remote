@@ -1,4 +1,5 @@
 :root { font-family: var(--font-family-sans); background: var(--color-canvas); color: var(--color-text); }
+html[data-desktop-shell="tauri"] { --header-height: 34px; }
 * { box-sizing: border-box; }
 * { scrollbar-width: thin; scrollbar-color: var(--color-scrollbar-thumb) transparent; }
 *::-webkit-scrollbar { width: 6px; height: 6px; }

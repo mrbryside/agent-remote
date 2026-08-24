@@ -19,7 +19,7 @@ test('Tauri desktop contract is a local Apple Silicon wrapper', () => {
   assert.equal(config.identifier, 'com.sirawat.agent-remote');
   assert.equal(config.build.frontendDist, '../desktop');
   assert.equal(config.app.windows[0].titleBarStyle, 'Overlay');
-  assert.deepEqual(config.app.windows[0].trafficLightPosition, { x: 12, y: 10 });
+  assert.deepEqual(config.app.windows[0].trafficLightPosition, { x: 12, y: 16 });
   assert.equal(config.app.windows[0].hiddenTitle, true);
   assert.ok(
     config.app.windows[0].minWidth <= 760,

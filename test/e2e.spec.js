@@ -83,9 +83,18 @@ test('keeps the Tauri mobile hamburger clear of native window controls', async (
   const browserGeometry = await header.evaluate((node) => ({
     height: getComputedStyle(node).height,
     paddingLeft: getComputedStyle(node).paddingLeft,
-    menuLeft: Math.round(node.querySelector('#mobile-conversation-menu').getBoundingClientRect().left),
+    menu: (() => {
+      const headerBox = node.getBoundingClientRect();
+      const menuBox = node.querySelector('#mobile-conversation-menu').getBoundingClientRect();
+      return {
+        left: Math.round(menuBox.left),
+        centerY: Math.round(menuBox.top + menuBox.height / 2 - headerBox.top),
+      };
+    })(),
   }));
-  expect(browserGeometry).toEqual({ height: '44px', paddingLeft: '10px', menuLeft: 10 });
+  expect(browserGeometry).toEqual({
+    height: '44px', paddingLeft: '10px', menu: { left: 10, centerY: 22 },
+  });
 
   await page.evaluate(() => {
     document.documentElement.dataset.desktopShell = 'tauri';
@@ -93,8 +102,15 @@ test('keeps the Tauri mobile hamburger clear of native window controls', async (
   await expect.poll(() => header.evaluate((node) => ({
     height: getComputedStyle(node).height,
     paddingLeft: getComputedStyle(node).paddingLeft,
-    menuLeft: Math.round(node.querySelector('#mobile-conversation-menu').getBoundingClientRect().left),
-  }))).toEqual({ height: '44px', paddingLeft: '70px', menuLeft: 70 });
+    menu: (() => {
+      const headerBox = node.getBoundingClientRect();
+      const menuBox = node.querySelector('#mobile-conversation-menu').getBoundingClientRect();
+      return {
+        left: Math.round(menuBox.left),
+        centerY: Math.round(menuBox.top + menuBox.height / 2 - headerBox.top),
+      };
+    })(),
+  }))).toEqual({ height: '34px', paddingLeft: '70px', menu: { left: 70, centerY: 17 } });
   await expect(menu).toHaveCSS('pointer-events', 'auto');
   await expect(header).toHaveAttribute('data-tauri-drag-region', 'deep');
 });
