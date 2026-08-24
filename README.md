@@ -12,8 +12,8 @@ On an Apple Silicon Mac, run the installer from a checkout:
 ./init.sh
 ```
 
-It installs build dependencies, builds the self-contained Tauri app, validates
-its bundle and bundled sidecars, then lets you choose `/Applications`,
+It uses the prebuilt Tauri DMG stored in the repository, verifies its pinned
+SHA-256 and bundled sidecars, then lets you choose `/Applications`,
 `~/Applications`, or another folder. You can also run it without cloning first:
 
 ```bash
@@ -21,21 +21,29 @@ curl -fsSL https://raw.githubusercontent.com/mrbryside/agent-remote/main/init.sh
 ```
 
 For an unattended install or a path containing spaces, pass the destination
-explicitly. A custom source folder is supported too; the installer clones into
-it when it does not already contain Agent Remote:
+explicitly:
 
 ```bash
 ./init.sh --install-dir "$HOME/My Apps" --yes
 curl -fsSL https://raw.githubusercontent.com/mrbryside/agent-remote/main/init.sh \
-  | sh -s -- --source-dir "$HOME/Source/agent-remote" --install-dir "$HOME/My Apps" --yes
+  | sh -s -- --install-dir "$HOME/My Apps" --yes
 ```
 
-Use `--no-launch` when the app should not open after installation. Building
-requires macOS 13+, Node.js 22.5+, Rust/Cargo, and Xcode Command Line Tools.
-`tmux` remains a machine dependency for persistent terminal sessions; install
-it with `brew install tmux` if the installer prints that warning. The installed
-app bundles its own Node runtime and pinned `cloudflared`, so the source folder
-and build tools are not needed when launching it later.
+The normal installer requires only macOS 13+ on Apple Silicon; users do not
+need Node.js, Rust, Xcode, or a source checkout. Use `--no-launch` when the app
+should not open after installation. `tmux` remains a machine dependency for
+persistent terminal sessions; install it with `brew install tmux` if the
+installer prints that warning. The app bundles its own Node runtime and pinned
+`cloudflared`.
+
+Developers can still build explicitly from the current checkout or a custom
+source folder. This mode requires Node.js 22.5+, Rust/Cargo, and Xcode Command
+Line Tools:
+
+```bash
+./init.sh --build-from-source
+./init.sh --source-dir "$HOME/Source/agent-remote" --install-dir "$HOME/My Apps"
+```
 
 ## Manual development setup
 

@@ -2,7 +2,7 @@
 
 Local persistent agent workspace with browser terminals, native mobile conversations, tmux, SQLite, Cloudflare Remote access, and a macOS Tauri wrapper.
 
-`Last documented commit: 72187ff4f50557081fb633ae7fa0b52863cf832e`
+`Last documented commit: 5a7ba86074ff85331e8ef7aaeb9de850017f8a2b`
 
 ## Project structure
 
@@ -11,6 +11,7 @@ Local persistent agent workspace with browser terminals, native mobile conversat
 | `bin/` | User-facing `agent-remote` CLI and terminal-browser routing shim. |
 | `desktop/` | Minimal loading document used by the Tauri webview. |
 | `public/` | Browser UI, mobile conversation surface, Remote UI, shared components/design tokens, and xterm/browser-pane controls. |
+| `releases/` | Versioned, prebuilt Apple Silicon DMGs consumed by the zero-toolchain installer. |
 | `scripts/` | Native dependency checks, terminal-browser shim setup, and Tauri sidecar preparation/smoke tests. |
 | `src/` | Node HTTP/WebSocket server, PTY/tmux lifecycle, configuration, directories, and project persistence. |
 | `src/conversations/` | Provider-neutral conversation registry plus Grok ACP, attachment, and project-file completion adapters. |

@@ -12,16 +12,22 @@ npm start
 
 Open `http://127.0.0.1:3000`. `npm run dev` restarts the Node server on source changes. Both start modes repair the machine terminal-browser shim before launching.
 
-For a normal macOS app installation, use `./init.sh`. It supports an interactive
-choice of `/Applications`, `~/Applications`, or a custom destination, as well as
+For a normal macOS app installation, use `./init.sh`. The default path downloads
+the versioned DMG under `releases/`, verifies its checksum, mounts it read-only,
+and installs the validated app without requiring Node, npm, Rust, Xcode, a Git
+checkout, or an on-device build. It supports an interactive choice of
+`/Applications`, `~/Applications`, or a custom destination, as well as
 non-interactive `--install-dir`, positional destination, and
-`AGENT_REMOTE_INSTALL_DIR` forms. `--source-dir` either uses an Agent Remote
-checkout or clones the configured repository into that folder; when the script
-is piped without a checkout it uses an automatically cleaned temporary clone.
-`--app-bundle` installs a prebuilt validated bundle. Replacement requires an
+`AGENT_REMOTE_INSTALL_DIR` forms. `--dmg` installs a local release and
+`--dmg-url` plus `--dmg-sha256` supports an alternate verified release.
+
+Source building is developer-only and must be explicit through
+`--build-from-source` or `--source-dir`. A source directory either uses an Agent
+Remote checkout or clones the configured repository into that folder.
+`--app-bundle` remains a direct developer/test seam. Replacement requires an
 interactive confirmation or `--yes`, and `--no-launch` suppresses opening the
-installed app. Keep the bundle-ID and all four bundled executable checks when
-changing the installer.
+installed app. Keep the pinned release checksum, bundle-ID, and all four bundled
+executable checks when changing the installer.
 
 `npm start` and the Tauri app use the same Node backend: both start local control on `127.0.0.1:3000` and the Remote gateway on `127.0.0.1:3001` by default. Browser mode discovers `cloudflared` through `CLOUDFLARED_BIN` or `PATH`; a missing or old binary affects only Remote controls, not local terminal startup. Remote accepts Cloudflare version 2025.4.0 or newer.
 

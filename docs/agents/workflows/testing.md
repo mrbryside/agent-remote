@@ -40,7 +40,8 @@ Playwright runs serially because the tmux fixture, browser renderer, SQLite file
 - Keychain, Cloudflare API, ownership provisioning, auth, controller, and tunnel state machines: `test/remote-*.test.js`
 - Local/remote listener boundary, remote routes, WebSockets, and shutdown: `test/server.test.js`
 - Remote pairing, returning-device, revocation, and fake named-domain flows: `test/remote-e2e.spec.js`
-- Installer syntax, custom folders, validated-bundle copy, and safe replacement:
+- Installer syntax, pinned prebuilt release size/checksum, custom folders,
+  validated-bundle copy, and safe replacement:
   `test/init-script.test.js`
 - Tauri configuration, owned-sidecar supervision, resume/reopen behavior,
   parent-PID cleanup, and wrapper lifecycle: `test/tauri-contract.test.js`,

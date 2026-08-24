@@ -5,16 +5,25 @@ APP_NAME="Agent Remote.app"
 APP_EXECUTABLE="agent-remote-desktop"
 EXPECTED_BUNDLE_ID="com.sirawat.agent-remote"
 DEFAULT_REPO_URL="https://github.com/mrbryside/agent-remote.git"
+RELEASE_TAG="${AGENT_REMOTE_RELEASE_TAG:-v1.0.0}"
+RELEASE_FILENAME="Agent Remote_1.0.0_aarch64.dmg"
+RELEASE_SHA256="${AGENT_REMOTE_DMG_SHA256:-41cb4b9909064f5789a7472ca6ef0dbbde2d0554617029c1e34f27d55fbc6ddf}"
+ASSET_BASE_URL="${AGENT_REMOTE_ASSET_BASE_URL:-https://raw.githubusercontent.com/mrbryside/agent-remote/main/releases/$RELEASE_TAG}"
 
 repo_url="${AGENT_REMOTE_REPO_URL:-$DEFAULT_REPO_URL}"
 branch="${AGENT_REMOTE_BRANCH:-main}"
 install_dir="${AGENT_REMOTE_INSTALL_DIR:-}"
 source_dir="${AGENT_REMOTE_SOURCE_DIR:-}"
 app_bundle="${AGENT_REMOTE_APP_BUNDLE:-}"
+dmg_path="${AGENT_REMOTE_DMG_PATH:-}"
+dmg_url="${AGENT_REMOTE_DMG_URL:-$ASSET_BASE_URL/Agent%20Remote_1.0.0_aarch64.dmg}"
+build_from_source=0
 assume_yes=0
 launch_app=1
 source_tmp=""
 install_tmp=""
+dmg_tmp=""
+mount_point=""
 
 usage() {
   cat <<'EOF'
@@ -27,16 +36,21 @@ Usage:
 
 Options:
   --install-dir <folder>  Install Agent Remote.app in this folder.
-  --source-dir <folder>   Build from this checkout, or clone into it if absent.
-  --app-bundle <path>     Install an already-built Agent Remote.app.
+  --dmg <path>            Install a local release DMG instead of downloading it.
+  --dmg-url <url>         Download a release DMG from another URL.
+  --dmg-sha256 <hash>     Expected SHA-256 for an overridden DMG.
+  --build-from-source     Developer mode: build instead of using the release DMG.
+  --source-dir <folder>   Source checkout for developer mode; clones if absent.
+  --app-bundle <path>     Developer/test mode: install a built app directly.
   --branch <name>         Git branch to clone (default: main).
   --repo-url <url>        Source repository to clone.
   --yes                   Replace an existing installation without prompting.
   --no-launch             Do not open Agent Remote after installation.
   -h, --help              Show this help.
 
-The destination may also be set with AGENT_REMOTE_INSTALL_DIR. Paths beginning
-with ~/ and paths containing spaces are supported.
+The normal path downloads a prebuilt, checksum-verified Tauri app and requires
+no Node.js, Rust, or Xcode installation. The destination may also be set with
+AGENT_REMOTE_INSTALL_DIR. Paths beginning with ~/ and spaces are supported.
 EOF
 }
 
@@ -68,15 +82,35 @@ while [ "$#" -gt 0 ]; do
     --source-dir)
       require_value "$@"
       source_dir="$2"
+      build_from_source=1
       shift 2
       ;;
-    --source-dir=*) source_dir="${1#*=}"; shift ;;
+    --source-dir=*) source_dir="${1#*=}"; build_from_source=1; shift ;;
     --app-bundle)
       require_value "$@"
       app_bundle="$2"
       shift 2
       ;;
     --app-bundle=*) app_bundle="${1#*=}"; shift ;;
+    --dmg)
+      require_value "$@"
+      dmg_path="$2"
+      shift 2
+      ;;
+    --dmg=*) dmg_path="${1#*=}"; shift ;;
+    --dmg-url)
+      require_value "$@"
+      dmg_url="$2"
+      shift 2
+      ;;
+    --dmg-url=*) dmg_url="${1#*=}"; shift ;;
+    --dmg-sha256)
+      require_value "$@"
+      RELEASE_SHA256="$2"
+      shift 2
+      ;;
+    --dmg-sha256=*) RELEASE_SHA256="${1#*=}"; shift ;;
+    --build-from-source) build_from_source=1; shift ;;
     --branch)
       require_value "$@"
       branch="$2"
@@ -105,11 +139,17 @@ done
 [ "$#" -eq 0 ] || die "unexpected argument: $1"
 
 cleanup() {
+  if [ -n "$mount_point" ]; then
+    /usr/bin/hdiutil detach "$mount_point" -quiet >/dev/null 2>&1 || true
+  fi
   if [ -n "$source_tmp" ] && [ -d "$source_tmp" ]; then
     rm -rf "$source_tmp"
   fi
   if [ -n "$install_tmp" ] && [ -d "$install_tmp" ]; then
     rm -rf "$install_tmp"
+  fi
+  if [ -n "$dmg_tmp" ] && [ -d "$dmg_tmp" ]; then
+    rm -rf "$dmg_tmp"
   fi
 }
 trap cleanup EXIT INT TERM
@@ -159,11 +199,6 @@ require_command() {
 }
 
 prepare_source() {
-  if [ -n "$app_bundle" ]; then
-    app_bundle="$(expand_path "$app_bundle")"
-    return
-  fi
-
   if [ -n "$source_dir" ]; then
     source_dir="$(expand_path "$source_dir")"
     if is_source_root "$source_dir"; then
@@ -198,6 +233,43 @@ prepare_source() {
   echo "Downloading Agent Remote source..."
   git clone --depth 1 --branch "$branch" "$repo_url" "$source_dir"
   is_source_root "$source_dir" || die "the cloned repository is not Agent Remote"
+}
+
+prepare_release_bundle() {
+  require_command /usr/bin/curl "This installer requires macOS curl."
+  require_command /usr/bin/hdiutil "This installer requires macOS hdiutil."
+  require_command /usr/bin/shasum "This installer requires macOS shasum."
+
+  if [ -n "$dmg_path" ]; then
+    dmg_path="$(expand_path "$dmg_path")"
+  else
+    script_dir="$(CDPATH= cd "$(dirname "$0")" 2>/dev/null && pwd || true)"
+    local_release="${script_dir:+$script_dir/releases/$RELEASE_TAG/$RELEASE_FILENAME}"
+    if [ -n "$local_release" ] && [ -f "$local_release" ]; then
+      dmg_path="$local_release"
+      echo "Using bundled release $dmg_path"
+    else
+      dmg_tmp="$(mktemp -d "${TMPDIR:-/tmp}/agent-remote-dmg.XXXXXX")"
+      dmg_path="$dmg_tmp/$RELEASE_FILENAME"
+      echo "Downloading the prebuilt Agent Remote app..."
+      /usr/bin/curl -fL --progress-bar "$dmg_url" -o "$dmg_path" \
+        || die "failed to download the release DMG from $dmg_url"
+    fi
+  fi
+
+  [ -s "$dmg_path" ] || die "release DMG is missing or empty: $dmg_path"
+  actual_sha256="$(/usr/bin/shasum -a 256 "$dmg_path" | awk '{print $1}')"
+  [ "$actual_sha256" = "$RELEASE_SHA256" ] \
+    || die "release DMG checksum mismatch: expected $RELEASE_SHA256, received $actual_sha256"
+
+  if [ -z "$dmg_tmp" ]; then
+    dmg_tmp="$(mktemp -d "${TMPDIR:-/tmp}/agent-remote-dmg.XXXXXX")"
+  fi
+  mount_point="$dmg_tmp/mount"
+  mkdir -p "$mount_point"
+  /usr/bin/hdiutil attach "$dmg_path" -nobrowse -readonly -mountpoint "$mount_point" >/dev/null \
+    || die "could not mount the release DMG"
+  app_bundle="$mount_point/$APP_NAME"
 }
 
 validate_bundle() {
@@ -361,9 +433,16 @@ require_command /usr/bin/ditto "This installer requires macOS ditto."
 require_command /usr/bin/plutil "This installer requires macOS plutil."
 
 choose_install_dir
-prepare_source
-if [ -z "$app_bundle" ]; then
+if [ -n "$app_bundle" ]; then
+  [ "$build_from_source" -eq 0 ] && [ -z "$dmg_path" ] \
+    || die "--app-bundle cannot be combined with a source build or --dmg"
+  app_bundle="$(expand_path "$app_bundle")"
+elif [ "$build_from_source" -eq 1 ]; then
+  [ -z "$dmg_path" ] || die "--build-from-source cannot be combined with --dmg"
+  prepare_source
   build_bundle
+else
+  prepare_release_bundle
 fi
 validate_bundle "$app_bundle" || die "invalid Agent Remote app bundle: $app_bundle"
 install_bundle
