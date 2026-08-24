@@ -68,7 +68,9 @@ The mobile sidebar owns the same top safe-area inset, and its collapse-arrow row
 uses the same 44px rhythm so neither control row crowds the iOS status bar.
 Desktop uses a separate 32–34px header rhythm. The sidebar collapse row and chat
 topbar must stay equal in height, and the resize handle overlays their shared
-edge instead of reserving a visible gutter.
+edge instead of reserving a visible gutter. The shared
+`--tauri-window-controls-inset` applies to whichever header owns the sidebar
+toggle: the sidebar header while expanded and the chat topbar while collapsed.
 
 Browser, Plan, and Agents share one compact activity dock in normal document
 flow above the composer. Its hidden-state affordance uses a tab/panel glyph,

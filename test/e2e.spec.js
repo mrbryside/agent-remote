@@ -4570,6 +4570,28 @@ test('organizes chats by project, titles the first prompt, and clears projects i
   await expect(sidebarCollapse).toHaveCSS('transform', 'none');
   await expect(page.locator('.sidebar-section-header #home-button')).toHaveText('Projects');
   await expect(page.locator('#open-sidebar')).toBeHidden();
+
+  await page.evaluate(() => {
+    document.documentElement.dataset.desktopShell = 'tauri';
+  });
+  await sidebarCollapse.click();
+  await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'collapsed');
+  await expect(page.locator('#open-sidebar')).toBeVisible();
+  const collapsedTauriHeader = await page.locator('.topbar').evaluate((topbar) => {
+    const toggle = topbar.querySelector('#open-sidebar').getBoundingClientRect();
+    return {
+      paddingLeft: getComputedStyle(topbar).paddingLeft,
+      toggleLeft: toggle.left,
+    };
+  });
+  expect(collapsedTauriHeader.paddingLeft).toBe('70px');
+  expect(collapsedTauriHeader.toggleLeft).toBeGreaterThanOrEqual(70);
+  await page.locator('#open-sidebar').click();
+  await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'expanded');
+  await page.evaluate(() => {
+    delete document.documentElement.dataset.desktopShell;
+  });
+
   await page.locator('#new-project').hover();
   await expect(page.locator('#new-project')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
   await expect(page.locator('#new-project')).toHaveCSS('color', 'rgb(222, 222, 224)');
