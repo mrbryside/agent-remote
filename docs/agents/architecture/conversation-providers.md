@@ -56,6 +56,22 @@ joining the preceding response or its Markdown code fence. A
 `send-keys`, or concurrent headless resume process participates in native
 input.
 
+The managed leader is also a circuit-breaker boundary. Host-specific Codex and
+browser-control environment variables and volatile runtime PATH entries are
+removed before it starts, managed TUI sessions re-export that exact stable PATH
+after login-shell initialization,
+and its terminal metadata is normalized. On the first
+ACP connection, Agent Remote also inspects the verified owner of its leader
+socket and replaces an older leader that still carries any of those unsafe
+values; this migrates already-running processes instead of waiting for another
+tool failure. If a live
+terminal tool update still reports `killed (signal 9)`, the ACP client marks
+the shared runner unhealthy, waits until every active turn reaches its durable
+completion boundary, disconnects the observer, terminates only the verified
+owner of Agent Remote's leader socket, and reconnects before draining queued
+prompts. This converts a poisoned long-lived executor into one failed tool
+call rather than allowing every later command to inherit the failure.
+
 Queue order is provider-owned state rather than a browser-only arrangement.
 Mobile queue rows stay one compact, ellipsized line while preserving 44px
 Steer/Delete targets plus a pointer and keyboard reorder handle. Attachments
@@ -71,11 +87,33 @@ to concise phases such as `Waiting for response…`, `Preparing read_file…`, a
 cards. The composer keeps one contextual action: with an active turn and an
 empty draft it sends the standard ACP `session/cancel` notification, while
 typing a draft changes the same action back to Send so the prompt can be queued
-or steered. `turn_completed` clears both the activity indicator and the pending
-cancel state. Treat that notification as the authoritative visible boundary:
-the underlying `session/prompt` JSON-RPC promise may still be settling so the
-queue remains serialized, but the phone must already leave its streaming/Stop
-state when Grok says the turn is complete.
+or steered. An accepted `session/cancel` clears the pending Stop state
+immediately and returns the composer to Send; the provider may continue
+serializing the next prompt behind the still-settling `session/prompt` RPC.
+Active snapshots expose a provider-owned `turnId`, derived from the ACP turn
+revision, so a stale snapshot for the cancelled turn cannot restore Stop while
+a genuinely newer turn can. Sending is request-scoped and ends as soon as a
+WebSocket snapshot confirms the matching queued input, stored user message, or
+new turn; it never waits for the input POST to finish. When that newer turn is
+active, Stop takes precedence over any still-settling HTTP submission state.
+`turn_completed` remains the authoritative provider boundary that clears the
+activity indicator and releases that internal serialization. A cancellation
+boundary is also retained as one muted, non-expandable mobile timeline row,
+including elapsed turn time when the protocol timestamps allow it; successful
+turn completions remain invisible.
+Read-file cards derive their visible label from Grok's structured `target_file`,
+`offset`, `limit`, and `FileContent.total_lines` fields. They show only the
+basename plus the native line range, such as `Read app.js (231–490 of 2508)`.
+The provider must retain the full path in `file.path` and `locations` for file
+navigation, but raw absolute paths never belong in a timeline heading.
+Every generic tool also exposes one canonical, bounded `summary` when Grok
+provides a semantic `summary` or `description` in the update or its structured
+input. Timeline rows prefer that summary and add the action for the semantic
+tool kind; generated titles, subjects, and finally the command are presentation
+fallbacks only. The complete command remains in the expanded command surface,
+while non-command tools retain their serialized input and output in expanded
+details. Never replace a semantic summary with Grok's later generated title,
+which often embeds the entire shell command or absolute path.
 The mobile renderer never defers provider snapshots behind pointer or scroll
 gestures. Keyed DOM reconciliation preserves an open tool, code scroll
 position, and pressed control without withholding token or lifecycle events;
@@ -100,12 +138,17 @@ transport is required for Random/Quick Cloudflare Tunnels, whose edge buffers
 SSE even when the origin emits `text/event-stream`; both Quick and named
 tunnels pass WebSockets through.
 When iOS backgrounds the page, do not wait for a WebSocket error or close:
-Safari can suspend the page without delivering either. The mobile client closes
-its owned socket and invalidates any in-flight snapshot on `visibilitychange`,
-`pagehide`, or window blur. On `visibilitychange` back to visible, `pageshow`,
-focus, or `online`, it first reads the authoritative full snapshot to recover
-every missed token and lifecycle boundary, then opens a new socket. The old
-socket is never reused after a foreground transition. The server emits an
+Safari can suspend the page without delivering either—or even without first
+delivering a hidden/pagehide event. The mobile client closes its owned socket
+and invalidates any in-flight snapshot on `visibilitychange`, `pagehide`,
+window blur, or Page Lifecycle `freeze`. Every visible, `pageshow`, focus,
+`online`, or `resume` signal forces a snapshot-first recovery even when the
+client never observed the matching background event. A two-second liveness
+probe also detects a suspended JavaScript clock gap and performs the same
+repair. It first reads the authoritative full snapshot to recover every missed
+token and lifecycle boundary, then opens a new socket. Socket frames invalidate
+older in-flight HTTP reads so a late Safari fetch cannot restore a stale active
+turn. The old socket is never reused after a foreground transition. The server emits an
 application heartbeat every three seconds; the client resets a seven-second
 watchdog for every conversation, control, open, or heartbeat message. A silent
 socket is closed, reconciled from a full snapshot, and replaced. After an
@@ -115,12 +158,22 @@ input POST finishes its Cloudflare round trip; closing it at acceptance would
 add another tunnel handshake and can miss fast start/completion boundaries.
 The parallel snapshot remains a recovery path, while only backgrounding,
 watchdog expiry, thread changes, or a real disconnect replace the socket.
-Plain token chunks append directly into the active message node. A chunk that
-completes Markdown structure (a line break, list/heading marker, emphasis,
-inline code, link, table, or fence) reparses only that active message and
-preserves its outer DOM node plus nested scroll positions. Lists and emphasis
-therefore become formatted while the turn is still streaming without bringing
-back full-history rerenders or per-token batching.
+The server still sends every ACP token as its own WebSocket frame. On the
+phone, contiguous compact suffixes for the same assistant message coalesce on
+a short visual cadence; this prevents a burst of hundreds of WebSocket
+tasks from starving browser paint while preserving the exact ordered text. A
+paint batch that completes Markdown structure (a line break,
+list/heading marker, emphasis, inline code, link, table, or fence) reparses only
+that active message and preserves its outer DOM node plus nested scroll
+positions. Lists and emphasis therefore become formatted while the turn is
+still streaming without bringing back full-history rerenders or a timer-based
+transport batch. Once the first compact suffix for a message arrives, its
+ordered suffix stream owns that message text until completion; active full
+snapshots may still update metadata and tools but cannot replace or duplicate
+the live text. Newly appended text and Markdown elements receive one restrained
+shared-token fade/translate entrance; existing content never replays that
+animation during a reparse, and reduced-motion keeps the same DOM contract. A
+completed snapshot becomes authoritative again.
 ACP `session/load` can replay a completed turn without replaying Grok's final
 lifecycle notification. When the replay batch reaches its persisted boundary,
 the client settles the live `turn.active` flag together with the synthesized
@@ -267,7 +320,9 @@ group. Resolved permission prompts disappear instead of duplicating and
 splitting the tool activity they approved. A thought remains `Thinking…` and
 streams into its expandable reasoning panel until the next non-thought update
 closes it; completed thoughts no longer remain falsely marked `Running`.
-`turn_completed` updates lifecycle state but is not rendered. `session_recap`
+`turn_completed` updates lifecycle state. Normal completion remains protocol
+detail, while a cancel, interrupt, or abort reason inserts one `turn` item at
+that exact timeline boundary for the mobile cancellation row. `session_recap`
 is both retained as the latest recap metadata and inserted at its protocol
 position as a dedicated recap timeline item. Mobile renders that item expanded
 by default as a muted, collapsible recap rather than an assistant message or a

@@ -10,6 +10,13 @@ const separator = '\x1f';
 const agentRemoteBin = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin');
 export const validSessionName = /^[A-Za-z0-9_.-]{1,64}$/;
 const grokSessionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const volatileHostPathFragments = [
+  '/.codex/tmp/',
+  '/.cache/codex-runtimes/',
+  '/Applications/ChatGPT.app/Contents/Resources',
+  '/var/run/com.apple.security.cryptexd/codex.system/',
+  '/pkg/env/global/bin',
+];
 
 async function tmux(command, args) {
   const { stdout } = await execFileAsync(command, args, {
@@ -36,6 +43,13 @@ export function slugify(value) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 40);
   return slug || 'session';
+}
+
+export function managedSessionPath(value = process.env.PATH ?? '') {
+  return value.split(delimiter)
+    .filter((entry) => entry && !volatileHostPathFragments.some((fragment) => entry.includes(fragment)))
+    .filter((entry, index, entries) => entries.indexOf(entry) === index)
+    .join(delimiter);
 }
 
 export async function sessionExists(command, name) {
@@ -175,7 +189,7 @@ export async function startManagedSession({
   const commandLabel = command || requestedCommandLine.split(/\s+/)[0];
   const label = slugify(requestedName || commandLabel.split('/').at(-1));
   const baseName = `ar-${label}`;
-  const sessionPath = `${agentRemoteBin}${delimiter}${process.env.PATH ?? ''}`;
+  const sessionPath = `${agentRemoteBin}${delimiter}${managedSessionPath()}`;
   // `has-session` followed by `new-session` is a TOCTOU race when several
   // chats are started at once. Let tmux atomically claim the name instead and
   // only retry the request that lost the race. This keeps rapid creates
@@ -187,6 +201,7 @@ export async function startManagedSession({
       await tmux(tmuxCommand, [
         'new-session', '-d', '-s', name, '-c', cwd,
         '-e', `PATH=${sessionPath}`,
+        '-e', `AGENT_REMOTE_SAFE_PATH=${sessionPath}`,
         '-e', 'AGENT_REMOTE_WEB=1',
         '-e', `AGENT_REMOTE_URL=${agentRemoteUrl}`,
         '-e', `AGENT_REMOTE_SESSION=${name}`,
@@ -218,7 +233,7 @@ export async function startManagedSession({
     if (projectId) await tmux(tmuxCommand, ['set-option', '-t', target(name), '@agent_remote_project', projectId]);
     await tmux(tmuxCommand, ['set-option', '-t', target(name), '@agent_remote_auto_title', autoTitle ? '1' : '0']);
     const bootstrap = [
-      `PATH=${shellQuote(agentRemoteBin)}:"$PATH"`,
+      'PATH="$AGENT_REMOTE_SAFE_PATH"',
       'AGENT_REMOTE_WEB=1',
       `AGENT_REMOTE_URL=${shellQuote(agentRemoteUrl)}`,
       `AGENT_REMOTE_SESSION=${shellQuote(name)}`,

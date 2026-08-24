@@ -119,6 +119,8 @@ export async function bootstrapRemoteControl() {
   const devicesPanel = $('#remote-devices-panel');
   const stepper = dialog.querySelector('.remote-stepper');
   const devicesStepNumber = $('#remote-devices-step-number');
+  const devicesStepHint = $('#remote-devices-step-hint');
+  const nextHint = $('#remote-next-hint');
   const pairKicker = $('#remote-pair-kicker');
   const connectionInputs = [...dialog.querySelectorAll('input[name="remote-connection-type"]')];
 
@@ -139,6 +141,10 @@ export async function bootstrapRemoteControl() {
 
   function currentTunnel() {
     return state.status?.tunnel || { mode: 'none', state: 'stopped' };
+  }
+
+  function remoteIsRunning() {
+    return currentTunnel().state === 'running';
   }
 
   function savedConnectionChoice() {
@@ -290,6 +296,8 @@ export async function bootstrapRemoteControl() {
   function renderWizard() {
     const steps = wizardSteps();
     if (!steps.includes(state.step)) state.step = 1;
+    const remoteRunning = remoteIsRunning();
+    if (!remoteRunning && state.step === 3) state.step = steps.at(-2) || 1;
     for (const panel of dialog.querySelectorAll('[data-remote-step]')) {
       panel.hidden = state.managingDevices || Number(panel.dataset.remoteStep) !== state.step;
     }
@@ -326,13 +334,30 @@ export async function bootstrapRemoteControl() {
           : state.deviceCount > 0;
       stepButton.dataset.complete = String(complete);
       stepButton.dataset.repeatable = String(target === 3 && complete);
-      if (target === 3) stepButton.title = complete
-        ? `${state.deviceCount} device${state.deviceCount === 1 ? '' : 's'} paired — add another`
-        : 'Pair one or more devices';
+      if (target === 3) {
+        const reason = remoteRunning
+          ? complete
+            ? `${state.deviceCount} device${state.deviceCount === 1 ? '' : 's'} paired — add another`
+            : 'Pair one or more devices'
+          : 'Start Remote before continuing to Devices.';
+        stepButton.disabled = !remoteRunning;
+        stepButton.removeAttribute('title');
+        devicesStepHint.dataset.disabled = String(!remoteRunning);
+        devicesStepHint.title = reason;
+        devicesStepHint.tabIndex = remoteRunning ? -1 : 0;
+        if (!remoteRunning) {
+          devicesStepHint.setAttribute('aria-label', 'Devices step unavailable');
+          devicesStepHint.setAttribute('aria-description', reason);
+        } else {
+          devicesStepHint.removeAttribute('aria-label');
+          devicesStepHint.removeAttribute('aria-description');
+        }
+      }
     }
     pairButton.textContent = state.deviceCount > 0 ? 'Create QR for another device' : 'Create QR code';
     const next = $('#remote-next');
     next.hidden = state.managingDevices || state.step === steps.at(-1);
+    nextHint.hidden = next.hidden;
     if (state.managingDevices) {
       setText($('#remote-step-caption'), 'Manage paired devices');
       return;
@@ -352,6 +377,21 @@ export async function bootstrapRemoteControl() {
       next.textContent = 'Done';
       next.disabled = state.busy;
     }
+    const nextStep = steps[steps.indexOf(state.step) + 1];
+    const nextReason = nextStep === 3 && !remoteRunning
+      ? 'Start Remote before continuing to Devices.'
+      : state.busy ? 'A Remote action is already in progress.' : '';
+    if (nextReason) next.disabled = true;
+    nextHint.dataset.disabled = String(next.disabled);
+    nextHint.title = nextReason;
+    nextHint.tabIndex = nextReason ? 0 : -1;
+    if (nextReason) {
+      nextHint.setAttribute('aria-label', `${next.textContent} unavailable`);
+      nextHint.setAttribute('aria-description', nextReason);
+    } else {
+      nextHint.removeAttribute('aria-label');
+      nextHint.removeAttribute('aria-description');
+    }
     setText($('#remote-step-caption'), `Step ${steps.indexOf(state.step) + 1} of ${steps.length}`);
   }
 
@@ -368,6 +408,7 @@ export async function bootstrapRemoteControl() {
   async function setStep(step) {
     state.managingDevices = false;
     const target = Number(step) || 1;
+    if (target === 3 && !remoteIsRunning()) return;
     state.step = wizardSteps().includes(target) ? target : 1;
     if (state.step === 2) await ensureZones();
     if (state.step === 2 && hostnameKey() && state.hostnameCheck?.key !== hostnameKey()) void checkAvailability();

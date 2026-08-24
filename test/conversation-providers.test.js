@@ -90,6 +90,9 @@ async function fixture() {
       snapshots.get(sessionId).events.push(record);
       for (const listener of listeners.get(sessionId) || []) listener(snapshots.get(sessionId));
     },
+    publish(sessionId) {
+      for (const listener of listeners.get(sessionId) || []) listener(snapshots.get(sessionId));
+    },
     close: async () => {},
   };
   return {
@@ -226,6 +229,46 @@ test('Grok provider identifies SKILL.md reads as skill activity', async () => {
   assert.equal(tool.file.path, '/Users/test/.agents/skills/terminal-browser/SKILL.md');
 });
 
+test('Grok provider shows read filenames and native line ranges without leaking long paths', async () => {
+  const data = await fixture();
+  const path = '/Users/test/.grok/sessions/%2FUsers%2Ftest/thread/terminal/N6HnHsiEkSL1V0G3Ym46uYvryTbO0PHL.log';
+  data.snapshots.get(data.parentId).events = [
+    { timestamp: 1, params: { update: {
+      sessionUpdate: 'tool_call', toolCallId: 'read-log', title: 'read_file',
+      rawInput: { target_file: path, offset: 230, limit: 260 },
+      _meta: { 'x.ai/tool': { name: 'read_file', kind: 'read', label: 'Read' } },
+    } } },
+    { timestamp: 2, params: { update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'read-log', kind: 'read',
+      title: `Read \`${path}\``, locations: [{ path, line: 230 }],
+      rawInput: { variant: 'ReadFile', target_file: path, offset: 230, limit: 260 },
+    } } },
+    { timestamp: 3, params: { update: {
+      sessionUpdate: 'tool_call_update', toolCallId: 'read-log', status: 'completed',
+      rawOutput: { type: 'ReadFile', FileContent: {
+        absolute_path: path, content: '230→line', raw_output: 'line',
+        offset: 230, limit: 260, total_lines: 2508,
+      } },
+    } } },
+    { timestamp: 4, params: { update: { sessionUpdate: 'turn_completed' } } },
+  ];
+  const registry = createConversationRegistry({
+    providers: [createGrokConversationProvider({ acpClient: data.acpClient })],
+  });
+  const result = await registry.read({
+    name: 'ar-chat', cwd: data.cwd,
+    command: `grok --leader --session-id ${data.parentId}`,
+    conversationThreadId: data.parentId,
+  });
+
+  const tool = result.items.find((item) => item.type === 'tool');
+  assert.equal(tool.title, 'Read N6HnHsiEkSL1V0G3Ym46uYvryTbO0PHL.log (231–490 of 2508)');
+  assert.equal(tool.subject, 'N6HnHsiEkSL1V0G3Ym46uYvryTbO0PHL.log');
+  assert.deepEqual(tool.locations, [path]);
+  assert.equal(tool.file.path, path);
+  assert.doesNotMatch(tool.title, /\/Users\/test/);
+});
+
 test('Grok provider returns a bounded recent history window for mobile', async () => {
   const data = await fixture();
   const snapshot = data.snapshots.get(data.parentId);
@@ -308,7 +351,10 @@ test('Grok provider groups adjacent mixed tools across resolved permissions and 
   snapshot.events = [
     { timestamp: 1, params: { update: {
       sessionUpdate: 'tool_call', toolCallId: 'shell-1', title: 'Run checks', status: 'running',
-      rawInput: { variant: 'Bash', command: 'npm test -- --runInBand' },
+      rawInput: {
+        variant: 'Bash', command: 'npm test -- --runInBand',
+        description: 'Run the focused test suite',
+      },
       _meta: { 'x.ai/tool': { name: 'run_command', kind: 'execute', label: 'Shell' } },
     } } },
     { timestamp: 1.1, params: { update: {
@@ -368,6 +414,8 @@ test('Grok provider groups adjacent mixed tools across resolved permissions and 
     'appending an adjacent tool must not remount the existing streamed group');
   assert.equal(appended.items[0].tools.length, 3);
   assert.equal(result.items[0].tools[0].command, 'npm test -- --runInBand');
+  assert.equal(result.items[0].tools[0].summary, 'Run the focused test suite');
+  assert.match(result.items[0].tools[0].input, /"description": "Run the focused test suite"/);
   assert.equal(result.items[1].text, 'I should verify this. The boundary matters.');
   assert.equal(result.items[1].status, 'completed');
   assert.equal(result.items[2].toolCallId, 'read-1');
@@ -877,6 +925,10 @@ test('Grok provider publishes every live agent chunk and completion synchronousl
     { kind: 'agent_message_chunk', delta: 'C' },
   ]);
   assert.deepEqual(chunks.map((event) => event.conversation.items.at(-1).text), ['A', 'AB', 'ABC']);
+  assert.deepEqual(chunks.map((event) => event.conversation.activity.turnId), [8_000, 8_000, 8_000]);
+
+  data.acpClient.publish(data.parentId);
+  assert.equal(updates.length, before + 3, 'republishing one ACP snapshot must not duplicate its last chunk');
 
   root.turn = { active: false, cancelRequested: false, changedAt: 12_000 };
   data.acpClient.append(data.parentId, { timestamp: 12, params: { update: {
@@ -1128,7 +1180,7 @@ test('Grok provider keeps completed question cards when replaying history', asyn
   assert.ok(!conversation.items.some((item) => item.type === 'tool' && item.toolCallId === 'ask-history'));
 });
 
-test('Grok provider exposes turn lifecycle status without rendering lifecycle events', async () => {
+test('Grok provider exposes turn lifecycle status and renders only cancelled turn boundaries', async () => {
   const data = await fixture();
   const provider = createGrokConversationProvider({ acpClient: data.acpClient });
   const session = {
@@ -1170,11 +1222,23 @@ test('Grok provider exposes turn lifecycle status without rendering lifecycle ev
   assert.deepEqual(data.cancellations, [{ sessionId: data.parentId, cwd: data.cwd }]);
 
   data.acpClient.append(data.parentId, { timestamp: 9, params: { update: {
-    sessionUpdate: 'turn_completed', stop_reason: 'end_turn',
+    sessionUpdate: 'turn_completed', stop_reason: 'cancelled',
   } } });
   data.snapshots.get(data.parentId).turn = { active: false, cancelRequested: false };
   assert.equal(await registry.status(session), 'idle');
-  assert.deepEqual((await registry.read(session)).activity, { active: false });
+  const cancelled = await registry.read(session);
+  assert.deepEqual(cancelled.activity, { active: false });
+  assert.deepEqual(cancelled.items.filter((item) => item.type === 'turn').map((item) => ({
+    title: item.title,
+    status: item.status,
+    stopReason: item.stopReason,
+    durationMs: item.durationMs,
+  })), [{
+    title: 'Turn cancelled by user',
+    status: 'cancelled',
+    stopReason: 'cancelled',
+    durationMs: 1_000,
+  }]);
 
   // Grok can flush a final tool update after its authoritative turn boundary.
   // That event belongs to the completed turn and must not restart activity.

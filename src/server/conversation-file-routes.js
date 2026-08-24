@@ -133,20 +133,51 @@ export function createConversationFileRouteHandler({ conversationSession, attach
       return true;
     }
 
+    const referenceMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/attachments\/([0-9a-f-]{36})\/reference$/i);
+    if (request.method === 'GET' && referenceMatch) {
+      const sessionName = decodeURIComponent(referenceMatch[1]);
+      const attachment = attachments.get(sessionName, referenceMatch[2]);
+      if (!attachment) json(response, 404, { error: 'Attachment not found' });
+      else json(response, 200, { name: attachment.name, path: attachment.path });
+      return true;
+    }
+
     const viewMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/attachments\/([0-9a-f-]{36})$/i);
     if (request.method === 'GET' && viewMatch) {
       const attachment = attachments.get(decodeURIComponent(viewMatch[1]), viewMatch[2]);
       if (!attachment) json(response, 404, { error: 'Attachment not found' });
       else {
-        response.writeHead(200, {
+        const isVideo = /^video\//.test(attachment.mimeType);
+        const range = isVideo && typeof request.headers.range === 'string'
+          ? request.headers.range.match(/^bytes=(\d*)-(\d*)$/)
+          : undefined;
+        let start = 0;
+        let end = attachment.size - 1;
+        if (range) {
+          if (range[1]) {
+            start = Number(range[1]);
+            if (range[2]) end = Math.min(Number(range[2]), end);
+          } else if (range[2] && Number(range[2]) > 0) {
+            start = Math.max(0, attachment.size - Number(range[2]));
+          }
+        }
+        if ((request.headers.range && isVideo && !range) || start > end || start >= attachment.size) {
+          response.writeHead(416, { 'content-range': `bytes */${attachment.size}` });
+          response.end();
+          return true;
+        }
+        const partial = Boolean(range);
+        response.writeHead(partial ? 206 : 200, {
           'content-type': attachment.mimeType,
-          'content-length': attachment.size,
+          'content-length': end - start + 1,
           'cache-control': 'private, no-store',
           'x-content-type-options': 'nosniff',
           'content-security-policy': "default-src 'none'; sandbox",
-          'content-disposition': `${/^image\/(?:png|jpeg|webp|gif)$/.test(attachment.mimeType) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(attachment.name)}`,
+          'content-disposition': `${/^(?:image\/(?:png|jpeg|webp|gif)|video\/)/.test(attachment.mimeType) ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(attachment.name)}`,
+          ...(isVideo ? { 'accept-ranges': 'bytes' } : {}),
+          ...(partial ? { 'content-range': `bytes ${start}-${end}/${attachment.size}` } : {}),
         });
-        createReadStream(attachment.path).pipe(response);
+        createReadStream(attachment.path, { start, end }).pipe(response);
       }
       return true;
     }

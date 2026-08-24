@@ -39,8 +39,9 @@ function assetRoutes(root, publicDir) {
   const publicAssets = [
     'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png',
     'document-boot.js', 'workspace-boot.js', 'app.js', 'api-client.js', 'remote-entry.js',
-    'prompt-title.js', 'ui-components.js', 'remote-control.js', 'mobile-conversation.js',
-    'mobile-activity-state.js', 'mobile-composer-model.js', 'mobile-timeline-reconciler.js',
+    'prompt-title.js', 'ui-components.js', 'mobile-sheet.js', 'remote-control.js', 'mobile-conversation.js',
+    'mobile-activity-state.js', 'mobile-composer-model.js', 'mobile-pending-message.js',
+    'mobile-timeline-reconciler.js', 'mobile-stream-batcher.js',
     'mobile-file-surface.js', 'mobile-event-renderer.js', 'mobile-interaction-renderer.js',
     'terminal-snapshots.js', 'visual-viewport.js', 'browser-media.js',
     'markdown.js', 'syntax.js', 'tokens.css', 'styles.css',

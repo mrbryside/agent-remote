@@ -1,4 +1,4 @@
-import { readdir, realpath, stat } from 'node:fs/promises';
+import { mkdir, readdir, realpath, stat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 
 function containedBy(path, root) {
@@ -40,4 +40,22 @@ export async function browseDirectories(requestedPath, configuredRoots) {
     roots,
     directories,
   };
+}
+
+export async function createDirectory(parentPath, name, configuredRoots) {
+  if (typeof name !== 'string') throw new Error('Folder name is required');
+  const folderName = name.trim();
+  if (!folderName || folderName === '.' || folderName === '..' || folderName.length > 255 || /[\\/\0]/.test(folderName)) {
+    throw new Error('Folder name must be a single valid name under 256 characters');
+  }
+  const { path } = await resolveAllowedDirectory(parentPath, configuredRoots);
+  const target = resolve(path, folderName);
+  try {
+    await mkdir(target);
+  } catch (error) {
+    if (error?.code === 'EEXIST') throw new Error('A file or folder with that name already exists');
+    throw error;
+  }
+  const created = await resolveAllowedDirectory(target, configuredRoots);
+  return { ...(await browseDirectories(path, configuredRoots)), created: created.path };
 }

@@ -70,6 +70,37 @@ test('keeps Remote administration out of the compact mobile surface', async ({ p
   expect(remoteAdminRequests).toEqual([]);
 });
 
+test('separates the mobile shell marker from the command draft', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => {
+    const conversation = document.querySelector('#mobile-conversation');
+    conversation.hidden = false;
+    document.querySelector('#mobile-conversation-composer').hidden = false;
+  });
+
+  const composer = page.locator('#mobile-conversation-composer');
+  const input = page.locator('#mobile-conversation-input');
+  const prefix = page.locator('#mobile-conversation-shell-prefix');
+  await input.fill('!echo hello');
+  await expect(input).toHaveValue('echo hello');
+  await expect(input).toHaveAttribute('aria-label', 'Shell command');
+  await expect(composer).toHaveAttribute('data-shell', 'true');
+  await expect(prefix).toBeVisible();
+  await expect(prefix).toHaveText('!');
+  await expect(prefix).toHaveCSS('color', 'rgb(232, 164, 101)');
+
+  await input.fill('');
+  await expect(prefix).toBeVisible();
+  await input.press('Backspace');
+  await expect(prefix).toBeHidden();
+  await expect(input).toHaveAttribute('aria-label', 'Message');
+  await expect(composer).toHaveAttribute('data-shell', 'false');
+
+  await input.fill('echo !');
+  await expect(prefix).toBeHidden();
+  await expect(input).toHaveValue('echo !');
+});
+
 test('dismisses every native modal only from its outside backdrop', async ({ page }) => {
   const dialogIds = ['create-dialog', 'remote-dialog', 'cloudflare-token-guide-dialog'];
   for (const id of dialogIds) {
@@ -81,8 +112,15 @@ test('dismisses every native modal only from its outside backdrop', async ({ pag
     await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + 24);
     await expect(page.locator(`#${id}`)).toBeVisible();
 
+    await page.locator(`#${id}`).evaluate((nativeDialog) => {
+      nativeDialog.dataset.closeEvent = 'pending';
+      nativeDialog.addEventListener('close', () => {
+        nativeDialog.dataset.closeEvent = 'done';
+      }, { once: true });
+    });
     await page.mouse.click(1, 1);
     await expect(page.locator(`#${id}`)).toBeHidden();
+    await expect(page.locator(`#${id}`)).toHaveAttribute('data-close-event', 'done');
   }
 });
 
@@ -262,9 +300,15 @@ test('keeps Remote configuration separate from the header Start and Stop control
     await expect.poll(() => step.locator('span').evaluate((node) => getComputedStyle(node, '::before').content)).toBe(target === 3 ? '"✓+"' : '"✓"');
   }
   await expect(remoteDialog.locator('[data-remote-step-target="3"]')).toHaveAttribute('data-repeatable', 'true');
+  await expect(remoteDialog.locator('[data-remote-step-target="3"]')).toBeDisabled();
+  await expect(remoteDialog.locator('#remote-devices-step-hint'))
+    .toHaveAttribute('title', 'Start Remote before continuing to Devices.');
   await expect(remoteDialog.getByRole('radio', { name: /Custom Domain/ })).toBeChecked();
   await remoteDialog.locator('[data-remote-step-target="2"]').click();
   await expect(remoteDialog.getByRole('heading', { name: 'Custom Domain' })).toBeVisible();
+  await expect(remoteDialog.getByRole('button', { name: 'Next: Pair devices' })).toBeDisabled();
+  await expect(remoteDialog.locator('#remote-next-hint'))
+    .toHaveAttribute('title', 'Start Remote before continuing to Devices.');
   const tokenGuideButton = remoteDialog.getByRole('button', { name: 'See the step-by-step setup guide' });
   await tokenGuideButton.click();
   const tokenGuide = page.getByRole('dialog', { name: 'Create a Cloudflare API token' });
@@ -349,26 +393,25 @@ test('keeps Remote configuration separate from the header Start and Stop control
   await expect(remoteDialog.locator('#remote-loading')).toBeHidden();
   await expect(power).toHaveText('Start Remote');
   await expect(power).toHaveAttribute('data-action', 'start');
-  await expect(remoteDialog.getByRole('heading', { name: 'Scan devices locally' })).toBeVisible();
+  await expect(remoteDialog.getByRole('heading', { name: 'Custom Domain' })).toBeVisible();
 
   await remoteDialog.locator('[data-remote-step-target="1"]').click();
   await remoteDialog.getByRole('radio', { name: /Random URL/ }).check();
   await expect(remoteDialog.locator('[data-remote-step-target="2"]')).toBeHidden();
   await expect(remoteDialog.locator('[data-remote-step-target="3"] span')).toHaveText('2');
   await expect(remoteDialog.locator('#remote-step-caption')).toHaveText('Step 1 of 2');
-  await remoteDialog.getByRole('button', { name: 'Next: Pair devices' }).click();
-  await expect(remoteDialog.getByRole('heading', { name: 'Scan devices locally' })).toBeVisible();
-  await expect(remoteDialog.locator('#remote-step-caption')).toHaveText('Step 2 of 2');
-  const disabledPairAction = remoteDialog.getByRole('button', { name: 'Create QR code' });
-  await expect(disabledPairAction).toBeDisabled();
-  await expect(disabledPairAction).toHaveCSS('cursor', 'not-allowed');
+  const nextToPair = remoteDialog.getByRole('button', { name: 'Next: Pair devices' });
+  await expect(nextToPair).toBeDisabled();
+  await expect(remoteDialog.locator('#remote-next-hint'))
+    .toHaveAttribute('title', 'Start Remote before continuing to Devices.');
+  await expect(remoteDialog.getByRole('heading', { name: 'Choose one connection type' })).toBeVisible();
   expect(quickCalls).toBe(0);
   await power.click();
   await quickStarted;
   expect(quickCalls).toBe(1);
   await expect(remoteDialog.locator('#remote-loading-title')).toHaveText('Opening Remote access…');
   await expect(remoteDialog.locator('#remote-loading')).toBeVisible();
-  await expect(remoteDialog.locator('[data-remote-step-target="3"]')).toHaveAttribute('aria-current', 'step');
+  await expect(remoteDialog.locator('[data-remote-step-target="1"]')).toHaveAttribute('aria-current', 'step');
   releaseQuick();
   await expect(remoteDialog.getByLabel('Remote public URL')).toHaveValue('https://example.trycloudflare.com');
   await expect(remoteButton).toHaveAttribute('data-state', 'running');
@@ -518,12 +561,13 @@ test('starts loading Remote setup on refresh and reuses the in-flight request wh
 
 test('uses a safe-area aware near-edge Remote modal on a 390x844 viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
+  let compactTunnel = { mode: 'none', state: 'stopped' };
   await page.route('**/api/runtime', (route) => route.fulfill({ json: {
     product: 'agent-remote', version: 1, surface: 'local', desktopMode: false,
   } }));
   await page.route('**/api/remote/status', (route) => route.fulfill({ json: {
     supported: true, cloudflared: { available: true }, tokenConfigured: false,
-    tunnel: { mode: 'none', state: 'stopped' },
+    tunnel: compactTunnel,
   } }));
   await page.route('**/api/remote/devices', (route) => route.fulfill({ json: { devices: [] } }));
   await page.reload();
@@ -537,6 +581,14 @@ test('uses a safe-area aware near-edge Remote modal on a 390x844 viewport', asyn
   expect(bounds.height).toBe(828);
   await expect(page.locator('#remote-dialog')).toHaveCSS('border-radius', '16px');
   const compactRemote = page.locator('#remote-dialog');
+  await expect(compactRemote.locator('[data-remote-step-target="3"]')).toBeDisabled();
+  await expect(compactRemote.locator('#remote-devices-step-hint'))
+    .toHaveAttribute('title', 'Start Remote before continuing to Devices.');
+  await expect(compactRemote.getByRole('heading', { name: 'Choose one connection type' })).toBeVisible();
+  compactTunnel = { mode: 'quick', state: 'running', publicUrl: 'https://compact.trycloudflare.com' };
+  await compactRemote.getByRole('button', { name: 'Close Remote access' }).click();
+  await page.locator('#remote-button').click();
+  await expect(compactRemote.locator('[data-remote-step-target="3"]')).toBeEnabled();
   await compactRemote.locator('[data-remote-step-target="3"]').click();
   await expect(compactRemote.getByRole('heading', { name: 'Scan devices locally' })).toBeVisible();
   await expect.poll(() => compactRemote.locator('.remote-pairing').evaluate((panel) => {
@@ -573,6 +625,310 @@ test('uses a safe-area aware near-edge Remote modal on a 390x844 viewport', asyn
     overflowY: getComputedStyle(element).overflowY,
     scrollable: element.scrollHeight > element.clientHeight,
   }))).toEqual({ overflowY: 'auto', scrollable: true });
+});
+
+test('shows image and video attachments in a scrollable mobile media gallery', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route('**/__media_preview__/**', (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith('/valid.svg')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"><rect width="120" height="80" fill="#5c8cff"/></svg>',
+      });
+    }
+    if (pathname.endsWith('/tall.svg')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="720"><rect width="120" height="720" fill="#64beac"/></svg>',
+      });
+    }
+    if (pathname.endsWith('/wide.svg')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="120"><rect width="1200" height="120" fill="#e8a465"/></svg>',
+      });
+    }
+    if (pathname.endsWith('/broken.mp4')) {
+      return route.fulfill({ status: 200, contentType: 'video/mp4', body: 'broken-video' });
+    }
+    return route.fulfill({ status: 200, contentType: 'image/png', body: 'broken-image' });
+  });
+  await page.reload();
+  await page.evaluate(async () => {
+    const { createMobileFileSurface } = await import('/mobile-file-surface.js?media-gallery-test');
+    const root = document.createElement('main');
+    root.style.cssText = 'position:fixed;inset:0;background:#0c0c0d';
+    document.body.replaceChildren(root);
+    const element = (tagName, className = '', text = '') => {
+      const node = document.createElement(tagName);
+      if (className) node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    };
+    const surface = createMobileFileSurface({
+      root,
+      element,
+      readFile: async () => undefined,
+      getSessionName: () => '',
+      getConversation: () => ({ items: [] }),
+      animateContent: () => {},
+      metric: (value) => String(value),
+    });
+    const valid = (id, name) => ({
+      id, name, mimeType: 'image/png', url: `/__media_preview__/valid.svg?item=${id}`,
+    });
+    surface.openMedia({
+      selectedId: 'valid-1',
+      items: [
+        valid('valid-1', 'one.png'),
+        { id: 'broken-image', name: 'broken.png', mimeType: 'image/png', url: '/__media_preview__/broken.png' },
+        { id: 'broken-video', name: 'clip.mp4', mimeType: 'video/mp4', url: '/__media_preview__/broken.mp4' },
+        valid('valid-2', 'two.png'), valid('valid-3', 'three.png'),
+        valid('valid-4', 'four.png'), valid('valid-5', 'five.png'),
+        { id: 'tall', name: 'tall.png', mimeType: 'image/png', url: '/__media_preview__/tall.svg' },
+        { id: 'wide', name: 'wide.png', mimeType: 'image/png', url: '/__media_preview__/wide.svg' },
+      ],
+    });
+  });
+
+  const sheet = page.locator('.mobile-file-sheet');
+  const strip = sheet.locator('.mobile-file-media-strip');
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toHaveClass(/\bmobile-sheet\b/);
+  await expect(sheet.locator('.mobile-file-sheet-panel')).toHaveClass(/\bmobile-sheet-panel\b/);
+  await expect(sheet.locator('.mobile-file-sheet-body')).toHaveClass(/\bmobile-sheet-body\b/);
+  await expect(sheet).toHaveAttribute('aria-label', 'Media preview');
+  await expect(strip.getByRole('button')).toHaveCount(9);
+  await expect.poll(() => strip.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+  await expect.poll(() => sheet.locator('.mobile-file-media-stage img').evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
+
+  await strip.getByRole('button', { name: 'View broken.png' }).click();
+  await expect(sheet.locator('.mobile-file-media-fallback')).toHaveText('broken.png');
+  const videoConfiguration = await page.evaluate(() => {
+    document.querySelector('[aria-label="View clip.mp4"]').click();
+    const video = document.querySelector('.mobile-file-media-stage video');
+    return {
+      controls: video?.controls,
+      controlsAttribute: video?.hasAttribute('controls'),
+      playsInline: video?.playsInline,
+      preload: video?.preload,
+      visibility: video ? getComputedStyle(video).visibility : undefined,
+    };
+  });
+  expect(videoConfiguration).toEqual({
+    controls: true,
+    controlsAttribute: true,
+    playsInline: true,
+    preload: 'metadata',
+    visibility: 'hidden',
+  });
+  await expect(sheet.locator('.mobile-file-media-fallback')).toHaveText('clip.mp4');
+  await strip.getByRole('button', { name: 'View five.png' }).click();
+  await expect(sheet.locator('.mobile-file-sheet-header strong')).toHaveText('five.png');
+  await expect.poll(() => sheet.locator('.mobile-file-media-stage img').evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
+
+  for (const attachment of ['tall.png', 'wide.png']) {
+    await strip.getByRole('button', { name: `View ${attachment}` }).click();
+    await expect.poll(() => sheet.locator('.mobile-file-media-stage img').evaluate((image) => image.naturalWidth)).toBeGreaterThan(0);
+    const geometry = await sheet.evaluate((node) => {
+      const panel = node.querySelector('.mobile-file-sheet-panel').getBoundingClientRect();
+      const body = node.querySelector('.mobile-file-sheet-body').getBoundingClientRect();
+      const stage = node.querySelector('.mobile-file-media-stage').getBoundingClientRect();
+      const media = node.querySelector('.mobile-file-media').getBoundingClientRect();
+      const titleColor = getComputedStyle(node.querySelector('.mobile-file-sheet-header strong')).color;
+      return {
+        panelBottom: panel.bottom,
+        panelTop: panel.top,
+        bodyTop: body.top,
+        bodyBottom: body.bottom,
+        stageHeight: stage.height,
+        mediaHeight: media.height,
+        mediaTop: media.top,
+        mediaBottom: media.bottom,
+        titleColor,
+        viewportHeight: innerHeight,
+      };
+    });
+    expect(geometry.panelTop).toBeGreaterThanOrEqual(0);
+    expect(geometry.panelBottom).toBeLessThanOrEqual(geometry.viewportHeight + 1);
+    expect(geometry.mediaTop).toBeGreaterThanOrEqual(geometry.bodyTop);
+    expect(geometry.mediaBottom).toBeLessThanOrEqual(geometry.bodyBottom);
+    expect(Math.abs(geometry.stageHeight - geometry.mediaHeight)).toBeLessThanOrEqual(1);
+    expect(geometry.titleColor).toBe('rgb(222, 222, 224)');
+  }
+});
+
+test('provides shared mobile sheet slots and drag behavior', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(async () => {
+    const { createMobileSheetFrame, installMobileSheetDrag } = await import('/mobile-sheet.js?sheet-frame-test');
+    const root = document.createElement('main');
+    root.style.cssText = 'position:fixed;inset:0;background:#0c0c0d';
+    document.body.replaceChildren(root);
+    const element = (tagName, className = '', text = '') => {
+      const node = document.createElement(tagName);
+      if (className) node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    };
+    const frame = createMobileSheetFrame({
+      root,
+      element,
+      label: 'Shared sheet test',
+      handleLabel: 'Drag shared sheet down',
+      footer: true,
+    });
+    frame.slots.header.append(element('strong', '', 'Header slot'));
+    frame.slots.body.append(element('p', '', 'Body slot'));
+    frame.slots.footer.append(element('button', '', 'Footer slot'));
+    frame.sheet.hidden = false;
+    installMobileSheetDrag({
+      panel: frame.panel,
+      handle: frame.handle,
+      threshold: 48,
+      onClose: () => { frame.sheet.hidden = true; },
+    });
+  });
+
+  const sheet = page.getByRole('dialog', { name: 'Shared sheet test' });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.locator('.mobile-sheet-header')).toContainText('Header slot');
+  await expect(sheet.locator('.mobile-sheet-body')).toContainText('Body slot');
+  await expect(sheet.locator('.mobile-sheet-footer')).toContainText('Footer slot');
+  const handle = sheet.getByRole('button', { name: 'Drag shared sheet down' });
+  await handle.dispatchEvent('pointerdown', { pointerId: 7, clientY: 100 });
+  await page.evaluate(() => {
+    window.dispatchEvent(new PointerEvent('pointermove', { pointerId: 7, clientY: 172 }));
+    window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 7, clientY: 172 }));
+  });
+  await expect(sheet).toBeHidden();
+});
+
+test('auto-reveals tool details only when they fall below the visible area', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const result = await page.evaluate(async () => {
+    const { disclosureNeedsReveal } = await import('/mobile-conversation.js?disclosure-visibility-test');
+    const messages = document.createElement('main');
+    const group = document.createElement('section');
+    const panel = document.createElement('div');
+    group.className = 'mobile-tool-group-panel';
+    messages.className = 'mobile-conversation-messages';
+    group.append(panel);
+    messages.append(group);
+    document.body.replaceChildren(messages);
+    messages.getBoundingClientRect = () => ({ top: 80, bottom: 700 });
+    group.getBoundingClientRect = () => ({ top: 120, bottom: 620 });
+    let panelBottom = 560;
+    panel.getBoundingClientRect = () => ({ top: 180, bottom: panelBottom });
+    const anchoring = {
+      messages: getComputedStyle(messages).overflowAnchor,
+      group: getComputedStyle(group).overflowAnchor,
+    };
+    const alreadyVisible = disclosureNeedsReveal(panel, messages);
+    panelBottom = 660;
+    const clippedByGroup = disclosureNeedsReveal(panel, messages);
+    group.removeAttribute('class');
+    panelBottom = 690;
+    const visibleInMessages = disclosureNeedsReveal(panel, messages);
+    panelBottom = 730;
+    const belowMessages = disclosureNeedsReveal(panel, messages);
+    return { anchoring, alreadyVisible, clippedByGroup, visibleInMessages, belowMessages };
+  });
+  expect(result).toEqual({
+    anchoring: { messages: 'none', group: 'none' },
+    alreadyVisible: false,
+    clippedByGroup: true,
+    visibleInMessages: false,
+    belowMessages: true,
+  });
+});
+
+test('uses semantic tool summaries while keeping complete calls in details', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(async () => {
+    const { createMobileEventRenderer } = await import('/mobile-event-renderer.js?tool-summary-test');
+    const emptyNode = () => document.createElement('div');
+    window.__toolRevealCalls = [];
+    const renderer = createMobileEventRenderer({
+      fileSurface: {
+        open: async () => {}, filePreviewNode: emptyNode, searchMatchesNode: emptyNode,
+        changeNode: emptyNode, changeStatsNode: emptyNode,
+      },
+      expandedItems: new Set(['summary-group']), autoExpandedItems: new Set(),
+      initializeDisclosure(toggle, panel, open) {
+        toggle.setAttribute('aria-expanded', String(open));
+        panel.hidden = !open;
+      },
+      animateDisclosure(toggle, panel, open) {
+        toggle.setAttribute('aria-expanded', String(open));
+        panel.hidden = !open;
+      },
+      revealDisclosure(toggle) {
+        window.__toolRevealCalls.push(toggle.closest('[data-event-id]')?.dataset.eventId);
+      },
+      getSessionName: () => '', respondPermission: async () => {}, refresh: async () => {},
+    });
+    const root = document.createElement('main');
+    root.id = 'tool-summary-fixture';
+    root.append(renderer.toolGroupNode({
+      id: 'summary-group', type: 'tool_group', title: 'Ran 2 commands, Listed 1 dir', status: 'completed',
+      tools: [
+        {
+          id: 'summary-command', type: 'tool', kind: 'execute', status: 'completed',
+          title: 'Execute `terminal-browser action -- snapshot`', summary: 'Snapshot the match page',
+          command: 'terminal-browser action -- snapshot', output: 'Page snapshot',
+        },
+        {
+          id: 'summary-list', type: 'tool', kind: 'list', status: 'completed', title: 'List Files',
+          summary: 'Inspect source files', input: '{"target_directory":"src","depth":2}', output: 'app.js',
+        },
+        {
+          id: 'fallback-command', type: 'tool', kind: 'execute', status: 'completed', title: 'Shell',
+          command: 'printf fallback', output: 'fallback',
+        },
+      ],
+    }));
+    root.append(renderer.eventNode({
+      id: 'standalone-tool', type: 'tool', kind: 'read', status: 'completed',
+      summary: 'Inspect the standalone file', input: '{"path":"README.md"}', output: 'Loaded',
+    }));
+    document.body.replaceChildren(root);
+  });
+
+  const commandCard = page.locator('[data-event-id="summary-command"]');
+  const commandToggle = commandCard.locator(':scope > .mobile-event-toggle');
+  await expect(commandToggle).toContainText('Run Snapshot the match page');
+  await expect(commandToggle).not.toContainText('terminal-browser action');
+  await commandToggle.click();
+  await expect(commandCard.locator('.mobile-tool-command-line code'))
+    .toHaveText('terminal-browser action -- snapshot');
+  await expect(commandCard.locator('.mobile-tool-detail')).toHaveCount(2);
+  await expect(commandCard.locator('.mobile-tool-detail').nth(0)).toContainText('Input');
+  await expect(commandCard.locator('.mobile-tool-detail').nth(1)).toContainText('Output');
+  await expect.poll(() => page.evaluate(() => window.__toolRevealCalls)).toContain('summary-command');
+
+  const listCard = page.locator('[data-event-id="summary-list"]');
+  await expect(listCard.locator(':scope > .mobile-event-toggle')).toContainText('List Inspect source files');
+  await listCard.locator(':scope > .mobile-event-toggle').click();
+  await expect(listCard.locator('.mobile-tool-detail').filter({ hasText: 'Input' }))
+    .toContainText('{"target_directory":"src","depth":2}');
+  await expect(listCard.locator('.mobile-tool-detail').filter({ hasText: 'Output' })).toContainText('app.js');
+  await expect.poll(() => listCard.locator(':scope > .mobile-event-panel').evaluate((panel) => ({
+    background: getComputedStyle(panel).backgroundColor,
+    padding: [getComputedStyle(panel).paddingLeft, getComputedStyle(panel).paddingRight],
+  }))).toEqual({ background: 'rgb(32, 32, 35)', padding: ['12px', '12px'] });
+
+  await expect(page.locator('[data-event-id="fallback-command"] > .mobile-event-toggle'))
+    .toContainText('Run printf fallback');
+
+  const standalone = page.locator('[data-event-id="standalone-tool"]');
+  await standalone.locator(':scope > .mobile-event-toggle').click();
+  await expect(standalone.locator('.mobile-tool-detail[data-variant="default"]')).toHaveCount(2);
+  await expect.poll(() => page.evaluate(() => window.__toolRevealCalls)).toContain('standalone-tool');
 });
 
 test('distinguishes a mobile terminal tap from a scroll gesture', async ({ page }) => {
@@ -759,7 +1115,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   rootItems.push(
     { id: 'thought-1', type: 'thought', title: 'Thought', text: 'I should inspect the provider.', status: 'working' },
     { id: 'tool-group-1', type: 'tool_group', title: 'Listed 1 dir, Read 2 files, Searched 1 time, Edited 1 file, Ran 1 command', status: 'completed', tools: [
-      { id: 'tool-list', type: 'tool', title: 'List Files', subject: 'src', kind: 'list', status: 'completed', output: 'Found files' },
+      { id: 'tool-list', type: 'tool', title: 'List Files', summary: 'Inspect source files', subject: 'src', kind: 'list', status: 'completed', input: '{"target_directory":"src"}', output: 'Found files' },
       { id: 'tool-read-agents', type: 'tool', title: 'Read', subject: 'AGENTS.md', kind: 'read', status: 'completed', input: '{"path":"AGENTS.md"}', output: 'Provider instructions loaded', locations: ['AGENTS.md'], file: {
         path: 'AGENTS.md', content: '# Agent guide\n**Provider instructions** loaded\n_Keep tests focused._\n', startLine: 1, totalLines: 3,
       } },
@@ -773,6 +1129,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
         oldLine: 1, newLine: 1,
       }] },
       { id: 'tool-shell', type: 'tool', title: 'Shell', kind: 'execute', status: 'completed',
+        summary: 'Verify the focused test suite',
         command: `node --test ${'a-very-long-path/'.repeat(12)}test.js`,
         output: Array.from({ length: 80 }, (_, line) => `test output line ${line + 1}`).join('\n') },
     ] },
@@ -876,8 +1233,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   let releaseFirstQuestion;
   let releaseHelloInput;
   let releaseQueuedInput;
+  let releaseAfterStopInput;
   let releaseStreamingUpload;
   let releaseFirstChildRead;
+  let releaseCancellation;
+  let holdNextCancellation = false;
   let holdFirstChildRead = true;
   let firstQuestion = true;
   let conversationReads = 0;
@@ -894,6 +1254,11 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     }
     if (pathname.endsWith('/cancel')) {
       cancellations.push(route.request().postDataJSON());
+      if (holdNextCancellation) {
+        holdNextCancellation = false;
+        await new Promise((resolve) => { releaseCancellation = resolve; });
+        releaseCancellation = undefined;
+      }
       return route.fulfill({ status: 202, json: { accepted: true, active: true } });
     }
     if (pathname.endsWith('/goal')) {
@@ -914,6 +1279,14 @@ test('uses native mobile conversation history, input, and subagent navigation', 
         queuedInputs.push({ id: queueId, text: submitted.text, createdAt: Date.now(), attachments: [] });
         if (submitted.text === 'queued follow up') {
           await new Promise((resolve) => { releaseQueuedInput = resolve; });
+        }
+        if (submitted.text === 'message after accepted stop') {
+          await new Promise((resolve) => {
+            releaseAfterStopInput = () => {
+              releaseAfterStopInput = undefined;
+              resolve();
+            };
+          });
         }
         return route.fulfill({ status: 202, json: { accepted: true, queued: true, queueId } });
       }
@@ -1018,6 +1391,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const conversation = page.locator('#mobile-conversation');
   const messages = conversation.locator('#mobile-conversation-messages');
   await expect(conversation).toBeVisible();
+  await expect.poll(() => messages.evaluate((node) =>
+    getComputedStyle(node, '::before').content)).toBe('none');
   await expect(page.locator('.topbar')).toBeHidden();
   await expect(page.locator('#sidebar-edge-trigger')).toBeHidden();
   await page.locator('#sidebar-edge-trigger').dispatchEvent('pointerenter');
@@ -1166,15 +1541,15 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     navbarShadow: 'none',
     matchesHomeNavbar: true,
     matchesHomeMenu: true,
-    safeAreaBackground: 'rgb(12, 12, 13)',
+    safeAreaBackground: 'rgba(0, 0, 0, 0)',
     homeCanvasBackground: 'rgb(12, 12, 13)',
     chatCanvasBackground: 'rgb(12, 12, 13)',
-    safeAreaPadding: '20px',
-    safeAreaHeight: '20px',
+    safeAreaPadding: '0px',
+    safeAreaHeight: 'auto',
     homeSafeAreaPadding: '0px',
-    homeShellSafeAreaPadding: '20px',
+    homeShellSafeAreaPadding: '0px',
     homeSafeAreaBackground: 'rgb(12, 12, 13)',
-    sidebarSafeAreaPadding: '20px',
+    sidebarSafeAreaPadding: '0px',
     sidebarHeaderHeight: '44px',
   });
   // Standalone Safari can report a small non-keyboard bottom inset for browser
@@ -1210,9 +1585,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const imageMessage = conversation.locator('[data-message-id="user-image-attachment"]');
   const imageAttachment = imageMessage.locator('.mobile-message-user-attachment');
   await expect(imageAttachment).toHaveAttribute('aria-label', 'View IMG_6024.png');
-  await expect(imageAttachment.locator('img')).toHaveAttribute('src', new RegExp(
-    `/api/conversations/${sessionName}/attachments/11111111-1111-4111-8111-111111111111$`,
-  ));
+  await expect(imageAttachment).toHaveAttribute('data-preview', 'fallback');
+  await expect(imageAttachment.locator('img')).toHaveCount(0);
   await expect(imageAttachment.locator('small')).toHaveText('IMG_6024.png');
   await expect(imageMessage.locator('.mobile-message-user-text')).toHaveText('Please inspect this');
   await expect(imageMessage).not.toContainText('![IMG_6024.png]');
@@ -1221,6 +1595,15 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(1);
   expect(await page.evaluate(() => window.__mobileConversationScrollCalls
     .filter((call) => call?.behavior === 'smooth'))).toEqual([]);
+  // Safari can resume without having delivered the matching hidden/pagehide
+  // event. A foreground signal must still replace the possibly half-open
+  // socket and reconcile an authoritative snapshot.
+  const missedBackgroundStreamCount = await page.evaluate(() => window.__conversationStreams.length);
+  const missedBackgroundReads = conversationReads;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => page.evaluate(() => window.__conversationStreams.length))
+    .toBeGreaterThan(missedBackgroundStreamCount);
+  expect(conversationReads).toBeGreaterThan(missedBackgroundReads);
   const backgroundStreamCount = await page.evaluate(() => window.__conversationStreams.length);
   const backgroundReads = conversationReads;
   await page.evaluate(() => window.__setPageVisibility('hidden'));
@@ -1629,9 +2012,26 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       root: [Math.round(bounds.left), Math.round(bounds.top), Math.round(bounds.width), Math.round(bounds.height)],
       composerAligned: composerGap >= 0 && composerGap <= 12,
     };
-  })).toEqual({ root: [0, 0, 390, 844], composerAligned: true });
+  })).toEqual({ root: [0, 12, 390, 700], composerAligned: true });
   await page.evaluate(() => window.__setVisualViewport({ height: 510, offsetTop: 24 }));
   await expect(page.locator('html')).toHaveAttribute('data-visual-keyboard', 'true');
+  await expect.poll(() => conversation.evaluate((node) => {
+    const bounds = node.getBoundingClientRect();
+    const root = document.documentElement;
+    return {
+      top: Math.round(bounds.top),
+      height: Math.round(bounds.height),
+      layoutInset: root.style.getPropertyValue('--visual-viewport-layout-inset-bottom'),
+      contentInset: root.style.getPropertyValue('--visual-viewport-inset-bottom'),
+      bodyPosition: getComputedStyle(document.body).position,
+    };
+  })).toEqual({
+    top: 24,
+    height: 510,
+    layoutInset: '0px',
+    contentInset: '0px',
+    bodyPosition: 'fixed',
+  });
   await expect.poll(() => conversation.evaluate((node) => {
     const canvas = getComputedStyle(document.documentElement).getPropertyValue('--color-canvas').trim();
     const workspace = node.closest('.workspace');
@@ -1665,8 +2065,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       messagesHeight: Math.round(messages.height),
     };
   })).toEqual({
-    rootTop: 0,
-    rootHeight: 844,
+    rootTop: 24,
+    rootHeight: 510,
     composerBottom: expect.any(Number),
     composerTop: expect.any(Number),
     messagesHeight: expect.any(Number),
@@ -1685,12 +2085,17 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   expect(keyboardLayout.visualBottom - keyboardLayout.composerBottom).toBeLessThanOrEqual(12);
   expect(keyboardLayout.composerTop).toBeGreaterThan(keyboardLayout.rootTop + 160);
   expect(keyboardLayout.messagesHeight).toBeGreaterThan(120);
+  await expect.poll(() => messages.evaluate((node) => ({
+    overflow: node.scrollHeight - node.clientHeight,
+    documentScrollTop: document.scrollingElement.scrollTop,
+  }))).toEqual({ overflow: expect.any(Number), documentScrollTop: 0 });
   await messages.evaluate((node) => { node.scrollTop = node.scrollHeight; });
   await input.evaluate((element) => element.blur());
   await expect(conversation.locator('#mobile-conversation-composer'))
     .toHaveAttribute('data-expanded', 'false');
-  // Until Safari reports a larger visual viewport, keep the composer attached
-  // to the actual keyboard edge instead of racing it to the layout bottom.
+  // Until Safari reports a larger visual viewport, keep the application box
+  // and composer attached to the actual keyboard edge without creating a
+  // hidden layout-viewport scroll range below it.
   await expect.poll(() => page.evaluate(() => ({
     inset: getComputedStyle(document.documentElement)
       .getPropertyValue('--visual-viewport-inset-bottom').trim(),
@@ -1699,7 +2104,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       const gap = window.visualViewport.offsetTop + window.visualViewport.height - bottom;
       return gap >= 0 && gap <= 16;
     })(),
-  }))).toEqual({ inset: '310px', composerAligned: true });
+  }))).toEqual({ inset: '0px', composerAligned: true });
   await page.evaluate(() => window.__setVisualViewport({ height: 844, offsetTop: 0 }));
   await expect(page.locator('html')).toHaveAttribute('data-visual-keyboard', 'false');
   await expect(conversation.locator('#mobile-conversation-composer'))
@@ -1784,7 +2189,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
 
   currentActivity = {
     active: true, phase: 'tool', label: 'Preparing read_file…',
-    canCancel: true, cancelRequested: false,
+    canCancel: true, cancelRequested: false, turnId: 100,
   };
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', {
@@ -1828,6 +2233,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(sendButton).toHaveAttribute('aria-label', 'Send message');
   await input.fill('');
   await expect(sendButton).toHaveAttribute('data-action', 'stop');
+  holdNextCancellation = true;
   await sendButton.click();
   await expect.poll(() => cancellations).toEqual([{}]);
   await expect(sendButton).toHaveAttribute('data-action', 'stopping');
@@ -1843,6 +2249,60 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }))).toEqual({ ringWidth: '40px', ringHeight: '40px', stopWidth: '10px', stopHeight: '10px' });
   await expect(sendButton).toBeDisabled();
 
+  releaseCancellation();
+  await expect(sendButton).toHaveAttribute('data-action', 'send');
+  currentActivity = { active: false };
+  rootItems.push({
+    id: 'turn-cancelled-100', type: 'turn', title: 'Turn cancelled by user',
+    status: 'cancelled', stopReason: 'cancelled', durationMs: 13_000,
+  });
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation, stream: { kind: 'turn_completed' } }),
+    });
+  }, rootConversation());
+  const cancelledTurn = conversation.locator('.mobile-turn-cancelled');
+  await expect(cancelledTurn).toHaveText('Turn cancelled by user in 13s.');
+  await expect(cancelledTurn.locator('.mobile-event-toggle')).toHaveCount(0);
+  await input.fill('message after accepted stop');
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
+  await expect.poll(() => typeof releaseAfterStopInput).toBe('function');
+  await expect(sendButton).toHaveAttribute('data-action', 'sending');
+
+  queuedInputs.splice(queuedInputs.findIndex((entry) => entry.text === 'message after accepted stop'), 1);
+  rootItems.push({
+    id: 'user-after-stop', type: 'message', role: 'user', text: 'message after accepted stop',
+  }, {
+    id: 'assistant-after-stop', type: 'message', role: 'assistant', text: 'Second turn is streaming.',
+  });
+  currentActivity = {
+    active: true, phase: 'writing', label: 'Writing response…',
+    canCancel: true, cancelRequested: false, turnId: 200,
+  };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(sendButton).toHaveAttribute('data-action', 'stop');
+  await expect(sendButton).toHaveAttribute('aria-label', 'Stop response');
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
+  await expect.poll(() => cancellations).toHaveLength(2);
+  await expect(sendButton).toHaveAttribute('data-action', 'send');
+
+  currentActivity = {
+    active: true, phase: 'stopping', label: 'Stopping…',
+    canCancel: true, cancelRequested: true, turnId: 200,
+  };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation }),
+    });
+  }, rootConversation());
+  await expect(sendButton).toHaveAttribute('data-action', 'send');
+
   currentActivity = { active: false };
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', {
@@ -1852,6 +2312,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(sendButton).toHaveAttribute('data-action', 'send');
   await expect(sendButton).toBeDisabled();
   await expect(sendButton).toHaveText('↑');
+  releaseAfterStopInput();
   await expect.poll(() => sendButton.evaluate((node) => ({
     ringContent: getComputedStyle(node, '::before').content,
     stopContent: getComputedStyle(node, '::after').content,
@@ -1949,7 +2410,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
         statusGap: Math.round(status.left - copy.right),
         trimmed: title.scrollWidth > title.clientWidth,
       };
-    })).toEqual({ pastOldLimit: true, statusGap: 12, trimmed: true });
+    })).toEqual({ pastOldLimit: true, statusGap: 12, trimmed: false });
   await expect.poll(() => conversation.evaluate((node) => {
     const selectors = [
       '[data-event-id="tool-shell"] .mobile-tool-command',
@@ -2193,6 +2654,20 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   });
   await expect(conversation.locator('.mobile-browser-pill')).toBeVisible();
   await expect(conversation.locator('.mobile-activity-pill-cluster > button')).toHaveCount(4);
+  await page.locator('.graphics-terminal-instance').evaluate((host) => {
+    host.dataset.reuseMarker = 'original-browser-pane';
+  });
+  await page.evaluate(() => {
+    window.__conversationStreams.at(-1).emit('control', {
+      data: JSON.stringify({
+        type: 'control', action: 'open-graphics', reuseExisting: true,
+        argv: ['terminal-browser', 'open', 'https://example.test'],
+      }),
+    });
+  });
+  await expect(page.locator('.graphics-terminal-instance')).toHaveCount(1);
+  await expect(page.locator('.graphics-terminal-instance'))
+    .toHaveAttribute('data-reuse-marker', 'original-browser-pane');
   await expect.poll(() => conversation.locator('.mobile-activity-pill-cluster').evaluate((cluster) => {
     const pill = cluster.querySelector('.mobile-browser-pill');
     const dismiss = cluster.querySelector('.mobile-activity-pill-dismiss');
@@ -2578,6 +3053,59 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     });
   }, rootConversation());
 
+  // Grok ACP can omit newline-only chunks while a numbered answer is live,
+  // then restore those line breaks in the completed replay. The streaming
+  // renderer must recover the ordered-list boundaries before completion.
+  currentActivity = { active: true, phase: 'responding', label: 'Responding…' };
+  const collapsedNumberedItem = {
+    id: 'assistant-collapsed-numbered', type: 'message', role: 'assistant',
+    text: 'Here are 100 numbered sentences:',
+  };
+  rootItems.push(collapsedNumberedItem);
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation, stream: {
+        kind: 'agent_message_chunk', delta: nextConversation.items.at(-1).text,
+        threadId: 'root-thread', messageId: 'assistant-collapsed-numbered',
+      } }),
+    });
+  }, rootConversation());
+  const collapsedNumberedMessage = conversation.locator(
+    '[data-message-id="assistant-collapsed-numbered"]',
+  );
+  for (const [delta, count] of [
+    ['1', 0],
+    ['. First sentence.', 1],
+    ['2', 1],
+    ['. Second sentence.', 2],
+    ['3. Third sentence.', 3],
+  ]) {
+    collapsedNumberedItem.text += delta;
+    await page.evaluate((nextDelta) => {
+      window.__conversationStreams.at(-1).emit('conversation', {
+        data: JSON.stringify({ stream: {
+          kind: 'agent_message_chunk', delta: nextDelta, threadId: 'root-thread',
+          messageId: 'assistant-collapsed-numbered',
+        } }),
+      });
+    }, delta);
+    await expect(collapsedNumberedMessage.locator('li')).toHaveCount(count);
+  }
+  await expect(collapsedNumberedMessage.locator('p')).toHaveText('Here are 100 numbered sentences:');
+  await expect(sendButton).toHaveAttribute('data-action', 'stop');
+  collapsedNumberedItem.text = [
+    'Here are 100 numbered sentences:', '',
+    '1. First sentence.', '2. Second sentence.', '3. Third sentence.',
+  ].join('\n');
+  currentActivity = { active: false };
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation, stream: { kind: 'turn_completed' } }),
+    });
+  }, rootConversation());
+  await expect(collapsedNumberedMessage.locator('li')).toHaveCount(3);
+  await expect(collapsedNumberedMessage).not.toHaveAttribute('data-streaming', 'true');
+
   currentActivity = { active: true, phase: 'responding', label: 'Responding…' };
   const liveCodeItem = {
     id: 'assistant-live-code', type: 'message', role: 'assistant',
@@ -2804,14 +3332,24 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     const end = panel.getBoundingClientRect().height;
     toggle.click();
     const closing = panel.dataset.disclosureMotion;
-    await new Promise((resolve) => setTimeout(resolve, 260));
-    return { opening, start, middle, end, closing, closed: panel.hidden };
+    const closingAnimation = panel.getAnimations()[0];
+    const closingDuration = closingAnimation.effect.getTiming().duration;
+    closingAnimation.currentTime = closingDuration - 0.01;
+    const group = card.closest('.mobile-tool-group');
+    const lastAnimatedGroupHeight = group.getBoundingClientRect().height;
+    await closingAnimation.finished;
+    const closedGroupHeight = group.getBoundingClientRect().height;
+    return {
+      opening, start, middle, end, closing, closed: panel.hidden,
+      closingEndSnap: Math.abs(lastAnimatedGroupHeight - closedGroupHeight),
+    };
   });
   expect(childDisclosureMotion.opening).toBe('opening');
   expect(childDisclosureMotion.start).toBeLessThan(childDisclosureMotion.middle);
   expect(childDisclosureMotion.start).toBeLessThan(childDisclosureMotion.end);
   expect(childDisclosureMotion.closing).toBe('closing');
   expect(childDisclosureMotion.closed).toBe(true);
+  expect(childDisclosureMotion.closingEndSnap).toBeLessThan(1);
   const editStatusRight = await editCard.locator('.mobile-event-status').evaluate((status) => status.getBoundingClientRect().right);
   await conversation.getByRole('button', { name: /Edited app\.js/ }).click();
   await expect(editCard.locator('.mobile-event-panel')).toBeVisible();
@@ -2844,7 +3382,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     diffOverflow: 'hidden',
     nestedVerticalScroll: false,
   });
-  await expect(editCard.locator('.mobile-event-detail')).toHaveCount(0);
+  await expect(editCard.locator('.mobile-tool-detail')).toHaveCount(3);
+  await expect(editCard.locator('.mobile-tool-detail').nth(0)).toContainText('Input');
+  await expect(editCard.locator('.mobile-tool-detail').nth(1)).toContainText('Output');
+  await expect(editCard.locator('.mobile-tool-detail').nth(2)).toHaveAttribute('data-variant', 'change');
   await expect(editCard.locator('.mobile-event-change')).toContainText('public/app.js');
   await expect(editCard.locator('.mobile-event-toggle .mobile-event-change-stats [data-kind="add"]')).toHaveText('+1');
   await expect(editCard.locator('.mobile-event-toggle .mobile-event-change-stats [data-kind="remove"]')).toHaveText('-1');
@@ -2898,7 +3439,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       panelBorder: getComputedStyle(panel).borderTopWidth,
       rowBorderLeft: getComputedStyle(panel.querySelector('.mobile-event-matches button')).borderLeftWidth,
       rowPaddingTop: parseFloat(getComputedStyle(panel.querySelector('.mobile-event-matches button')).paddingTop),
-    }))).toEqual({ panelBorder: '0px', rowBorderLeft: '0px', rowPaddingTop: 9 });
+    }))).toEqual({ panelBorder: '1px', rowBorderLeft: '0px', rowPaddingTop: 9 });
   await searchMatch.click();
   await expect(fileSheet).toBeVisible();
   await expect(fileSheet.locator('.mobile-file-line[data-highlighted="true"]')).toHaveCount(1);
@@ -2927,14 +3468,17 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   });
   expect(closeAnimation).toEqual({ hidden: false, closing: 'true', animations: 1 });
   await expect(fileSheet).toBeHidden();
-  await conversation.getByRole('button', { name: /Ran node --test/ }).click();
+  const shellToolToggle = conversation.getByRole('button', { name: /Run Verify the focused test suite/ });
+  await expect(shellToolToggle).not.toContainText('a-very-long-path');
+  await shellToolToggle.click();
   const shellDetail = conversation.locator('[data-event-id="tool-shell"] .mobile-tool-command');
   await expect(shellDetail.locator('.mobile-tool-command-icon')).toHaveCount(1);
   await expect(shellDetail.locator('.mobile-tool-command-line')).not.toContainText('$');
   await expect(shellDetail.locator('.mobile-tool-command-line > code')).toContainText('node --test');
-  await expect(shellDetail.locator('.mobile-tool-command-output')).toContainText('test output line 1');
-  await expect(conversation.locator('[data-event-id="tool-shell"] .mobile-event-detail')).toHaveCount(0);
-  await expect.poll(() => shellDetail.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+  await expect(conversation.locator('[data-event-id="tool-shell"] .mobile-tool-command-output')).toContainText('test output line 1');
+  await expect(conversation.locator('[data-event-id="tool-shell"] .mobile-tool-detail')).toHaveCount(2);
+  await expect.poll(() => shellDetail.locator('.mobile-tool-command-line')
+    .evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
   await expect.poll(() => toolPanel.evaluate((panel) => panel.scrollHeight > panel.clientHeight)).toBe(true);
   const shellPanel = conversation.locator('[data-event-id="tool-shell"] > .mobile-event-panel');
   await expect.poll(() => shellPanel.evaluate((panel) => panel.scrollHeight <= panel.clientHeight)).toBe(true);
@@ -2942,18 +3486,16 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => toolPanel.evaluate((panel) => getComputedStyle(panel).overscrollBehaviorY)).toBe('auto');
   await expect.poll(() => messages.evaluate((panel) => getComputedStyle(panel).overscrollBehaviorY)).toBe('contain');
 
-  await conversation.getByRole('button', { name: /List Files/ }).click();
-  const listDetail = conversation.locator('[data-event-id="tool-list"] .mobile-tool-command');
-  await expect(listDetail.locator('.mobile-tool-command-icon')).toHaveCount(1);
-  await expect(listDetail.locator('.mobile-tool-command-line')).not.toContainText('$');
-  await expect(listDetail.locator('.mobile-tool-command-line > code')).toHaveText('List Files src');
-  await expect(listDetail.locator('.mobile-tool-command-output')).toHaveText('Found files');
-  await expect(conversation.locator('[data-event-id="tool-list"] .mobile-event-detail')).toHaveCount(0);
+  await conversation.getByRole('button', { name: /List Inspect source files/ }).click();
+  const listDetail = conversation.locator('[data-event-id="tool-list"] .mobile-tool-detail');
+  await expect(listDetail).toHaveCount(2);
+  await expect(listDetail.filter({ hasText: 'Input' })).toContainText('"target_directory":"src"');
+  await expect(listDetail.filter({ hasText: 'Output' })).toContainText('Found files');
   await conversation.getByRole('button', { name: /Read package\.json/ }).click();
   const genericReadDetail = conversation.locator('[data-event-id="tool-read-package"] .mobile-tool-command');
   await expect(genericReadDetail.locator('.mobile-tool-command-line > code')).toHaveText('Read package.json');
-  await expect(genericReadDetail.locator('.mobile-tool-command-output')).toHaveText('Package loaded');
-  await expect(conversation.locator('[data-event-id="tool-read-package"] .mobile-event-detail')).toHaveCount(0);
+  await expect(conversation.locator('[data-event-id="tool-read-package"] .mobile-tool-command-output')).toHaveText('Package loaded');
+  await expect(conversation.locator('[data-event-id="tool-read-package"] .mobile-tool-detail')).toHaveCount(2);
 
   await shellPanel.scrollIntoViewIfNeeded();
   const nestedScrollStart = await page.evaluate(() => {
@@ -3060,6 +3602,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     });
   }, rootConversation());
   await expect(conversation.getByText('First Grok token arrived before the phone resumed its stream.')).toBeVisible();
+  await expect(sendButton).toHaveAttribute('data-action', 'stop');
+  await expect(sendButton).toHaveAttribute('aria-label', 'Stop response');
   await expect.poll(() => messages.evaluate((element) =>
     element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(1);
   expect(await streamBeforeSend.evaluate((stream) => Boolean(stream.closed))).toBe(false);
@@ -3239,8 +3783,8 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('#mobile-conversation-jump')).toBeHidden();
   await expect(sendButton).toHaveAttribute('data-action', 'stop');
   await sendButton.click();
-  await expect.poll(() => cancellations).toHaveLength(2);
-  await expect(sendButton).toHaveAttribute('data-action', 'stopping');
+  await expect.poll(() => cancellations).toHaveLength(3);
+  await expect(sendButton).toHaveAttribute('data-action', 'send');
 
   currentActivity = { active: false };
   await page.evaluate((nextConversation) => {
@@ -3254,13 +3798,25 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect.poll(() => uploads).toContainEqual({
     name: encodeURIComponent('phone.png'), bytes: 'fake-image',
   });
-  await expect(conversation.locator('.mobile-conversation-attachments img')).toHaveCount(1);
+  const uploadedAttachment = conversation.locator('.mobile-conversation-attachment');
+  await expect(uploadedAttachment).toHaveAttribute('data-preview', 'fallback');
+  await expect(uploadedAttachment.locator('.mobile-conversation-attachment-media')).toHaveCount(0);
+  await expect(uploadedAttachment.locator('.mobile-conversation-attachment-name')).toHaveText('phone.png');
+  await uploadedAttachment.getByRole('button', { name: 'View phone.png' }).click();
+  const mediaSheet = conversation.locator('.mobile-file-sheet');
+  await expect(mediaSheet).toBeVisible();
+  await expect(mediaSheet).toHaveAttribute('aria-label', 'Media preview');
+  await expect(mediaSheet.locator('.mobile-file-media-fallback')).toHaveText('phone.png');
+  await mediaSheet.getByRole('button', { name: 'Close file preview' }).click();
+  await expect(mediaSheet).toBeHidden();
   await conversation.locator('#mobile-conversation-file').setInputFiles({
     name: 'rejected.mov', mimeType: 'video/quicktime', buffer: Buffer.from('rejected-video'),
   });
   const uploadError = conversation.locator('.mobile-conversation-uploading[data-state="error"]');
   await expect(uploadError).toContainText('Upload failed');
   await expect(uploadError).toContainText('Fixture rejected this upload');
+  await expect(conversation.locator('#mobile-conversation-send')).toBeDisabled();
+  await expect(uploadError.getByRole('button', { name: 'Retry upload rejected.mov' })).toBeVisible();
   await input.click();
   await uploadError.getByRole('button', { name: 'Dismiss upload error' }).click();
   await expect(uploadError).toHaveCount(0);
@@ -3857,6 +4413,19 @@ test('owns the mobile surface from the first frame of a new Grok chat', async ({
     } } });
   });
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    const state = { width: 390, height: 844, offsetTop: 0, offsetLeft: 0, scale: 1 };
+    const visualViewport = new EventTarget();
+    for (const property of Object.keys(state)) {
+      Object.defineProperty(visualViewport, property, { get: () => state[property] });
+    }
+    window.__setStartupVisualViewport = (next) => {
+      Object.assign(state, next);
+      visualViewport.dispatchEvent(new Event('resize'));
+      visualViewport.dispatchEvent(new Event('scroll'));
+    };
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: visualViewport });
+  });
   await page.reload();
   await page.evaluate(() => {
     window.__terminalVisibility = [];
@@ -3922,6 +4491,29 @@ test('owns the mobile surface from the first frame of a new Grok chat', async ({
       - (messageViewportBox.y + messageViewportBox.height / 2),
   )).toBeLessThan(5);
   expect(emptyConversationBox.height).toBeGreaterThan(messageViewportBox.height * .9);
+  await expect.poll(() => page.locator('#mobile-conversation-messages').evaluate((node) => ({
+    overflowY: getComputedStyle(node).overflowY,
+    overflow: node.scrollHeight - node.clientHeight,
+  }))).toEqual({ overflowY: 'hidden', overflow: 0 });
+  const startupInput = page.locator('#mobile-conversation-input');
+  await startupInput.click();
+  await page.evaluate(() => window.__setStartupVisualViewport({ height: 510, offsetTop: 24 }));
+  await expect.poll(() => page.locator('#mobile-conversation').evaluate((node) => {
+    const bounds = node.getBoundingClientRect();
+    const messages = node.querySelector('#mobile-conversation-messages');
+    window.scrollTo(0, 80);
+    return {
+      root: [Math.round(bounds.top), Math.round(bounds.height)],
+      documentScroll: document.scrollingElement.scrollTop,
+      messageScroll: messages.scrollTop,
+      messageOverflow: messages.scrollHeight - messages.clientHeight,
+    };
+  })).toEqual({
+    root: [24, 510],
+    documentScroll: 0,
+    messageScroll: 0,
+    messageOverflow: 0,
+  });
   await expect(page.locator('#terminal')).toBeHidden();
   const terminalWasVisible = await page.evaluate(() => {
     clearInterval(window.__terminalVisibilityTimer);
@@ -4235,22 +4827,66 @@ test('keeps empty projects lean, aligned, and responsive', async ({ page }) => {
   await page.waitForTimeout(350);
   await page.locator('#new-project').click();
   await expect(page.locator('#create-dialog')).toBeVisible();
-  await page.waitForTimeout(220);
+  await page.waitForTimeout(500);
   const dialogBox = await page.locator('#create-dialog').boundingBox();
-  expect(dialogBox.x).toBe(8);
-  expect(dialogBox.width).toBe(484);
-  expect(dialogBox.y).toBeGreaterThan(0);
-  expect(dialogBox.y + dialogBox.height).toBeLessThan(700);
-  await expect(page.locator('#create-dialog')).toHaveCSS('border-radius', '16px');
+  expect(dialogBox.x).toBe(0);
+  expect(dialogBox.width).toBe(500);
+  expect(Math.abs(dialogBox.y - 140)).toBeLessThanOrEqual(1);
+  expect(Math.abs(dialogBox.height - 560)).toBeLessThanOrEqual(1);
+  expect(Math.abs(dialogBox.y + dialogBox.height - 700)).toBeLessThanOrEqual(1);
+  await expect(page.locator('#create-dialog')).toHaveCSS('border-radius', '20px 20px 0px 0px');
+  await expect(page.locator('#create-dialog')).toHaveClass(/\bmobile-sheet\b/);
+  await expect(page.locator('#project-form')).toHaveClass(/\bmobile-sheet-panel\b/);
+  await expect(page.locator('.project-sheet-header')).toHaveClass(/\bmobile-sheet-header\b/);
+  await expect(page.locator('.project-sheet-body')).toHaveClass(/\bmobile-sheet-body\b/);
+  await expect(page.locator('.project-sheet-footer')).toHaveClass(/\bmobile-sheet-footer\b/);
+  await expect(page.locator('#project-sheet-handle')).toBeVisible();
+  const projectSheetLayout = await page.locator('#create-dialog').evaluate((element) => {
+    const body = element.querySelector('.project-sheet-body');
+    const footer = element.querySelector('.project-sheet-footer');
+    const bounds = element.getBoundingClientRect();
+    const bodyBounds = body.getBoundingClientRect();
+    const footerBounds = footer.getBoundingClientRect();
+    const folderList = element.querySelector('.folder-list');
+    return {
+      background: getComputedStyle(element).backgroundColor,
+      borderTopWidth: getComputedStyle(element).borderTopWidth,
+      outlineStyle: getComputedStyle(element).outlineStyle,
+      bodyOverflow: getComputedStyle(body).overflowY,
+      bodyNeedsScroll: body.scrollHeight > body.clientHeight,
+      bodyInside: bodyBounds.top >= bounds.top && bodyBounds.bottom <= bounds.bottom,
+      folderListMinHeight: Number.parseFloat(getComputedStyle(folderList).minHeight),
+      folderListUsesFlexibleRow: getComputedStyle(folderList).gridRowStart === '6',
+      footerAtBottom: Math.abs(footerBounds.bottom - bounds.bottom) <= 1,
+      saveHeight: element.querySelector('#save-project').getBoundingClientRect().height,
+    };
+  });
+  expect(projectSheetLayout).toEqual({
+    background: 'rgb(12, 12, 13)', borderTopWidth: '0px', outlineStyle: 'none', bodyOverflow: 'hidden',
+    bodyNeedsScroll: false, bodyInside: true, folderListMinHeight: 120,
+    folderListUsesFlexibleRow: true, footerAtBottom: true, saveHeight: 40,
+  });
   const dialogTypography = await page.locator('#create-dialog').evaluate((element) => ({
     input: Number.parseFloat(getComputedStyle(element.querySelector('input')).fontSize),
     label: Number.parseFloat(getComputedStyle(element.querySelector('label')).fontSize),
     title: Number.parseFloat(getComputedStyle(element.querySelector('h2')).fontSize),
   }));
-  expect(dialogTypography.input).toBeGreaterThanOrEqual(13);
-  expect(dialogTypography.label).toBeGreaterThanOrEqual(13);
-  expect(dialogTypography.title).toBeGreaterThanOrEqual(18);
-  await page.locator('#create-dialog').getByRole('button', { name: 'Close' }).click();
+  expect(dialogTypography.input).toBeGreaterThanOrEqual(12);
+  expect(dialogTypography.label).toBeGreaterThanOrEqual(12);
+  expect(dialogTypography.title).toBeGreaterThanOrEqual(17);
+  const projectSheetHandle = await page.locator('#project-sheet-handle').boundingBox();
+  await page.mouse.move(projectSheetHandle.x + projectSheetHandle.width / 2, projectSheetHandle.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(projectSheetHandle.x + projectSheetHandle.width / 2, projectSheetHandle.y + 90, { steps: 4 });
+  await page.mouse.up();
+  await expect(page.locator('#create-dialog')).toBeHidden();
+  await project.locator('.project-header').hover();
+  await project.getByRole('button', { name: 'Edit Responsive' }).click();
+  await expect(page.locator('#create-dialog')).toBeVisible();
+  await expect(page.locator('#dialog-title')).toHaveText('Edit Responsive');
+  const editSheetBox = await page.locator('#create-dialog').boundingBox();
+  expect(Math.abs(editSheetBox.height - 560)).toBeLessThanOrEqual(1);
+  await page.locator('#create-dialog').getByRole('button', { name: 'Close', exact: true }).click();
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.waitForTimeout(350);
   await expect(page.locator('.workspace')).toHaveAttribute('data-sidebar', 'expanded');

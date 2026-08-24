@@ -61,4 +61,32 @@ conversation behavior in its domain module (`mobile-activity-state.js`,
 [Frontend module boundaries](../architecture/frontend-modules.md) before
 extracting a large UI flow.
 
+## MobileSheet API
+
+`public/mobile-sheet.js` owns the shared compact bottom-sheet frame. Its
+`createMobileSheetFrame()` result exposes `header`, `body`, and optional
+`footer` slots while keeping backdrop, panel, handle, accessibility roles, and
+drag geometry identical. File/Media and Activity sheets build their domain
+content inside those slots. Static Project markup consumes the same
+`mobile-sheet-*` class contract while retaining native `<dialog>` focus
+management.
+
+Use a domain class only for a real variant such as content-fit media, an 80dvh
+project editor that uses the chat canvas, keeps its compact form body fixed,
+and gives only its folder list the flexible scrolling space, or Activity
+list/detail sizing. Do not duplicate the shared
+backdrop, rounded panel, handle, header rhythm, drag state, or footer layout in
+the domain selector. Install drag-to-dismiss through
+`installMobileSheetDrag()` and call `resetMobileSheet()` before reopening a
+reused static sheet.
+
+## Mobile composer shell mode
+
+When the first draft character is `!`, the mobile composer consumes it into a
+separate `mobile-conversation-shell-prefix` and styles the remaining draft as a
+shell command. Keep the marker active while the command is edited; Backspace on
+an already empty command exits shell mode. The transport value must restore the
+leading `!`, while ordinary messages containing `!` anywhere else stay normal.
+Pure parsing and serialization belong in `mobile-composer-model.js`.
+
 Back to [Design system](index.md).

@@ -31,23 +31,54 @@ function duration(value) {
   return `${(milliseconds / 60_000).toFixed(1)} min`;
 }
 
-function detail(panel, label, value, className = '') {
-  if (value === undefined || value === null || value === '') return;
-  const section = element('section', `mobile-event-detail ${className}`.trim());
-  section.append(element('small', '', label), element('pre', '', String(value)));
-  panel.append(section);
+function compactTurnDuration(value) {
+  const milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return '';
+  if (milliseconds < 1_000) return '<1s';
+  const seconds = Math.round(milliseconds / 1_000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
-function commandNode(item) {
-  const section = element('section', 'mobile-tool-command');
+function detail(panel, label, value, className = '', contentClassName = '') {
+  if (value === undefined || value === null || value === '') return;
+  const section = element('section', `mobile-event-detail ${className}`.trim());
+  const formatted = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+  section.append(element('small', '', label), element('pre', contentClassName, formatted));
+  panel.append(section);
+  return section;
+}
+
+function toolDetailNode({
+  label = '', value, content, variant = 'default', className = '', contentClassName = '',
+} = {}) {
+  if (!content && (value === undefined || value === null || value === '')) return undefined;
+  const section = element('section', `mobile-tool-detail ${className}`.trim());
+  section.dataset.variant = variant || 'default';
+  if (label) section.append(element('small', '', label));
+  if (content) section.append(content);
+  else {
+    const formatted = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value);
+    section.append(element('pre', contentClassName, formatted));
+  }
+  return section;
+}
+
+function appendToolDetail(panel, options) {
+  const section = toolDetailNode(options);
+  if (section) panel.append(section);
+  return section;
+}
+
+function commandContentNode(item) {
   const command = element('div', 'mobile-tool-command-line');
   command.append(
     createIcon('terminal', { className: 'mobile-tool-command-icon' }),
     highlightCodeNode(element('code'), item.command, 'bash'),
   );
-  section.append(command);
-  if (item.output) section.append(element('pre', 'mobile-tool-command-output', item.output));
-  return section;
+  return command;
 }
 
 function genericToolCommand(item) {
@@ -65,6 +96,37 @@ function genericToolCommand(item) {
   return `${title} ${target}`;
 }
 
+const toolActionLabels = new Map([
+  ['list', 'List'],
+  ['read', 'Read'],
+  ['skill', 'Read'],
+  ['edit', 'Edit'],
+  ['write', 'Write'],
+  ['search', 'Search'],
+  ['execute', 'Run'],
+  ['web_fetch', 'Fetch'],
+  ['web_search', 'Search'],
+  ['task', 'Start'],
+  ['plan', 'Update'],
+  ['ask_user', 'Ask'],
+  ['background_task_action', 'Manage'],
+]);
+
+function toolDisplayTitle(item) {
+  const summary = String(item.summary || item.description || '').trim();
+  if (summary) {
+    const action = toolActionLabels.get(item.kind);
+    if (!action || new RegExp(`^(?:${action}|ran|executed|edited|wrote|fetched|searched|listed)\\b`, 'i').test(summary)) {
+      return summary;
+    }
+    return `${action} ${summary}`;
+  }
+  const searchTitle = searchToolTitle(item);
+  if (searchTitle) return searchTitle;
+  if (item.command) return `Run ${item.command}`;
+  return genericToolCommand(item);
+}
+
 function planListNode(item) {
   const list = element('ol', 'mobile-plan-list');
   for (const entry of item.entries || []) {
@@ -78,7 +140,7 @@ function planListNode(item) {
 
 export function createMobileEventRenderer({
   fileSurface, expandedItems, autoExpandedItems, initializeDisclosure, animateDisclosure,
-  getSessionName, respondPermission, refresh,
+  revealDisclosure, getSessionName, respondPermission, refresh,
 }) {
   const {
     open: openFileReference, filePreviewNode, searchMatchesNode, changeNode, changeStatsNode,
@@ -94,26 +156,43 @@ export function createMobileEventRenderer({
     }
     if (item.type === 'permission') detail(panel, 'Request', item.text || item.title);
     if (item.type === 'tool') {
+      panel.classList.add('mobile-tool-details');
       const diffs = Array.isArray(item.diffs) ? item.diffs : [];
-      if (diffs.length) {
-        for (const [index, change] of diffs.entries()) panel.append(changeNode(change, index));
+      if (item.command) {
+        appendToolDetail(panel, {
+          label: 'Input', content: commandContentNode(item), variant: 'command',
+          className: 'mobile-tool-input mobile-tool-command',
+        });
+        appendToolDetail(panel, {
+          label: 'Output', value: item.output || item.locations?.join('\n') || 'No output',
+          className: 'mobile-tool-output', contentClassName: 'mobile-tool-command-output',
+        });
       } else {
-        if (item.command) panel.append(commandNode(item));
-        else if (!item.file && !item.matches?.length) {
-          panel.append(commandNode({
-            command: genericToolCommand(item),
-            output: item.output || item.locations?.join('\n') || '',
-          }));
-        }
-        if (item.file) panel.append(filePreviewNode(item.file, { streamId: `read:${item.id}` }));
-        if (item.matches?.length) panel.append(searchMatchesNode(item.matches));
+        appendToolDetail(panel, {
+          label: 'Input', value: item.input || genericToolCommand(item), className: 'mobile-tool-input',
+        });
+        appendToolDetail(panel, {
+          label: 'Output', value: item.output || item.locations?.join('\n') || 'No output',
+          className: 'mobile-tool-output',
+        });
       }
-      for (const output of item.images || []) {
-        const image = element('img', 'mobile-event-image');
-        image.alt = `${item.title || 'Tool'} output`;
-        image.loading = 'lazy';
-        image.src = `data:${output.mimeType};base64,${output.data}`;
-        panel.append(image);
+      for (const [index, change] of diffs.entries()) {
+        appendToolDetail(panel, { content: changeNode(change, index), variant: 'change' });
+      }
+      if (item.file) {
+        appendToolDetail(panel, {
+          content: filePreviewNode(item.file, { streamId: `read:${item.id}` }), variant: 'file',
+        });
+      }
+      if (item.matches?.length) {
+        appendToolDetail(panel, { content: searchMatchesNode(item.matches), variant: 'search' });
+      }
+      if (item.images?.length) {
+        appendToolDetail(panel, {
+          content: element('small', 'mobile-tool-image-summary',
+            `${item.images.length} image output${item.images.length === 1 ? '' : 's'} hidden`),
+          variant: 'summary',
+        });
       }
     }
     if (item.type === 'plan') panel.append(planListNode(item));
@@ -214,10 +293,9 @@ export function createMobileEventRenderer({
     const copy = element('span');
     copy.append(element('small', '', item.type === 'thought' ? 'Reasoning' : item.kind || item.type));
     const heading = element('span', 'mobile-event-heading');
-    const searchTitle = searchToolTitle(item);
     heading.append(element('strong', '', item.type === 'thought'
       ? thinking ? 'Thinking…' : 'Thought'
-      : searchTitle || item.title || 'Event'));
+      : item.type === 'tool' ? toolDisplayTitle(item) : item.title || 'Event'));
     if (item.type === 'tool' && item.diffs?.length) {
       const totals = item.diffs.reduce((summary, change) => {
         const parts = changeParts(change);
@@ -242,13 +320,28 @@ export function createMobileEventRenderer({
     toggle.addEventListener('click', (event) => {
       if (expandedItems.has(item.id)) expandedItems.delete(item.id);
       else expandedItems.add(item.id);
-      animateDisclosure(toggle, panel, expandedItems.has(item.id));
+      const opening = expandedItems.has(item.id);
+      const completion = animateDisclosure(toggle, panel, opening);
+      if (opening && revealDisclosure) {
+        Promise.resolve(completion).then((settledOpen) => {
+          if (settledOpen !== false && expandedItems.has(item.id)) revealDisclosure(toggle, panel);
+        });
+      }
       if (item.type === 'tool' && event.detail !== 0) toggle.blur();
     });
     card.append(toggle, panel);
     if (item.type === 'permission' && item.status === 'pending') card.append(permissionActions(item, state));
     else if (item.type === 'permission' && item.selectedLabel) card.append(element('div', 'mobile-permission-result', item.selectedLabel));
     return card;
+  }
+
+  function turnNode(item) {
+    const elapsed = compactTurnDuration(item.durationMs);
+    const row = element('article', 'mobile-turn-cancelled',
+      `${item.title || 'Turn cancelled by user'}${elapsed ? ` in ${elapsed}` : ''}.`);
+    row.dataset.eventId = item.id;
+    row.dataset.state = item.status || 'cancelled';
+    return row;
   }
 
   function toolGroupNode(item) {
@@ -274,24 +367,25 @@ export function createMobileEventRenderer({
     panel.dataset.streamScroll = 'tools';
     initializeDisclosure(toggle, panel, expandedItems.has(item.id));
     for (const tool of item.tools || []) {
-      const displayTitle = tool.command
-        ? `Ran ${tool.command}`
-        : tool.subject && !tool.title?.includes(tool.subject)
-          ? [tool.title, tool.subject].filter(Boolean).join(' ')
-          : tool.title;
-      const nested = eventNode({ ...tool, title: displayTitle });
+      const nested = eventNode(tool);
       nested.__mobileItemSignature = JSON.stringify(tool);
       panel.append(nested);
     }
     toggle.addEventListener('click', (event) => {
       if (expandedItems.has(item.id)) expandedItems.delete(item.id);
       else expandedItems.add(item.id);
-      animateDisclosure(toggle, panel, expandedItems.has(item.id));
+      const opening = expandedItems.has(item.id);
+      const completion = animateDisclosure(toggle, panel, opening);
+      if (opening && revealDisclosure) {
+        Promise.resolve(completion).then((settledOpen) => {
+          if (settledOpen !== false && expandedItems.has(item.id)) revealDisclosure(toggle, panel);
+        });
+      }
       if (event.detail !== 0) toggle.blur();
     });
     group.append(toggle, panel);
     return group;
   }
 
-  return { eventNode, permissionDockNode, toolGroupNode };
+  return { eventNode, permissionDockNode, toolGroupNode, turnNode };
 }

@@ -10,6 +10,15 @@ const ownFile = fileURLToPath(import.meta.url);
 const ownDir = dirname(ownFile);
 const args = process.argv.slice(2);
 
+if (args[0] === 'close-tab' && args.some((argument) => argument === '--help' || argument === '-h')) {
+  process.stdout.write(
+    'Usage: terminal-browser close-tab [tab-id ...]\n\n' +
+    'Closes the active tab, or every listed tab id, in the browser owned by this agent-remote chat.\n' +
+    'Tab ids are shown by `terminal-browser ls`.\n',
+  );
+  process.exit(0);
+}
+
 function executable(candidate) {
   if (!candidate || candidate === ownFile) return false;
   try {
@@ -111,10 +120,20 @@ function detectTmuxSession() {
   return '';
 }
 
-async function deliverToBackend(pathname, body) {
+function controlTarget() {
+  // A shared Grok leader keeps the tmux environment of the first chat that
+  // started it, but each tool subprocess receives the current Grok thread id.
+  // Prefer that immutable owner so chat B cannot mutate chat A's browser.
+  const threadId = process.env.GROK_SESSION_ID?.trim();
+  if (threadId && threadId.length <= 160) return { threadId };
+  const session = detectTmuxSession();
+  return session ? { session } : { cwd: process.cwd() };
+}
+
+async function deliverToBackend(pathname, body, timeoutMs = 5_000) {
   const base = process.env.AGENT_REMOTE_URL || 'http://127.0.0.1:3000';
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   const headers = { 'content-type': 'application/json' };
   if (process.env.AGENT_REMOTE_TOKEN) headers.authorization = `Bearer ${process.env.AGENT_REMOTE_TOKEN}`;
 
@@ -139,31 +158,6 @@ async function deliverToBackend(pathname, body) {
   }
 }
 
-async function browserTarget(session) {
-  const base = process.env.AGENT_REMOTE_URL || 'http://127.0.0.1:3000';
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5_000);
-  const headers = {};
-  if (process.env.AGENT_REMOTE_TOKEN) headers.authorization = `Bearer ${process.env.AGENT_REMOTE_TOKEN}`;
-  try {
-    const endpoint = new URL('/api/control/browser-target', base);
-    if (session) endpoint.searchParams.set('session', session);
-    else endpoint.searchParams.set('cwd', process.cwd());
-    const response = await fetch(endpoint, { headers, signal: controller.signal });
-    let payload = null;
-    try { payload = await response.json(); } catch {}
-    return {
-      ok: response.ok,
-      payload,
-      error: response.ok ? undefined : payload?.error || `agent-remote returned ${response.status}`,
-    };
-  } catch {
-    return undefined;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 function newTabUrl() {
   for (let index = 1; index < args.length; index += 1) {
     if (args[index] === '--browser') {
@@ -173,6 +167,18 @@ function newTabUrl() {
     if (!args[index].startsWith('-')) return args[index];
   }
   return undefined;
+}
+
+function closeTabIds() {
+  const ids = [];
+  for (let index = 1; index < args.length; index += 1) {
+    let value = args[index];
+    if (value === '--tab') value = args[++index];
+    else if (value?.startsWith('--tab=')) value = value.slice(6);
+    if (!/^\d+$/.test(value || '') || Number(value) <= 0 || Number(value) > Number.MAX_SAFE_INTEGER) return undefined;
+    ids.push(Number(value));
+  }
+  return [...new Set(ids)];
 }
 
 function deliverOscFallback(argv) {
@@ -205,38 +211,43 @@ function reportBackendUnavailable() {
 const opensBrowser = args[0] === 'open' || (
   args[0] &&
   !args[0].startsWith('-') &&
-  !['action', 'ls', 'new-tab', 'setup', 'shutdown', 'upgrade'].includes(args[0])
+  !['action', 'close-tab', 'ls', 'new-tab', 'setup', 'shutdown', 'upgrade'].includes(args[0])
 );
 const opensTab = args[0] === 'new-tab' && !args.some((argument) =>
+  argument === '--browser' || argument.startsWith('--browser='),
+);
+const closesTab = args[0] === 'close-tab' && !args.some((argument) =>
   argument === '--browser' || argument.startsWith('--browser='),
 );
 const proxiesAction = args[0] === 'action' && !args.some((argument) =>
   argument === '--browser' || argument.startsWith('--browser=') || argument === '--help' || argument === '-h',
 );
 const proxiesList = args[0] === 'ls';
-if (process.env.AGENT_REMOTE_GRAPHICS === '1' || (!opensBrowser && !opensTab && !proxiesAction && !proxiesList)) {
+if (process.env.AGENT_REMOTE_GRAPHICS === '1' ||
+    (!opensBrowser && !opensTab && !closesTab && !proxiesAction && !proxiesList)) {
   runReal();
 } else {
-  const session = detectTmuxSession();
+  const target = controlTarget();
   const managedContext = isManagedAgentRemoteContext();
   // Agent tool subprocesses may intentionally strip tmux and AGENT_REMOTE_*
   // variables. Always give the local backend one chance to match the current
   // project directory; commands outside agent-remote still fall back to the
   // real terminal-browser when no matching backend is available.
   if (proxiesAction) {
-    const target = await browserTarget(session);
-    if (target?.ok && target.payload?.browserKey) {
-      runReal(['action', '--browser', target.payload.browserKey, ...args.slice(1)]);
-    } else if (target) {
-      console.error(`terminal-browser: ${target.error || 'no browser is open for this chat'}`);
+    const payload = { argv: args.slice(1), ...target };
+    const delivered = await deliverToBackend('/api/control/browser-action', payload, 35_000);
+    if (delivered?.ok) {
+      if (delivered.payload?.stderr) process.stderr.write(delivered.payload.stderr);
+      if (delivered.payload?.stdout) process.stdout.write(delivered.payload.stdout);
+    } else if (delivered) {
+      console.error(`terminal-browser: ${delivered.error || 'no browser is open for this chat'}`);
       process.exitCode = 1;
     } else if (managedContext) reportBackendUnavailable();
     else runReal();
   } else if (proxiesList) {
     const base = process.env.AGENT_REMOTE_URL || 'http://127.0.0.1:3000';
     const endpoint = new URL('/api/control/browser-state', base);
-    if (session) endpoint.searchParams.set('session', session);
-    else endpoint.searchParams.set('cwd', process.cwd());
+    for (const [key, value] of Object.entries(target)) endpoint.searchParams.set(key, value);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
     try {
@@ -256,12 +267,33 @@ if (process.env.AGENT_REMOTE_GRAPHICS === '1' || (!opensBrowser && !opensTab && 
     } finally {
       clearTimeout(timeout);
     }
+  } else if (closesTab) {
+    const tabs = closeTabIds();
+    if (!tabs) {
+      console.error('terminal-browser: close-tab accepts only positive integer tab ids');
+      process.exitCode = 1;
+    } else {
+      const payload = { action: 'close-tab', ...target };
+      if (tabs.length) payload.tabs = tabs;
+      const delivered = await deliverToBackend('/api/control/browser-tab', payload);
+      if (delivered?.ok) {
+        const count = delivered.payload?.closed?.length || tabs.length || 1;
+        process.stdout.write(count === 1
+          ? '\r\nClosed the browser tab.\r\n'
+          : `\r\nClosed ${count} browser tabs.\r\n`);
+      } else if (delivered) {
+        console.error(`terminal-browser: ${delivered.error || 'the browser tab could not be closed'}`);
+        process.exitCode = 1;
+      } else if (managedContext) reportBackendUnavailable();
+      else {
+        console.error('terminal-browser: close-tab requires an agent-remote browser');
+        process.exitCode = 1;
+      }
+    }
   } else if (opensTab) {
     const url = newTabUrl();
-    const payload = { action: 'new-tab' };
+    const payload = { action: 'new-tab', ...target };
     if (url) payload.url = url;
-    if (session) payload.session = session;
-    else payload.cwd = process.cwd();
     const delivered = await deliverToBackend('/api/control/browser-tab', payload);
     if (delivered?.ok) {
       process.stdout.write(delivered.payload?.reused
@@ -269,10 +301,8 @@ if (process.env.AGENT_REMOTE_GRAPHICS === '1' || (!opensBrowser && !opensTab && 
         : '\r\nOpened a new tab in the existing agent-remote browser pane.\r\n');
     } else if (!delivered) {
       const argv = ['terminal-browser', 'open', ...(url ? [url] : [])];
-      const splitPayload = { argv };
-      if (session) splitPayload.session = session;
-      else splitPayload.cwd = process.cwd();
-      const opened = await deliverToBackend('/api/control/split', splitPayload);
+      const splitPayload = { argv, waitForReady: true, ...target };
+      const opened = await deliverToBackend('/api/control/split', splitPayload, 60_000);
       if (opened?.ok || (process.env.AGENT_REMOTE_WEB === '1' && process.env.AGENT_REMOTE_ACP !== '1')) {
         if (!opened?.ok) deliverOscFallback(argv);
         process.stdout.write('\r\nOpened terminal-browser in the agent-remote right pane.\r\n');
@@ -290,10 +320,8 @@ if (process.env.AGENT_REMOTE_GRAPHICS === '1' || (!opensBrowser && !opensTab && 
     }
   } else {
     const argv = browserArguments();
-    const payload = { argv };
-    if (session) payload.session = session;
-    else payload.cwd = process.cwd();
-    const delivered = await deliverToBackend('/api/control/split', payload);
+    const payload = { argv, waitForReady: true, ...target };
+    const delivered = await deliverToBackend('/api/control/split', payload, 60_000);
     if (delivered?.ok) {
       process.stdout.write('\r\nOpened terminal-browser in the agent-remote right pane.\r\n');
     } else if (delivered) {

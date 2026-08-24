@@ -1,5 +1,5 @@
 import { WebSocket } from 'ws';
-import { browserVirtualKeyCode, rendererViewport } from './renderer-protocol.js';
+import { browserVirtualKeyCode, rendererScale, rendererViewport } from './renderer-protocol.js';
 
 function sendJson(socket, payload) {
   if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
@@ -7,7 +7,7 @@ function sendJson(socket, payload) {
 
 export function createRendererSocketBridge({
   renderers, createRenderer, launchRenderer, clients, clientContexts, rendererSurface,
-  controlRendererTab, closeRenderer,
+  controlRendererTab, closeRendererTabs, closeRenderer,
 }) {
   const {
     broadcastCursor, configureRendererViewport, rendererFrameMessage, requestRendererViewport,
@@ -67,6 +67,7 @@ export function createRendererSocketBridge({
         // foreground terminal-browser process and strand the phone on its
         // opening cover.
         if (!renderer.launchSignature) {
+          renderer.launchGeneration += 1;
           renderer.launchSignature = signature;
           void launchRenderer(renderer, message.argv).catch((error) => {
             if (renderer.launchSignature === signature && !renderer.surface) {
@@ -108,6 +109,7 @@ export function createRendererSocketBridge({
           Number.isInteger(message.width) && message.width >= 160 && message.width <= 4096 &&
           Number.isInteger(message.height) && message.height >= 120 && message.height <= 4096) {
         socket.rendererViewport = rendererViewport(message.width, message.height);
+        socket.rendererScale = rendererScale(message.scale);
         requestRendererViewport(renderer);
       } else if (message.type === 'pointer' && renderer.cdp &&
           ['mousePressed', 'mouseReleased', 'mouseMoved', 'mouseWheel'].includes(message.event) &&
@@ -162,13 +164,20 @@ export function createRendererSocketBridge({
           .catch((error) => sendJson(socket, { type: 'error', message: error.message }));
       } else if ((message.type === 'tab-switch' || message.type === 'tab-close') &&
           Number.isInteger(message.tab) && message.tab > 0 && message.tab <= Number.MAX_SAFE_INTEGER) {
-        if (message.type === 'tab-close' && (renderer.surface?.tabs?.length || 0) <= 1) {
-          closeRenderer(key, 'Last browser tab closed', false, renderer);
-          return;
+        if (message.type === 'tab-switch') {
+          void controlRendererTab(renderer, { cmd: 'activate-tab', tab: message.tab })
+            .catch((error) => sendJson(socket, { type: 'error', message: error.message }));
+        } else {
+          void closeRendererTabs(renderer, [message.tab], {
+            // Older cached web clients do not send this field. Their original
+            // contract was to close the renderer when the final tab closes,
+            // so only an explicit false may preserve the last tab during a
+            // queued multi-close race.
+            closeRendererOnLast: message.closeRendererOnLast !== false,
+          }).then((closed) => {
+            if (closed.rendererClosed) closeRenderer(key, 'Last browser tab closed', false, renderer);
+          }).catch((error) => sendJson(socket, { type: 'error', message: error.message }));
         }
-        const cmd = message.type === 'tab-switch' ? 'activate-tab' : 'close-tab';
-        void controlRendererTab(renderer, { cmd, tab: message.tab })
-          .catch((error) => sendJson(socket, { type: 'error', message: error.message }));
       } else if (message.type === 'browser-action' && renderer.cdp &&
           ['back', 'forward', 'reload'].includes(message.action)) {
         const action = message.action;

@@ -21,6 +21,10 @@ async function withServer(options, run) {
     tmuxShell: false,
     databaseFile: join(stateRoot, 'agent-remote.db'),
     reapBrowserAutomationSessions: async () => [],
+    recoverTerminalBrowser: async () => false,
+    terminalBrowserSupervisor: {
+      start: async () => {}, sweep: async () => {}, stop: async () => {}, recover: async () => false,
+    },
     ...options,
   });
   const addresses = await app.listen();
@@ -149,9 +153,9 @@ async function waitForCondition(predicate, message, timeoutMs = 5000) {
 
 test('serves the frontend and health status', async () => {
   await withServer({}, async (url) => {
-    const [page, manifest, appIcon180, appIcon192, appIcon512, tokens, apiClient, promptTitle, uiComponents, remoteControl, mobileConversation,
-      mobileActivityState, mobileComposerModel, mobileTimelineReconciler, mobileFileSurface,
-      mobileEventRenderer, mobileInteractionRenderer, terminalSnapshots, visualViewport, browserMedia,
+    const [page, manifest, appIcon180, appIcon192, appIcon512, tokens, apiClient, promptTitle, uiComponents, mobileSheet, remoteControl, mobileConversation,
+      mobileActivityState, mobilePendingMessage, mobileComposerModel, mobileTimelineReconciler, mobileFileSurface,
+      mobileStreamBatcher, mobileEventRenderer, mobileInteractionRenderer, terminalSnapshots, visualViewport, browserMedia,
       markdown, syntax, markedVendor, purifierVendor, highlightVendor, health] = await Promise.all([
       fetch(url),
       fetch(`${url}/manifest.webmanifest`),
@@ -162,12 +166,15 @@ test('serves the frontend and health status', async () => {
       fetch(`${url}/api-client.js`),
       fetch(`${url}/prompt-title.js`),
       fetch(`${url}/ui-components.js`),
+      fetch(`${url}/mobile-sheet.js`),
       fetch(`${url}/remote-control.js`),
       fetch(`${url}/mobile-conversation.js`),
       fetch(`${url}/mobile-activity-state.js`),
+      fetch(`${url}/mobile-pending-message.js`),
       fetch(`${url}/mobile-composer-model.js`),
       fetch(`${url}/mobile-timeline-reconciler.js`),
       fetch(`${url}/mobile-file-surface.js`),
+      fetch(`${url}/mobile-stream-batcher.js`),
       fetch(`${url}/mobile-event-renderer.js`),
       fetch(`${url}/mobile-interaction-renderer.js`),
       fetch(`${url}/terminal-snapshots.js`),
@@ -184,16 +191,16 @@ test('serves the frontend and health status', async () => {
     const pageHtml = await page.text();
     assert.match(pageHtml, /Interactive terminal/);
     assert.match(pageHtml, /apple-mobile-web-app-status-bar-style" content="black-translucent"/);
-    assert.match(pageHtml, /rel="apple-touch-icon" sizes="180x180" href="\/icon-180\.png"/);
-    assert.match(pageHtml, /rel="icon" type="image\/png" href="\/icon-192\.png"/);
+    assert.match(pageHtml, /rel="apple-touch-icon" sizes="180x180" href="\/icon-180\.png\?v=20260821-black-app-icon"/);
+    assert.match(pageHtml, /rel="icon" type="image\/png" href="\/icon-192\.png\?v=20260821-black-app-icon"/);
     assert.equal(manifest.status, 200);
     assert.match(manifest.headers.get('content-type'), /^application\/manifest\+json/);
     const manifestJson = await manifest.json();
     assert.equal(manifestJson.orientation, 'portrait-primary');
     assert.equal(manifestJson.theme_color, '#0c0c0d');
     assert.deepEqual(manifestJson.icons, [
-      { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-      { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: '/icon-192.png?v=20260821-black-app-icon', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/icon-512.png?v=20260821-black-app-icon', sizes: '512x512', type: 'image/png', purpose: 'any' },
     ]);
     assert.equal(manifest.headers.get('cache-control'), 'no-store');
     for (const icon of [appIcon180, appIcon192, appIcon512]) {
@@ -212,9 +219,13 @@ test('serves the frontend and health status', async () => {
     assert.match(await promptTitle.text(), /derivePromptTitle/);
     assert.equal(uiComponents.status, 200);
     assert.match(await uiComponents.text(), /createIconButton/);
+    assert.equal(mobileSheet.status, 200);
+    assert.match(await mobileSheet.text(), /createMobileSheetFrame/);
     assert.equal(mobileActivityState.status, 200);
+    assert.equal(mobilePendingMessage.status, 200);
     assert.equal(mobileComposerModel.status, 200);
     assert.equal(mobileTimelineReconciler.status, 200);
+    assert.equal(mobileStreamBatcher.status, 200);
     assert.equal(mobileFileSurface.status, 200);
     assert.equal(mobileEventRenderer.status, 200);
     assert.equal(mobileInteractionRenderer.status, 200);
@@ -448,7 +459,9 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     const uploaded = (await upload.json()).attachment;
     assert.equal(uploaded.name, 'phone.png');
     assert.equal('path' in uploaded, false);
-    assert.equal((await fetch(`${url}${uploaded.previewUrl}`)).status, 200);
+    const imagePreviewResponse = await fetch(`${url}${uploaded.previewUrl}`);
+    assert.equal(imagePreviewResponse.status, 200);
+    assert.match(imagePreviewResponse.headers.get('content-disposition'), /^inline;/);
     const chunkUploadId = '22222222-2222-4222-8222-222222222222';
     const chunkHeaders = {
       'content-type': 'video/quicktime',
@@ -477,7 +490,14 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     assert.equal(chunked.name, 'recording.mov');
     assert.equal(chunked.mimeType, 'video/quicktime');
     assert.equal(chunked.size, 5);
-    assert.equal((await fetch(`${url}${chunked.previewUrl}`)).status, 200);
+    const videoPreviewResponse = await fetch(`${url}${chunked.previewUrl}`);
+    assert.equal(videoPreviewResponse.status, 200);
+    assert.match(videoPreviewResponse.headers.get('content-disposition'), /^inline;/);
+    assert.equal(videoPreviewResponse.headers.get('accept-ranges'), 'bytes');
+    const videoRangeResponse = await fetch(`${url}${chunked.previewUrl}`, { headers: { range: 'bytes=1-3' } });
+    assert.equal(videoRangeResponse.status, 206);
+    assert.equal(videoRangeResponse.headers.get('content-range'), 'bytes 1-3/5');
+    assert.equal(await videoRangeResponse.text(), 'bcd');
     const repeatedFinalChunk = await fetch(`${url}/api/conversations/ar-mobile/attachments`, {
       method: 'POST', headers: { ...chunkHeaders, 'x-upload-offset': '3' }, body: Buffer.from('de'),
     });
@@ -491,6 +511,13 @@ test('serves a provider-neutral mobile conversation only for a managed session',
     assert.match(inputs.at(-1).text,
       /^inspect this\n\n!\[phone\.png\]\(\/tmp\/agent-remote-uploads-[^/]+\/[0-9a-f-]{36}\.png\)$/);
     assert.equal(inputs.at(-1).options.attachments[0].previewUrl, uploaded.previewUrl);
+    const deliveredAttachmentInputs = inputs.length;
+    const attachmentRetry = await fetch(`${url}/api/conversations/ar-mobile/input`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'mobile-attachment', text: 'inspect this', attachmentIds: [uploaded.id] }),
+    });
+    assert.equal(attachmentRetry.status, 202);
+    assert.equal(inputs.length, deliveredAttachmentInputs, 'attachment retry must reuse the original delivery');
     const fileCompletions = await fetch(`${url}/api/conversations/ar-mobile/completions/files?q=mobconv`);
     assert.equal(fileCompletions.status, 200);
     assert.equal((await fileCompletions.json()).files[0].path, 'public/mobile-conversation.js');
@@ -1204,6 +1231,38 @@ test('reports a terminal-browser discovery failure instead of loading forever', 
   }
 });
 
+test('recycles an unresponsive terminal-browser service once and retries the launch', async () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agent-remote-renderer-recovery-'));
+  const executable = join(fixture, 'terminal-browser');
+  const launches = join(fixture, 'launches');
+  writeFileSync(executable, `#!/bin/sh\nprintf x >> "${launches}"\n`);
+  chmodSync(executable, 0o755);
+  let recoveries = 0;
+  try {
+    await withServer({
+      listTerminalBrowsers: async () => [],
+      recoverTerminalBrowser: async () => (recoveries += 1, true),
+      rendererDiscoveryAttempts: 1,
+      rendererDiscoveryIntervalMs: 1,
+    }, async (url) => {
+      const socket = await connect(url, '/ws?mode=graphics&purpose=renderer&renderer=session%3Arecovery');
+      const failed = waitForMessage(socket, (message) =>
+        message.type === 'renderer-state' && message.state === 'failed');
+      socket.send(JSON.stringify({
+        type: 'launch', argv: [executable, 'open', 'https://example.com'],
+      }));
+      assert.match((await failed).message, /after automatic service recovery/);
+      await waitForCondition(() => {
+        try { return readFileSync(launches, 'utf8') === 'xx'; } catch { return false; }
+      }, 'renderer did not launch exactly twice');
+      assert.equal(recoveries, 1);
+      socket.close();
+    });
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test('keeps a keyed renderer alive across websocket reconnects until explicitly closed', async () => {
   await withServer({}, async (url) => {
     const path = '/ws?mode=graphics&purpose=renderer&renderer=builtin%3Ashell';
@@ -1228,10 +1287,18 @@ test('keeps a keyed renderer alive across websocket reconnects until explicitly 
     }));
     assert.match(await persisted, /renderer=persisted/);
 
-    second.send(JSON.stringify({ type: 'close' }));
+    const closeResponse = await fetch(`${url}/api/renderers/${encodeURIComponent('builtin:shell')}`, {
+      method: 'DELETE',
+    });
+    assert.equal(closeResponse.status, 200);
+    assert.deepEqual(await closeResponse.json(), { closed: true });
     await new Promise((resolve) => second.once('close', resolve));
     const closed = await (await fetch(`${url}/api/renderers`)).json();
     assert.deepEqual(closed.renderers, []);
+    const repeatedClose = await fetch(`${url}/api/renderers/${encodeURIComponent('builtin:shell')}`, {
+      method: 'DELETE',
+    });
+    assert.deepEqual(await repeatedClose.json(), { closed: false });
   });
 });
 
@@ -1422,6 +1489,78 @@ test('routes backend split controls to the connected terminal websocket', async 
   });
 });
 
+test('routes a shared Grok leader browser command by thread id before its stale tmux session', async () => {
+  await withServer({
+    listWorkspaceSessions: async () => [
+      {
+        name: 'ar-stale', label: 'Stale', cwd: '/tmp/shared-project', managed: true,
+        conversationThreadId: 'old-thread',
+      },
+      {
+        name: 'ar-current', label: 'Current', cwd: '/tmp/shared-project', managed: true,
+        conversationThreadId: 'current-thread',
+      },
+    ],
+  }, async (url) => {
+    const current = await connect(url, '/ws?session=ar-current');
+    const control = waitForMessage(current, (message) => message.type === 'control');
+    const response = await fetch(`${url}/api/control/split`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        threadId: 'current-thread',
+        session: 'ar-stale',
+        cwd: '/tmp/shared-project',
+        argv: ['terminal-browser', 'open', 'https://example.com'],
+      }),
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { delivered: 1, session: 'ar-current' });
+    assert.deepEqual(await control, {
+      type: 'control', action: 'open-graphics',
+      argv: ['terminal-browser', 'open', 'https://example.com'],
+    });
+    current.close();
+  });
+});
+
+test('reports a waited split as failed when its renderer never registers a browser surface', async () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agent-remote-waited-split-'));
+  const executable = join(fixture, 'terminal-browser');
+  writeFileSync(executable, '#!/bin/sh\nexit 1\n');
+  chmodSync(executable, 0o755);
+  try {
+    await withServer({
+      listTerminalBrowsers: async () => [],
+      rendererDiscoveryAttempts: 1,
+      rendererDiscoveryIntervalMs: 1,
+      browserOpenReadyTimeoutMs: 2_000,
+    }, async (url) => {
+      const terminal = await connect(url);
+      const control = waitForMessage(terminal, (message) => message.type === 'control');
+      const responsePromise = fetch(`${url}/api/control/split`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ argv: [executable, 'open'], waitForReady: true }),
+      });
+      assert.deepEqual(await control, {
+        type: 'control', action: 'open-graphics', argv: [executable, 'open'],
+      });
+      const graphics = await connect(url, '/ws?mode=graphics&purpose=renderer&renderer=builtin%3Ashell');
+      graphics.send(JSON.stringify({ type: 'launch', argv: [executable, 'open'] }));
+      const response = await responsePromise;
+      assert.equal(response.status, 502);
+      assert.deepEqual(await response.json(), {
+        error: 'terminal-browser did not register a browser surface',
+      });
+      graphics.close();
+      terminal.close();
+    });
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
 test('rejects websocket clients without the configured token', async () => {
   await withServer({ token: 'secret' }, async (url) => {
     await assert.rejects(connect(url), /401/);
@@ -1564,6 +1703,19 @@ test('web API browses folders and creates a selectable managed session', async (
       const directory = await browse.json();
       assert.equal(directory.path, realpathSync(root));
       assert.deepEqual(directory.directories, ['project-a']);
+
+      const makeFolder = await fetch(`${url}/api/directories`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: root, name: '.hidden-project' }),
+      });
+      assert.equal(makeFolder.status, 201);
+      const madeDirectory = await makeFolder.json();
+      assert.equal(madeDirectory.created, realpathSync(join(root, '.hidden-project')));
+      assert.deepEqual(madeDirectory.directories, ['.hidden-project', 'project-a']);
+      assert.equal((await fetch(`${url}/api/directories`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ path: root, name: '../escape' }),
+      })).status, 400);
 
       const blocked = await fetch(`${url}/api/directories?path=${encodeURIComponent('/')}`);
       assert.equal(blocked.status, 400);

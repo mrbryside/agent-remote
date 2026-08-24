@@ -97,6 +97,15 @@ export function rendererViewport(width, height) {
   };
 }
 
+export function rendererScale(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 1;
+  // Quarter-step buckets keep ResizeObserver/client reconnect noise from
+  // repeatedly restarting Chrome's screencast while still giving Retina
+  // phones enough source pixels for a sharp canvas.
+  return Math.max(1, Math.min(3, Math.round(numeric * 4) / 4));
+}
+
 export function selectRendererViewport(requests, fallback) {
   const candidates = [...(requests || [])].filter((viewport) =>
     Number.isInteger(viewport?.width) && viewport.width >= 160 && viewport.width <= 4096 &&

@@ -114,6 +114,7 @@ test('agent terminal-browser command opens a rendered web split on the right', a
 
     const pane = await page.locator('#graphics-terminal').boundingBox();
     expect(pane).not.toBeNull();
+    const graphicsHost = page.locator('.graphics-terminal-instance:not([hidden])');
     let observedBrowser;
     await expect.poll(() => {
       observedBrowser = terminalBrowsers().find((item) =>
@@ -121,6 +122,29 @@ test('agent terminal-browser command opens a rendered web split on the right', a
       );
       return Boolean(observedBrowser);
     }, { timeout: 10_000 }).toBe(true);
+    await graphicsHost.evaluate((host) => { host.dataset.reuseMarker = 'same-renderer'; });
+    const repeatedOpen = await page.evaluate(async ({ sessionName, url }) => {
+      const response = await fetch('/api/control/split', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          session: sessionName,
+          argv: ['terminal-browser', 'open', url],
+          waitForReady: true,
+        }),
+      });
+      return { status: response.status, payload: await response.json() };
+    }, { sessionName: managedName, url: `${origin}/health` });
+    expect(repeatedOpen.status).toBe(200);
+    expect(repeatedOpen.payload).toEqual(expect.objectContaining({
+      opened: false,
+      reused: true,
+      browserKey: observedBrowser.key,
+    }));
+    await expect(page.locator('.graphics-terminal-instance:not([hidden])')).toHaveCount(1);
+    await expect(graphicsHost).toHaveAttribute('data-reuse-marker', 'same-renderer');
+    await expect(graphicsHost).toHaveAttribute('data-browser-key', observedBrowser.key);
+    expect(terminalBrowsers().filter((browser) => browser.key === observedBrowser.key)).toHaveLength(1);
     await expect.poll(() => page.locator('.graphics-terminal-instance:not([hidden]) .browser-frame')
       .evaluate((canvas, minimum) => canvas.width >= minimum.width && canvas.height >= minimum.height, {
         width: pane.width * 0.75,
@@ -131,7 +155,6 @@ test('agent terminal-browser command opens a rendered web split on the right', a
       .evaluate((host) => Number(host.dataset.frameScale || 0)), { timeout: 20_000 }).toBeGreaterThanOrEqual(0.95);
 
     const browserFrame = page.locator('.graphics-terminal-instance:not([hidden]) .browser-frame');
-    const graphicsHost = page.locator('.graphics-terminal-instance:not([hidden])');
     const keyboardFixture = terminalBrowserAction(
       observedBrowser.key,
       'eval',
@@ -388,16 +411,45 @@ test('agent terminal-browser command opens a rendered web split on the right', a
     await expect.poll(() => terminalBrowsers().find((item) => item.key === observedBrowser.key)?.tabs?.length)
       .toBe(1);
 
+    await graphicsHost.evaluate((host) => {
+      window.__agentRemoteNewTabShowedLoading = false;
+      const loading = host.querySelector('.graphics-loading');
+      new MutationObserver(() => {
+        if (!loading.hidden) window.__agentRemoteNewTabShowedLoading = true;
+      }).observe(loading, { attributes: true, attributeFilter: ['hidden'] });
+    });
     await page.locator('#terminal').click();
     await page.keyboard.type(`${terminalBrowserCommand} new-tab about:blank`);
     await page.keyboard.press('Enter');
     await expect(page.locator('#terminal .xterm-rows'))
       .toContainText('Opened a new tab in the existing agent-remote browser pane.', { timeout: 10_000 });
     await expect(toolbar.locator('.browser-tab')).toHaveCount(2, { timeout: 10_000 });
+    await expect.poll(() => page.evaluate(() => window.__agentRemoteNewTabShowedLoading)).toBe(false);
     await expect.poll(() => terminalBrowsers().find((item) => item.key === observedBrowser.key)?.tabs?.length)
       .toBe(2);
     expect(tmuxPaneCount(managedName)).toBe(panesBeforeNewTab);
-    await toolbar.locator('.browser-tab').nth(1).locator('.browser-tab-close').click();
+    await toolbar.locator('.browser-new-tab').click();
+    await expect(toolbar.locator('.browser-tab')).toHaveCount(3, { timeout: 10_000 });
+    const tabsToClose = await toolbar.locator('.browser-tab').evaluateAll((tabs) =>
+      tabs.slice(1).map((tab) => Number(tab.dataset.tabId)));
+    await page.locator('#terminal').click();
+    await page.keyboard.type(`${terminalBrowserCommand} close-tab ${tabsToClose.join(' ')}`);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#terminal .xterm-rows')).toContainText('Closed 2 browser tabs.', { timeout: 10_000 });
+    await expect(toolbar.locator('.browser-tab')).toHaveCount(1, { timeout: 10_000 });
+    await expect.poll(() => terminalBrowsers().find((item) => item.key === observedBrowser.key)?.tabs?.length)
+      .toBe(1);
+
+    await toolbar.locator('.browser-new-tab').click();
+    await expect(toolbar.locator('.browser-tab')).toHaveCount(2, { timeout: 10_000 });
+    const legacyCloseTab = Number(await toolbar.locator('.browser-tab').nth(1).getAttribute('data-tab-id'));
+    await page.locator('#terminal').click();
+    await page.keyboard.type(
+      `${terminalBrowserCommand} action --tab ${legacyCloseTab} -- eval 'window.close()'`,
+    );
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#terminal .xterm-rows'))
+      .toContainText(`Closed browser tab ${legacyCloseTab}.`, { timeout: 10_000 });
     await expect(toolbar.locator('.browser-tab')).toHaveCount(1, { timeout: 10_000 });
 
     await toolbar.locator('.browser-new-tab').click();
@@ -407,7 +459,19 @@ test('agent terminal-browser command opens a rendered web split on the right', a
     await expect(toolbar.locator('.browser-tab').first()).toHaveAttribute('data-active', 'true');
     await toolbar.locator('.browser-tab').nth(1).locator('.browser-tab-select').click();
     await expect(toolbar.locator('.browser-tab').nth(1)).toHaveAttribute('data-active', 'true');
-    await toolbar.locator('.browser-tab').nth(1).locator('.browser-tab-close').click();
+    await toolbar.locator('.browser-new-tab').click();
+    await expect(toolbar.locator('.browser-tab')).toHaveCount(3, { timeout: 10_000 });
+    const optimisticClose = await toolbar.evaluate((node) => {
+      const started = performance.now();
+      for (const button of [...node.querySelectorAll('.browser-tab')].slice(1)
+        .map((tab) => tab.querySelector('.browser-tab-close'))) button.click();
+      return {
+        remainingImmediately: node.querySelectorAll('.browser-tab').length,
+        elapsed: performance.now() - started,
+      };
+    });
+    expect(optimisticClose.remainingImmediately).toBe(1);
+    expect(optimisticClose.elapsed).toBeLessThan(50);
     await expect(toolbar.locator('.browser-tab')).toHaveCount(1, { timeout: 10_000 });
     await expect(toolbar.locator('.browser-tab').first()).toHaveAttribute('data-active', 'true');
     await expect.poll(() => terminalBrowsers().find((item) => item.key === observedBrowser.key)?.tabs?.length)
@@ -419,8 +483,10 @@ test('agent terminal-browser command opens a rendered web split on the right', a
     await page.keyboard.press('Enter');
     await expect.poll(async () => {
       const current = await page.locator('.graphics-terminal-instance:not([hidden])').elementHandle();
-      return Boolean(current && firstHost && !(await current.evaluate((node, previous) => node === previous, firstHost)));
+      return Boolean(current && firstHost && await current.evaluate((node, previous) => node === previous, firstHost));
     }, { timeout: 15_000 }).toBe(true);
+    await expect(page.locator('.graphics-terminal-instance:not([hidden])'))
+      .toHaveAttribute('data-browser-key', observedBrowser.key);
     await expect(page.locator('.graphics-terminal-instance:not([hidden]) .graphics-loading')).toBeHidden({ timeout: 60_000 });
     await expect.poll(() => page.locator('.graphics-terminal-instance:not([hidden]) .browser-frame')
       .evaluate((canvas) => {
@@ -455,6 +521,9 @@ test('agent terminal-browser command opens a rendered web split on the right', a
       .evaluate((canvas) => canvas.width > 0 && canvas.height > 0), { timeout: 10_000 }).toBe(true);
     await expect(page.locator('.graphics-terminal-instance:not([hidden]) .browser-tab')).toHaveCount(1);
 
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 3 });
+    });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.reload();
     const mobileSheet = page.locator('#graphics-split');
@@ -467,6 +536,45 @@ test('agent terminal-browser command opens a rendered web split on the right', a
     }).toBe(true);
     await page.locator('#graphics-mobile-reopen').click();
     await expect(mobileSheet).toBeVisible();
+    await expect(page.locator('.graphics-terminal-instance:not([hidden])'))
+      .toHaveAttribute('data-requested-scale', '3');
+    await expect.poll(() => page.locator('.graphics-terminal-instance:not([hidden])')
+      .evaluate((host) => Number(host.dataset.frameScale || 0)), { timeout: 20_000 })
+      .toBeGreaterThanOrEqual(2.9);
+    const mobileBrowserKey = await page.locator('.graphics-terminal-instance:not([hidden])')
+      .getAttribute('data-browser-key');
+    const mobileHostBeforeResume = await page.locator('.graphics-terminal-instance:not([hidden])').elementHandle();
+    await page.evaluate(() => window.dispatchEvent(new Event('pageshow')));
+    await expect.poll(async () => {
+      const current = await page.locator('.graphics-terminal-instance:not([hidden])').elementHandle();
+      return Boolean(current && mobileHostBeforeResume &&
+        !await current.evaluate((node, previous) => node === previous, mobileHostBeforeResume));
+    }, { timeout: 10_000 }).toBe(true);
+    await expect(mobileSheet).toBeVisible();
+    await expect(page.locator('.graphics-terminal-instance:not([hidden])'))
+      .toHaveAttribute('data-browser-key', mobileBrowserKey, { timeout: 10_000 });
+    await expect(page.locator('.graphics-terminal-instance:not([hidden]) .graphics-loading'))
+      .toBeHidden({ timeout: 20_000 });
+    const mobileToolbar = page.locator('.graphics-terminal-instance:not([hidden]) .browser-toolbar');
+    await mobileToolbar.locator('.browser-new-tab').click();
+    await mobileToolbar.locator('.browser-new-tab').click();
+    await expect(mobileToolbar.locator('.browser-tab')).toHaveCount(3, { timeout: 10_000 });
+    await expect.poll(() => mobileToolbar.locator('.browser-tabs').evaluate((tabs) => ({
+      scrollable: tabs.scrollWidth > tabs.clientWidth,
+      touchAction: getComputedStyle(tabs).touchAction,
+      titleOverflow: getComputedStyle(tabs.querySelector('.browser-tab-select')).textOverflow,
+    }))).toEqual({ scrollable: true, touchAction: 'pan-x', titleOverflow: 'ellipsis' });
+    await mobileToolbar.locator('.browser-tab').last().locator('.browser-tab-close').click();
+    await expect(mobileToolbar.locator('.browser-tab')).toHaveCount(2, { timeout: 10_000 });
+    await mobileToolbar.locator('.browser-tab').last().locator('.browser-tab-close').click();
+    await expect(mobileToolbar.locator('.browser-tab')).toHaveCount(1, { timeout: 10_000 });
+    const mobileSnapshot = await page.request.post('/api/control/browser-action', {
+      data: { session: managedName, argv: ['--', 'snapshot'] },
+    });
+    expect(mobileSnapshot.status(), await mobileSnapshot.text()).toBe(200);
+    await expect.poll(() => page.locator('.graphics-terminal-instance:not([hidden])')
+      .evaluate((host) => Number(host.dataset.frameScale || 0)), { timeout: 20_000 })
+      .toBeGreaterThanOrEqual(2.9);
     await expect(page.locator('#graphics-sheet-handle')).toBeVisible();
     await expect(page.locator('#graphics-sheet-backdrop')).toBeVisible();
     await expect.poll(async () => {
@@ -484,7 +592,7 @@ test('agent terminal-browser command opens a rendered web split on the right', a
         bottom: Math.round(844 - box.y - box.height),
         slidesFromBelow: animation,
       };
-    }).toEqual({ height: 675, bottom: 0, slidesFromBelow: true });
+    }).toEqual({ height: 560, bottom: 0, slidesFromBelow: true });
     const handle = await page.locator('#graphics-sheet-handle').boundingBox();
     await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
     await page.mouse.down();
@@ -498,16 +606,58 @@ test('agent terminal-browser command opens a rendered web split on the right', a
     }).toBe(true);
     await page.locator('#graphics-mobile-reopen').click();
     await expect(mobileSheet).toBeVisible();
+
+    const expectIntegratedBrowserClosed = async (browserKey) => {
+      await expect(page.locator('#graphics-split')).toBeHidden();
+      await expect(page.locator('#graphics-mobile-reopen')).toBeHidden();
+      await expect.poll(async () => {
+        const payload = await (await page.request.get('/api/renderers')).json();
+        return payload.renderers.some((renderer) => renderer.key === `session:${managedName}`);
+      }, { timeout: 10_000 }).toBe(false);
+      await expect.poll(() => terminalBrowsers().some((item) => item.key === browserKey),
+        { timeout: 10_000 }).toBe(false);
+    };
+    const reopenIntegratedBrowser = async () => {
+      const response = await page.request.post('/api/control/split', {
+        data: {
+          session: managedName,
+          // The routing shim consumes --split before it hands the inner launch
+          // to the graphics renderer; exercising that normalized contract here
+          // prevents terminal-browser from trying to split the renderer PTY.
+          argv: [terminalBrowserCommand, 'open', `${origin}/health`],
+          waitForReady: true,
+        },
+      });
+      expect(response.status(), await response.text()).toBe(200);
+      await expect(mobileSheet).toBeVisible({ timeout: 10_000 });
+      await expect(page.locator('.graphics-terminal-instance:not([hidden]) .browser-tab'))
+        .toHaveCount(1, { timeout: 10_000 });
+      return page.locator('.graphics-terminal-instance:not([hidden])').getAttribute('data-browser-key');
+    };
+
+    // Closing the visibly final tab is the same immediate teardown as the
+    // pane close button: both the UI and its owned browser process disappear.
+    const finalTabBrowserKey = await page.locator('.graphics-terminal-instance:not([hidden])')
+      .getAttribute('data-browser-key');
+    await page.locator('.graphics-terminal-instance:not([hidden]) .browser-tab-close').click();
+    await expectIntegratedBrowserClosed(finalTabBrowserKey);
+
+    // The legacy agent action is intercepted by the same authoritative final
+    // tab close path instead of relying on Chromium to honor window.close().
+    const actionBrowserKey = await reopenIntegratedBrowser();
+    const actionClose = await page.request.post('/api/control/browser-action', {
+      data: { session: managedName, argv: ['--', 'eval', 'window.close()'] },
+    });
+    expect(actionClose.status(), await actionClose.text()).toBe(200);
+    expect((await actionClose.json()).rendererClosed).toBe(true);
+    await expectIntegratedBrowserClosed(actionBrowserKey);
+
+    // Keep the explicit pane-close contract covered independently.
+    const paneBrowserKey = await reopenIntegratedBrowser();
     await page.locator('#close-graphics-split').click();
     await expect(page.locator('#graphics-split')).toBeHidden();
     await expect(page.locator('#graphics-mobile-reopen')).toBeHidden();
-    await expect.poll(async () => {
-      const payload = await (await page.request.get('/api/renderers')).json();
-      return payload.renderers.some((renderer) => renderer.key === `session:${managedName}`);
-    }, { timeout: 10_000 }).toBe(false);
-    await expect.poll(() => terminalBrowsers().some((item) =>
-      item.tabs?.some((tab) => tab.url.startsWith(`${origin}/health`)),
-    ), { timeout: 10_000 }).toBe(false);
+    await expectIntegratedBrowserClosed(paneBrowserKey);
   } finally {
     if (managedName) await page.request.delete(`/api/sessions/${encodeURIComponent(managedName)}`).catch(() => {});
   }

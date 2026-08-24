@@ -1,5 +1,9 @@
-import { spawn as spawnProcess } from 'node:child_process';
+import { execFile as execFileProcess, spawn as spawnProcess } from 'node:child_process';
+import { delimiter } from 'node:path';
 import { createInterface } from 'node:readline';
+import { promisify } from 'node:util';
+
+const execFile = promisify(execFileProcess);
 
 const maxLineBytes = 8 * 1024 * 1024;
 const maxQuestionCount = 20;
@@ -12,12 +16,130 @@ const modelIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,79}$/;
 const conversationModes = new Set(['default', 'plan']);
 const permissionModes = new Set(['default', 'auto', 'bypassPermissions']);
 const unifiedModes = new Set(['normal', 'plan', 'auto', 'alwaysApprove']);
+const hostControlEnvironmentPrefixes = ['CODEX_', 'NODE_REPL_', 'BROWSER_USE_'];
+const hostControlEnvironmentKeys = new Set([
+  'AGENT_REMOTE_GRAPHICS',
+  'AGENT_REMOTE_RENDERER',
+  'AGENT_REMOTE_SESSION',
+  'TMUX',
+  'TMUX_PANE',
+]);
+const hostControlPathFragments = [
+  '/.codex/tmp/',
+  '/.cache/codex-runtimes/',
+  '/Applications/ChatGPT.app/Contents/Resources',
+  '/var/run/com.apple.security.cryptexd/codex.system/',
+  '/pkg/env/global/bin',
+];
 const planPromptPrefix = `<system_reminder>
 The user selected Plan mode in the client. If Plan mode is not already active, call \`enter_plan_mode\` before handling the request. Stay in Plan mode: inspect and reason, do not modify the project, write the plan file, and present the completed plan for review through \`exit_plan_mode\`.
 </system_reminder>
 <user_query>
 `;
 const planPromptSuffix = '\n</user_query>';
+
+function grokProcessEnvironment(environment) {
+  const result = { ...environment };
+  for (const key of Object.keys(result)) {
+    if (hostControlEnvironmentKeys.has(key) ||
+        hostControlEnvironmentPrefixes.some((prefix) => key.startsWith(prefix))) delete result[key];
+  }
+  if (typeof result.PATH === 'string') {
+    result.PATH = result.PATH.split(delimiter)
+      .filter((entry) => entry && !hostControlPathFragments.some((fragment) => entry.includes(fragment)))
+      .filter((entry, index, entries) => entries.indexOf(entry) === index)
+      .join(delimiter);
+  }
+  // The ACP transport itself uses pipes, but the detached shared leader owns
+  // every terminal tool launched by both ACP and the Grok TUI. Do not let a
+  // headless server's TERM=dumb leak into that long-lived command runner.
+  result.TERM = 'xterm-256color';
+  return result;
+}
+
+export function grokLeaderEnvironmentIsUnsafe(environmentLine) {
+  const text = String(environmentLine || '');
+  const keys = [...text.matchAll(/(?:^|\s)([A-Z][A-Z0-9_]+)=/g)].map((match) => match[1]);
+  if (keys.some((key) =>
+    hostControlEnvironmentPrefixes.some((prefix) => key.startsWith(prefix)))) return true;
+  const path = /(?:^|\s)PATH=([^\s]*)/.exec(text)?.[1];
+  if (path?.split(delimiter).some((entry) =>
+    hostControlPathFragments.some((fragment) => entry.includes(fragment)))) return true;
+  return /(?:^|\s)TERM=dumb(?:\s|$)/.test(text);
+}
+
+async function verifiedSocketLeaderPids(leaderSocket, logger) {
+  if (!leaderSocket) return [];
+  let stdout;
+  try {
+    // Query every Unix descriptor instead of asking lsof to stat the socket
+    // path. A restarted test server can unlink/recreate that pathname while an
+    // older daemon still holds the previous inode; lsof's direct path selector
+    // then misses exactly the orphan we need to reap.
+    ({ stdout } = await execFile('lsof', ['-n', '-U', '-Fpn'], { maxBuffer: 8 * 1024 * 1024 }));
+  } catch (error) {
+    // lsof exits 1 when no process owns the socket, which is already clean.
+    if (error?.code !== 1) logger?.(`Could not inspect Grok leader socket: ${error.message}`);
+    return [];
+  }
+  const socketPids = new Set();
+  let listedPid;
+  for (const line of String(stdout).split('\n')) {
+    if (line.startsWith('p')) listedPid = Number(line.slice(1));
+    else if (line === `n${leaderSocket}` && Number.isSafeInteger(listedPid)) socketPids.add(listedPid);
+  }
+  const verified = [];
+  for (const pid of socketPids) {
+    if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) continue;
+    try {
+      const result = await execFile('ps', ['-p', String(pid), '-o', 'command='], { maxBuffer: 64 * 1024 });
+      if (!/(?:^|\/)grok(?:-[^ ]+)?\s+agent\s+leader(?:\s|$)/.test(result.stdout.trim())) continue;
+      verified.push(pid);
+    } catch (error) {
+      if (error?.code !== 'ESRCH' && error?.code !== 1) logger?.(`Could not inspect Grok leader ${pid}: ${error.message}`);
+    }
+  }
+  return verified;
+}
+
+async function socketLeaderEnvironmentIsUnsafe(leaderSocket, logger) {
+  const pids = await verifiedSocketLeaderPids(leaderSocket, logger);
+  for (const pid of pids) {
+    try {
+      const result = await execFile('ps', ['eww', '-p', String(pid), '-o', 'command='], { maxBuffer: 1024 * 1024 });
+      if (grokLeaderEnvironmentIsUnsafe(result.stdout)) return true;
+    } catch (error) {
+      if (error?.code !== 'ESRCH' && error?.code !== 1) {
+        logger?.(`Could not inspect Grok leader environment ${pid}: ${error.message}`);
+      }
+    }
+  }
+  return false;
+}
+
+async function terminateSocketLeader(leaderSocket, logger) {
+  const stopped = [];
+  for (const pid of await verifiedSocketLeaderPids(leaderSocket, logger)) {
+    try {
+      process.kill(pid, 'SIGTERM');
+      stopped.push(pid);
+    } catch (error) {
+      if (error?.code !== 'ESRCH') logger?.(`Could not stop Grok leader ${pid}: ${error.message}`);
+    }
+  }
+  for (const pid of stopped) {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      try { process.kill(pid, 0); }
+      catch { break; }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    try {
+      process.kill(pid, 0);
+      process.kill(pid, 'SIGKILL');
+    } catch {}
+  }
+}
 
 function unifiedMode(current) {
   if (unifiedModes.has(current.pendingModeId)) return current.pendingModeId;
@@ -123,6 +245,17 @@ function toolExecutionStarted(update) {
   const status = String(update.status ?? '').trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
   return ['in_progress', 'running', 'active', 'completed', 'complete', 'succeeded', 'failed', 'error', 'cancelled']
     .includes(status) || update.rawOutput !== undefined;
+}
+
+function runnerKilledBySignalNine(update) {
+  if (!['tool_call', 'tool_call_update'].includes(update?.sessionUpdate)) return false;
+  const status = String(update.status ?? '').trim().toLowerCase();
+  if (!['failed', 'error'].includes(status)) return false;
+  const output = update.rawOutput ?? update.output;
+  let text;
+  try { text = typeof output === 'string' ? output : JSON.stringify(output); }
+  catch { return false; }
+  return /(?:exit:\s*)?killed\s*\(signal\s*9\)|signal[-_ ]?nine|signal\s*9/i.test(text || '');
 }
 
 function externallyApprovedPlanReview(update) {
@@ -258,6 +391,10 @@ export function createGrokAcpClient({
   environment = () => ({}),
   defaultPermissionMode = 'default',
   leaderSocket,
+  terminateLeaderOnClose = false,
+  terminateLeader = terminateSocketLeader,
+  leaderEnvironmentIsUnsafe = socketLeaderEnvironmentIsUnsafe,
+  runnerRecoveryDelayMs = 300,
 } = {}) {
   let child;
   let lines;
@@ -265,6 +402,9 @@ export function createGrokAcpClient({
   let nextId = 1;
   let generation = 0;
   let closing = false;
+  let runnerRecoveryRequested = false;
+  let runnerRecoveryPromise;
+  let leaderEnvironmentRefresh;
   const pending = new Map();
   const sessions = new Map();
 
@@ -397,6 +537,10 @@ export function createGrokAcpClient({
       current.pendingSteers.shift();
     }
     current.events.push(record);
+    if (!record.replay && runnerKilledBySignalNine(update)) {
+      runnerRecoveryRequested = true;
+      logger('Grok command runner reported signal 9; recycling the shared leader after the active turn');
+    }
     if (update.sessionUpdate === 'turn_started' ||
         (update.sessionUpdate === 'user_message_chunk' && update.source !== 'steer')) {
       current.lastAgentStreamStart = undefined;
@@ -468,7 +612,10 @@ export function createGrokAcpClient({
       if (review) settlePlanReviewFromGrok(current, planResolution.reviewId, review, planResolution.outcome);
     }
     publish(message.params.sessionId);
-    if (update.sessionUpdate === 'turn_completed') void drainPrompts(message.params.sessionId);
+    if (update.sessionUpdate === 'turn_completed') {
+      if (runnerRecoveryRequested) void recoverRunnerAfterSignalNine();
+      else void drainPrompts(message.params.sessionId);
+    }
   }
 
   function send(message) {
@@ -641,7 +788,7 @@ export function createGrokAcpClient({
     if (message.method) acceptNotification(message);
   }
 
-  function disconnected(exitCode, exitSignal) {
+  function disconnected(exitCode, exitSignal, silent = false) {
     const exited = child;
     child = undefined;
     initialized = undefined;
@@ -654,6 +801,9 @@ export function createGrokAcpClient({
     for (const current of sessions.values()) {
       current.loadedGeneration = 0;
       current.loading = undefined;
+      current.activePrompt = undefined;
+      current.drainingPrompts = undefined;
+      current.pendingSteers = [];
       current.permissions.clear();
       current.executedToolCallIds.clear();
       current.queuedSubagentToolCallIds.clear();
@@ -672,10 +822,51 @@ export function createGrokAcpClient({
     if (!closing) {
       for (const sessionId of sessions.keys()) publish(sessionId);
     }
-    if (!closing && exited) logger(error.message);
+    if (!closing && exited && !silent) logger(error.message);
+  }
+
+  function recoverRunnerAfterSignalNine() {
+    if (!runnerRecoveryRequested || runnerRecoveryPromise || closing) return runnerRecoveryPromise;
+    if ([...sessions.values()].some((current) => current.turnActive)) return undefined;
+    runnerRecoveryPromise = (async () => {
+      const owned = child;
+      if (owned) {
+        disconnected(null, 'SIGTERM', true);
+        owned.stdin?.end();
+        owned.kill('SIGTERM');
+      }
+      await terminateLeader(leaderSocket, logger);
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, runnerRecoveryDelayMs)));
+      runnerRecoveryRequested = false;
+      for (const [sessionId, current] of sessions) {
+        if (current.queuedPrompts.length === 0 || !current.cwd) continue;
+        try {
+          await loadSession({ sessionId, cwd: current.cwd });
+          void drainPrompts(sessionId);
+        } catch (error) {
+          logger(`Could not reconnect Grok after signal 9: ${error.message}`);
+        }
+      }
+    })().finally(() => {
+      runnerRecoveryPromise = undefined;
+    });
+    return runnerRecoveryPromise;
   }
 
   async function connect() {
+    if (initialized) return initialized;
+    if (!leaderEnvironmentRefresh) {
+      leaderEnvironmentRefresh = (async () => {
+        if (!leaderSocket || !await leaderEnvironmentIsUnsafe(leaderSocket, logger)) return false;
+        logger('Replacing a Grok leader that inherited an unsafe host environment');
+        await terminateLeader(leaderSocket, logger);
+        return true;
+      })().catch((error) => {
+        logger(`Could not refresh Grok leader environment: ${error.message}`);
+        return false;
+      });
+    }
+    await leaderEnvironmentRefresh;
     if (initialized) return initialized;
     closing = false;
     generation += 1;
@@ -683,7 +874,11 @@ export function createGrokAcpClient({
     if (leaderSocket) args.push('--leader-socket', leaderSocket);
     child = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...environment() },
+      // A Grok leader outlives this server process. Keep Codex Desktop's
+      // per-task control environment and temporary runtime paths out of it;
+      // retaining those values after their owning task ends can cause every
+      // later terminal tool to be reaped immediately with signal 9.
+      env: grokProcessEnvironment({ ...process.env, ...environment() }),
     });
     const connectingChild = child;
     lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
@@ -845,6 +1040,7 @@ export function createGrokAcpClient({
 
   async function drainPrompts(sessionId) {
     const current = state(sessionId);
+    if (runnerRecoveryRequested || runnerRecoveryPromise) return;
     if (current.drainingPrompts) return current.drainingPrompts;
     if (current.activePrompt || current.turnActive || current.queuedPrompts.length === 0) return;
     let controlsFailed = false;
@@ -876,13 +1072,18 @@ export function createGrokAcpClient({
         });
       } catch (error) {
         logger(error.message);
-        current.events.push({
-          timestamp: Date.now(),
-          params: { update: {
-            sessionUpdate: 'prompt_failed', promptId: entry.id, text: entry.displayText,
-            error: error.message,
-          } },
-        });
+        // The turn already completed successfully when the signal-9 circuit
+        // breaker intentionally disconnected this observer. Do not append a
+        // synthetic prompt failure for that completed user message.
+        if (!(runnerRecoveryPromise && current.activePrompt !== entry)) {
+          current.events.push({
+            timestamp: Date.now(),
+            params: { update: {
+              sessionUpdate: 'prompt_failed', promptId: entry.id, text: entry.displayText,
+              error: error.message,
+            } },
+          });
+        }
       } finally {
         // A lifecycle notification may have released this RPC before it
         // settled and allowed a newer prompt to start. Never let completion
@@ -957,7 +1158,7 @@ export function createGrokAcpClient({
       notify('session/cancel', { sessionId });
       publish(sessionId);
     }
-    return { accepted: true, active: true };
+    return { accepted: true, active: true, cancelRequested: true };
   }
 
   async function setMode({ sessionId, cwd, modeId }) {
@@ -1115,14 +1316,15 @@ export function createGrokAcpClient({
 
   async function close() {
     closing = true;
-    if (!child) return;
-    const owned = child;
-    child = undefined;
-    initialized = undefined;
-    lines?.close();
-    lines = undefined;
-    owned.stdin?.end();
-    owned.kill('SIGTERM');
+    if (child) {
+      const owned = child;
+      child = undefined;
+      initialized = undefined;
+      lines?.close();
+      lines = undefined;
+      owned.stdin?.end();
+      owned.kill('SIGTERM');
+    }
     for (const waiting of pending.values()) {
       waiting.reject(rpcError('Grok ACP client closed', 'GROK_ACP_DISCONNECTED'));
     }
@@ -1136,6 +1338,7 @@ export function createGrokAcpClient({
       current.planReviews.clear();
       current.externallyResolvedPlanReviews.clear();
     }
+    if (terminateLeaderOnClose) await terminateLeader(leaderSocket, logger);
   }
 
   return {

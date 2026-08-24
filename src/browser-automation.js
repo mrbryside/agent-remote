@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
@@ -10,13 +11,24 @@ function runtimeRoot(environment, home) {
 }
 
 export function terminalBrowserAgentPaths({ environment = process.env, home = homedir() } = {}) {
-  const socketDir = join(runtimeRoot(environment, home), 'terminal-browser', 'agent-browser');
   const distRoot = isAbsolute(environment.TERMINAL_BROWSER_DIST_ROOT || '')
     ? environment.TERMINAL_BROWSER_DIST_ROOT
     : join(home, '.local', 'share', 'terminal-browser', 'app');
+  let physicalDistRoot = distRoot;
+  try { physicalDistRoot = realpathSync(distRoot); } catch {}
+  // terminal-browser isolates every installation under a hash of its physical
+  // distribution root. The old un-hashed path silently made the startup
+  // reaper a no-op, leaving every agent-browser worker behind after its owner
+  // closed until the accumulated Chromium processes exhausted the host.
+  const suffix = createHash('sha256').update(physicalDistRoot).digest('hex').slice(0, 8);
+  const runtimeDir = join(runtimeRoot(environment, home), `terminal-browser-${suffix}`);
   return {
-    socketDir,
-    binary: environment.TERMINAL_BROWSER_AGENT || join(distRoot, 'agent-browser', 'bin', 'agent-browser'),
+    distRoot: physicalDistRoot,
+    runtimeDir,
+    instancesDir: join(runtimeDir, 'instances'),
+    socketDir: join(runtimeDir, 'agent-browser'),
+    daemonSocket: join(runtimeDir, 'daemon.sock'),
+    binary: environment.TERMINAL_BROWSER_AGENT || join(physicalDistRoot, 'agent-browser', 'bin', 'agent-browser'),
   };
 }
 
@@ -67,8 +79,11 @@ export async function reapStaleTerminalBrowserAgentSessions(activeBrowserKeys, o
     .filter((entry) => entry.isSocket?.() && entry.name.startsWith('terminal-browser-') && entry.name.endsWith('.sock'))
     .map((entry) => entry.name.slice('terminal-browser-'.length, -'.sock'.length))
     .filter((key) => safeBrowserKey(key) && !active.has(key));
-  await Promise.all(stale.map((key) => closeTerminalBrowserAgentSession(key, {
-    ...options, environment, paths,
-  })));
+  // Close sequentially. Reaping a crash backlog is exactly when the host is
+  // resource constrained; spawning one cleanup client per stale worker at
+  // once can otherwise trigger the same signal-9 pressure we are recovering.
+  for (const key of stale) {
+    await closeTerminalBrowserAgentSession(key, { ...options, environment, paths });
+  }
   return stale;
 }

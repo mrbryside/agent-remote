@@ -1,12 +1,20 @@
 import { markdownNode } from './markdown.js';
 import { createMobileActivityStore, hasActivityAfterDismissal as activityChanged } from './mobile-activity-state.js';
-import { composerCompletion as detectComposerCompletion, rankedCommands } from './mobile-composer-model.js';
+import {
+  composerCompletion as detectComposerCompletion,
+  rankedCommands,
+  shellComposerMessage,
+  shellComposerState,
+} from './mobile-composer-model.js';
 import { createTimelineReconciler } from './mobile-timeline-reconciler.js';
+import { createCompactStreamBatcher, preserveNewerStreamingText } from './mobile-stream-batcher.js';
+import { createMobileSheetFrame, installMobileSheetDrag } from './mobile-sheet.js';
 import {
   createMobileFileSurface,
 } from './mobile-file-surface.js';
 import { createMobileEventRenderer } from './mobile-event-renderer.js';
 import { createMobileInteractionRenderer } from './mobile-interaction-renderer.js';
+import { pendingMessageMatchesItem } from './mobile-pending-message.js';
 import { createIcon, createIconButton } from './ui-components.js';
 
 function element(tag, className, text) {
@@ -63,6 +71,23 @@ function duration(value) {
   return `${(milliseconds / 60_000).toFixed(1)} min`;
 }
 
+export function disclosureNeedsReveal(panel, messages) {
+  if (!panel?.isConnected || !messages?.isConnected) return false;
+  const panelBox = panel.getBoundingClientRect();
+  const messagesBox = messages.getBoundingClientRect();
+  const viewport = window.visualViewport;
+  let visibleBottom = Math.min(
+    messagesBox.bottom,
+    viewport ? viewport.offsetTop + viewport.height : window.innerHeight,
+  );
+  let ancestor = panel.parentElement?.closest('.mobile-tool-group-panel:not([hidden])');
+  while (ancestor) {
+    visibleBottom = Math.min(visibleBottom, ancestor.getBoundingClientRect().bottom);
+    ancestor = ancestor.parentElement?.closest('.mobile-tool-group-panel:not([hidden])');
+  }
+  return panelBox.bottom > visibleBottom + 1;
+}
+
 export function createMobileConversationView({
   api, apiUrl, media, send, cancelTurn, uploadAttachment, searchFiles, readFile, setModel, setMode,
   controlGoal,
@@ -87,6 +112,7 @@ export function createMobileConversationView({
   const queue = document.querySelector('#mobile-conversation-queue');
   const composer = document.querySelector('#mobile-conversation-composer');
   const input = document.querySelector('#mobile-conversation-input');
+  const shellPrefix = document.querySelector('#mobile-conversation-shell-prefix');
   const sendButton = document.querySelector('#mobile-conversation-send');
   const modelButton = document.querySelector('#mobile-conversation-model');
   const modelLabel = modelButton.querySelector('span');
@@ -108,14 +134,20 @@ export function createMobileConversationView({
   let providerId;
   let available = false;
   let generation = 0;
+  let refreshRevision = 0;
   let refreshTimer;
   let foregroundResumeTimer;
+  let foregroundProbeTimer;
+  let lastForegroundProbeAt = Date.now();
   let streamWatchdogTimer;
   let streamSocket;
   let streamKey = '';
   let backgrounded = document.visibilityState === 'hidden';
   let renderedSignature = '';
   let pendingMessage;
+  let retryMessage;
+  let shellMode = false;
+  const reconciledPendingRequests = new Set();
   let pendingAcceptanceTimer;
   let lastConversation;
   let queueMutationPending = false;
@@ -129,6 +161,7 @@ export function createMobileConversationView({
   let sheetPanel;
   let sheetList;
   let sheetMessages;
+  let sheetBody;
   let sheetTitle;
   let sheetMeta;
   let sheetState;
@@ -140,7 +173,25 @@ export function createMobileConversationView({
   let selectedChildId;
   let selectedPlanId;
   let sheetReturnFocus;
-  let sheetPointer;
+  let deferredConversationPayload;
+  let compactMessageId;
+  const compactStreamBatcher = createCompactStreamBatcher({
+    // Safari can defer requestAnimationFrame while native chrome, scrolling,
+    // or a backgrounded webview owns the visual frame. A short render cadence
+    // still yields between WebSocket bursts and remains fast enough to look
+    // continuous without reparsing Markdown for every token.
+    requestFrame: (callback) => setTimeout(callback, 32),
+    cancelFrame: (frame) => clearTimeout(frame),
+    onFlush: (stream) => {
+      if (!applyStreamTextDelta(undefined, stream)) schedule(0);
+    },
+    onIdle: () => {
+      if (!deferredConversationPayload) return;
+      const payload = deferredConversationPayload;
+      deferredConversationPayload = undefined;
+      applyFullConversationPayload(payload);
+    },
+  });
   let sheetCloseGeneration = 0;
   let sheetModeMotionGeneration = 0;
   let revealChildDetails = false;
@@ -156,11 +207,11 @@ export function createMobileConversationView({
   let modelBusy = false;
   let modelOptionsSignature = '';
   let controlBusy = false;
-  let submittingMessage = false;
+  let submittingRequest;
   let cancellingTurn = false;
+  let acceptedCancellation;
   let interactionMotionKey = '';
   let attachments = [];
-  let uploadingAttachments = 0;
   let attachmentPickerState;
   const attachmentUploads = new Map();
   let suggestionItems = [];
@@ -198,17 +249,20 @@ export function createMobileConversationView({
   const {
     close: closeFileSheet,
     open: openFileReference,
+    openMedia: openMediaAttachment,
   } = fileSurface;
   const {
     eventNode,
     permissionDockNode,
     toolGroupNode,
+    turnNode,
   } = createMobileEventRenderer({
     fileSurface,
     expandedItems,
     autoExpandedItems,
     initializeDisclosure,
     animateDisclosure,
+    revealDisclosure,
     getSessionName: () => sessionName,
     respondPermission,
     refresh,
@@ -736,6 +790,7 @@ export function createMobileConversationView({
   }
 
   function updateSuggestions() {
+    if (shellMode) return closeSuggestions();
     const completion = composerCompletion();
     suggestionGeneration += 1;
     clearTimeout(suggestionTimer);
@@ -782,6 +837,9 @@ export function createMobileConversationView({
   function closeStream() {
     clearTimeout(streamWatchdogTimer);
     streamWatchdogTimer = undefined;
+    compactStreamBatcher.discard();
+    deferredConversationPayload = undefined;
+    compactMessageId = undefined;
     const socket = streamSocket;
     streamSocket = undefined;
     streamKey = '';
@@ -805,6 +863,7 @@ export function createMobileConversationView({
   function suspendForBackground() {
     if (!media.matches || !sessionName) return;
     if (!backgrounded) generation += 1;
+    refreshRevision += 1;
     backgrounded = true;
     clearTimeout(refreshTimer);
     clearTimeout(foregroundResumeTimer);
@@ -820,6 +879,7 @@ export function createMobileConversationView({
       foregroundResumeTimer = undefined;
       if (document.visibilityState === 'hidden' || !media.matches || !sessionName) return;
       backgrounded = false;
+      refreshRevision += 1;
       closeStream();
       renderedSignature = '';
       // iOS can suspend a page without delivering a websocket close. Read the
@@ -831,19 +891,30 @@ export function createMobileConversationView({
 
   function handleVisibilityChange() {
     if (document.visibilityState === 'hidden') suspendForBackground();
-    else resumeFromBackground();
+    else resumeFromBackground({ force: true });
   }
 
-  function handlePageShow(event) {
-    resumeFromBackground({ force: event.persisted === true });
+  function handlePageShow() {
+    resumeFromBackground({ force: true });
   }
 
   function handleWindowFocus() {
-    resumeFromBackground();
+    resumeFromBackground({ force: true });
   }
 
   function handleOnline() {
     resumeFromBackground({ force: true });
+  }
+
+  function probeForegroundLiveness() {
+    const now = Date.now();
+    const frozen = now - lastForegroundProbeAt > 6_000;
+    lastForegroundProbeAt = now;
+    if (document.visibilityState === 'hidden' || !media.matches || !sessionName) return;
+    // Mobile Safari can freeze the page without dispatching visibilitychange,
+    // pagehide, blur, or a websocket close. A resumed timer is the final
+    // lifecycle signal in that case, so force the same snapshot-first repair.
+    if (backgrounded || frozen) resumeFromBackground({ force: true });
   }
 
   function streamingAssistant(conversation) {
@@ -857,8 +928,34 @@ export function createMobileConversationView({
     return (String(text || '').match(/^(?:```|~~~)/gm) || []).length;
   }
 
+  function normalizeStreamingMarkdownSource(source) {
+    let markdown = String(source || '');
+    // Some Grok ACP versions omit newline-only chunks from the live stream,
+    // then restore them in the completed replay. Recover only unambiguous
+    // ordered-list boundaries for the streaming presentation so `1.`, `2.`,
+    // ... render as a growing list instead of one long paragraph. Keep the
+    // canonical raw text separately; the final provider snapshot still wins.
+    markdown = markdown.replace(
+      /((?:here (?:are|is)|sentences?|items?|steps?|examples?|reasons?|following|below)[^:\n]{0,96}:)(?=1[.)]\s)/i,
+      '$1\n\n',
+    );
+    return markdown.replace(/[.!?](?:["')\]]?)(?=\d{1,4}[.)]\s)/g,
+      (boundary, offset, text) => boundary[0] === '.' && /\d/.test(text[offset - 1] || '')
+        ? boundary : `${boundary}\n`);
+  }
+
+  function suffixCompletesCollapsedOrderedMarker(previousText, suffix) {
+    const previousTail = previousText.slice(-32);
+    const combined = `${previousTail}${suffix}`;
+    const boundary = previousTail.length;
+    const patterns = [/[.!?](?:["')\]]?)?\d{1,4}[.)]\s/g, /:\s*1[.)]\s/g];
+    return patterns.some((pattern) => [...combined.matchAll(pattern)]
+      .some((match) => match.index + match[0].length > boundary));
+  }
+
   function streamNeedsMarkdownParse(previousText, suffix) {
     if (/[\n*_`\[\]()#>|~]/.test(suffix)) return true;
+    if (suffixCompletesCollapsedOrderedMarker(previousText, suffix)) return true;
     const previousLastLine = previousText.slice(previousText.lastIndexOf('\n') + 1);
     const combinedLastLine = `${previousLastLine}${suffix}`;
     return /^(?: {0,3}(?:[-+*]|\d+[.)])\s| {0,3}#{1,6}\s| {0,3}>\s)/.test(combinedLastLine);
@@ -920,11 +1017,55 @@ export function createMobileConversationView({
     return content;
   }
 
+  function animateStreamingElement(node) {
+    if (!(node instanceof HTMLElement)) return;
+    node.classList.add('mobile-stream-block-enter');
+    const settle = () => node.classList.remove('mobile-stream-block-enter');
+    node.addEventListener('animationend', settle, { once: true });
+    node.addEventListener('animationcancel', settle, { once: true });
+  }
+
+  function markNewStreamingElements(currentParent, freshParent) {
+    const currentChildren = [...currentParent.children];
+    const freshChildren = [...freshParent.children];
+    const sharedLength = Math.min(currentChildren.length, freshChildren.length);
+    for (let index = 0; index < sharedLength; index += 1) {
+      const current = currentChildren[index];
+      const fresh = freshChildren[index];
+      if (current.tagName === fresh.tagName) markNewStreamingElements(current, fresh);
+      else animateStreamingElement(fresh);
+    }
+    for (let index = sharedLength; index < freshChildren.length; index += 1) {
+      animateStreamingElement(freshChildren[index]);
+    }
+  }
+
+  function streamingTextNode(text) {
+    const span = document.createElement('span');
+    span.className = 'mobile-stream-text-enter';
+    span.textContent = text;
+    const settle = () => {
+      if (!span.isConnected) return;
+      const parent = span.parentNode;
+      span.replaceWith(...span.childNodes);
+      parent?.normalize();
+    };
+    span.addEventListener('animationend', settle, { once: true });
+    span.addEventListener('animationcancel', settle, { once: true });
+    return span;
+  }
+
   function reparseStreamingMarkdown(content, nextText) {
-    const fresh = markdownNode(nextText, {
+    const fresh = markdownNode(normalizeStreamingMarkdownSource(nextText), {
       onFileReference: (reference) => void openFileReference(reference),
     });
-    return morphStreamingMarkdown(content, fresh, { streaming: true, rawText: nextText });
+    const scroll = captureStreamScroll(content);
+    markNewStreamingElements(content, fresh);
+    content.replaceChildren(...fresh.childNodes);
+    content.dataset.streaming = 'true';
+    content.__mobileRawText = nextText;
+    restoreStreamScroll(content, scroll);
+    return content;
   }
 
   function appendStreamingMarkdown(content, nextText) {
@@ -961,8 +1102,12 @@ export function createMobileConversationView({
       );
       if (insideInlineMarkup) return reparseStreamingMarkdown(content, nextText);
       const collapsedBoundary = /\s$/.test(previousText) && !/^\s/.test(suffix) ? ' ' : '';
-      if (lastText) lastText.data += `${collapsedBoundary}${suffix}`;
-      else content.append(document.createTextNode(suffix));
+      const addition = streamingTextNode(`${collapsedBoundary}${suffix}`);
+      if (lastText) {
+        const animatedText = lastText.parentElement?.closest('.mobile-stream-text-enter');
+        const anchor = animatedText && tail.contains(animatedText) ? animatedText : lastText;
+        anchor.parentNode?.insertBefore(addition, anchor.nextSibling);
+      } else content.append(addition);
     }
     content.__mobileRawText = nextText;
     return content;
@@ -977,23 +1122,27 @@ export function createMobileConversationView({
       ? (lastConversation.items || []).find((item) => item.id === stream.messageId)
       : streamingAssistant(conversation);
     const previous = (lastConversation.items || []).find((item) => item.id === next?.id);
-    if (!next || !previous || typeof previous.text !== 'string') return false;
-    const previousText = previous.text;
-    const nextText = compact ? `${previousText}${stream.delta || ''}` : next.text;
-    if (typeof nextText !== 'string' || !nextText.startsWith(previousText)) return false;
-    const suffix = nextText.slice(previousText.length);
-    if (!suffix) return false;
+    if (!next || !previous) return false;
     const source = conversation || lastConversation;
     const isRoot = !source.parent && currentThreadId === rootThreadId;
     const targetMessages = isRoot ? messages : sheetMessages || messages;
     const article = [...targetMessages.querySelectorAll('.mobile-message')]
       .find((node) => node.dataset.messageId === next.id);
     const content = article?.querySelector(':scope > .mobile-message-content[data-streaming="true"]');
+    const previousText = compact ? content?.__mobileRawText : previous.text;
+    if (typeof previousText !== 'string') return false;
+    const nextText = compact ? `${previousText}${stream.delta || ''}` : next.text;
+    if (typeof nextText !== 'string' || !nextText.startsWith(previousText)) return false;
+    const suffix = nextText.slice(previousText.length);
+    if (!suffix) return false;
     if (!content || content.__mobileRawText !== previousText) return false;
 
     const atBottom = distanceFromBottom(targetMessages) <= 48;
     appendStreamingMarkdown(content, nextText);
-    if (compact) previous.text = nextText;
+    if (compact) {
+      previous.text = nextText;
+      compactMessageId = next.id;
+    }
     else lastConversation = conversation;
     if (isRoot && conversation) {
       rootConversation = conversation;
@@ -1007,6 +1156,16 @@ export function createMobileConversationView({
     }
     if (isRoot) updateJumpToLatest();
     return true;
+  }
+
+  function applyFullConversationPayload(payload) {
+    if (payload.conversation) providerId = payload.conversation.provider.id;
+    compactStreamBatcher.discard();
+    if (!applyStreamTextDelta(payload.conversation, payload.stream)) {
+      if (payload.conversation) render(payload.conversation, { animate: true, fromStream: true });
+      else schedule(0);
+    }
+    setBooting(false);
   }
 
   function subagentState(item) {
@@ -1062,17 +1221,24 @@ export function createMobileConversationView({
 
   function ensureSheet() {
     if (sheet) return;
-    sheet = element('section', 'mobile-subagent-sheet');
-    sheet.hidden = true;
-    sheet.setAttribute('role', 'dialog');
-    sheet.setAttribute('aria-modal', 'true');
-    sheet.setAttribute('aria-label', 'Activity details');
-    sheet.tabIndex = -1;
-    sheetPanel = element('div', 'mobile-subagent-sheet-panel');
-    sheetHandle = element('button', 'mobile-subagent-sheet-handle');
-    sheetHandle.type = 'button';
-    sheetHandle.setAttribute('aria-label', 'Drag down to close activity');
-    const header = element('header', 'mobile-subagent-sheet-header');
+    const frame = createMobileSheetFrame({
+      root,
+      element,
+      label: 'Activity details',
+      handleLabel: 'Drag down to close activity',
+      classNames: {
+        sheet: 'mobile-subagent-sheet',
+        panel: 'mobile-subagent-sheet-panel',
+        handle: 'mobile-subagent-sheet-handle',
+        header: 'mobile-subagent-sheet-header',
+        body: 'mobile-subagent-sheet-body',
+      },
+    });
+    sheet = frame.sheet;
+    sheetPanel = frame.panel;
+    sheetHandle = frame.handle;
+    const { header } = frame.slots;
+    sheetBody = frame.slots.body;
     sheetBack = createIconButton({
       className: 'mobile-subagent-sheet-back', label: 'Back to subagent list', glyph: '‹',
       variant: 'bare', size: 'xl',
@@ -1098,9 +1264,7 @@ export function createMobileConversationView({
     sheetMessages = element('div', 'mobile-subagent-sheet-messages');
     sheetMessages.setAttribute('role', 'log');
     sheetMessages.setAttribute('aria-live', 'polite');
-    sheetPanel.append(sheetHandle, header, sheetList, sheetMessages);
-    sheet.append(sheetPanel);
-    root.append(sheet);
+    sheetBody.append(sheetList, sheetMessages);
     sheet.addEventListener('click', (event) => {
       if (event.target === sheet) closeSheet();
     });
@@ -1128,27 +1292,7 @@ export function createMobileConversationView({
         first.focus();
       }
     });
-    sheetHandle.addEventListener('pointerdown', (event) => {
-      sheetPointer = { id: event.pointerId, startY: event.clientY, distance: 0 };
-      sheetHandle.setPointerCapture?.(event.pointerId);
-      sheetPanel.dataset.dragging = 'true';
-    });
-    sheetHandle.addEventListener('pointermove', (event) => {
-      if (!sheetPointer || event.pointerId !== sheetPointer.id) return;
-      sheetPointer.distance = Math.max(0, event.clientY - sheetPointer.startY);
-      sheetPanel.style.setProperty('--mobile-sheet-drag', `${sheetPointer.distance}px`);
-    });
-    const finishDrag = (event) => {
-      if (!sheetPointer || event.pointerId !== sheetPointer.id) return;
-      const shouldClose = sheetPointer.distance > 54;
-      sheetPointer = undefined;
-      sheetPanel.dataset.dragSettled = 'true';
-      delete sheetPanel.dataset.dragging;
-      if (shouldClose) closeSheet();
-      else sheetPanel.style.removeProperty('--mobile-sheet-drag');
-    };
-    sheetHandle.addEventListener('pointerup', finishDrag);
-    sheetHandle.addEventListener('pointercancel', finishDrag);
+    installMobileSheetDrag({ panel: sheetPanel, handle: sheetHandle, onClose: closeSheet, threshold: 54 });
   }
 
   function renderSubagentList(conversation = rootConversation) {
@@ -1531,14 +1675,31 @@ export function createMobileConversationView({
         const payload = JSON.parse(event.data);
         if (payload.type === 'heartbeat') return;
         if (payload.type === 'conversation') {
+          // A socket event is newer than any HTTP snapshot already in flight.
+          // Safari may release an old fetch after foregrounding; never let it
+          // roll the live turn back to a stale Streaming state.
+          refreshRevision += 1;
           const payloadThreadId = payload.conversation?.thread?.id || payload.stream?.threadId;
           if (payloadThreadId !== threadId) return;
-          if (payload.conversation) providerId = payload.conversation.provider.id;
-          if (!applyStreamTextDelta(payload.conversation, payload.stream)) {
-            if (payload.conversation) render(payload.conversation, { animate: true, fromStream: true });
-            else schedule(0);
+          if (!payload.conversation && payload.stream?.kind === 'agent_message_chunk') {
+            // Claim text ownership as soon as the compact frame arrives, not
+            // after its visual batch paints. A fallback snapshot can land in
+            // that short window and otherwise seed the message with stale,
+            // partially replayed text that later deltas cannot repair.
+            compactMessageId = payload.stream.messageId;
+            compactStreamBatcher.push(payload.stream);
+            setBooting(false);
+            return;
           }
-          setBooting(false);
+          // ACP can deliver a turn's token frames as one WebSocket burst. Let
+          // the bounded visual queue paint those exact suffixes before the
+          // authoritative completion snapshot settles the message.
+          if (payload.conversation && compactStreamBatcher.hasPending()) {
+            deferredConversationPayload = payload;
+            setBooting(false);
+            return;
+          }
+          applyFullConversationPayload(payload);
           return;
         }
         if (payload?.type === 'control' && payload.action === 'open-graphics' &&
@@ -1547,7 +1708,9 @@ export function createMobileConversationView({
           clearActivityDismissal();
           browserAvailable = true;
           renderSubagentPill(rootConversation || { items: [] });
-          onBrowserOpen(sessionName, payload.argv);
+          onBrowserOpen(sessionName, payload.argv, {
+            reuseExisting: payload.reuseExisting === true,
+          });
           return;
         }
         if (payload?.type === 'error') {
@@ -1589,16 +1752,58 @@ export function createMobileConversationView({
 
   function attachmentNode(attachment, { removable = false } = {}) {
     const item = element('div', 'mobile-conversation-attachment');
-    if (/^image\/(?:png|jpeg|webp|gif)$/.test(attachment.mimeType || '') && attachment.previewUrl) {
-      const image = document.createElement('img');
-      image.src = apiUrl(attachment.previewUrl);
-      image.alt = attachment.name || 'Attached image';
-      item.append(image);
-    } else item.append(element('span', '', attachment.name?.split('.').pop()?.toUpperCase() || 'FILE'));
-    item.append(element('small', '', attachment.name || 'Attachment'));
+    const name = attachment.name || 'Attachment';
+    const mimeType = attachment.mimeType || '';
+    const isImage = /^image\/(?:png|jpeg|webp|gif)$/i.test(mimeType);
+    const isVideo = /^video\//i.test(mimeType);
+    const previewUrl = attachment.previewUrl ? apiUrl(attachment.previewUrl) : '';
+    if ((isImage || isVideo) && previewUrl) {
+      const preview = element('button', 'mobile-conversation-attachment-preview');
+      preview.type = 'button';
+      preview.setAttribute('aria-label', `View ${name}`);
+      const media = document.createElement(isVideo ? 'video' : 'img');
+      media.className = 'mobile-conversation-attachment-media';
+      const nameLabel = element('small', 'mobile-conversation-attachment-name', name);
+      media.src = previewUrl;
+      if (isVideo) {
+        media.muted = true;
+        media.playsInline = true;
+        media.preload = 'metadata';
+        media.setAttribute('aria-hidden', 'true');
+      } else {
+        media.alt = '';
+        media.decoding = 'async';
+      }
+      const showNameOnly = () => {
+        item.dataset.preview = 'fallback';
+        media.remove();
+        preview.append(element('span', 'mobile-conversation-attachment-media mobile-conversation-attachment-placeholder'));
+      };
+      media.addEventListener('error', showNameOnly, { once: true });
+      preview.addEventListener('pointerdown', retainComposerInputFocus);
+      preview.addEventListener('click', () => openMediaAttachment({
+        selectedId: attachment.id,
+        items: attachments
+          .filter((value) => /^(?:image|video)\//i.test(value.mimeType || '') && value.previewUrl)
+          .map((value) => ({
+            id: value.id,
+            name: value.name || 'Attachment',
+            mimeType: value.mimeType || '',
+            url: apiUrl(value.previewUrl),
+          })),
+      }));
+      preview.append(media);
+      item.append(preview, nameLabel);
+    } else {
+      item.dataset.preview = 'fallback';
+      item.append(
+        element('span', 'mobile-conversation-attachment-media mobile-conversation-attachment-placeholder'),
+        element('small', 'mobile-conversation-attachment-name', name),
+      );
+    }
     if (removable) {
       const remove = createIconButton({
-        className: 'close-button close-button--destructive', label: `Remove ${attachment.name}`,
+        className: 'mobile-conversation-attachment-remove close-button close-button--destructive', label: `Remove ${name}`,
         glyph: '×', variant: 'danger', size: 'xs',
       });
       remove.addEventListener('pointerdown', retainComposerInputFocus);
@@ -1630,11 +1835,12 @@ export function createMobileConversationView({
       progress.setAttribute('aria-label', `Uploading ${upload.name}`);
       item.append(progress);
     }
-    const action = createIconButton({
-      className: 'close-button', label: 'Manage upload', glyph: '×', variant: 'bare', size: 'xs',
-    });
-    action.addEventListener('pointerdown', retainComposerInputFocus);
+    const actions = element('div', 'mobile-conversation-upload-actions');
     if (upload.status === 'uploading' || upload.status === 'cancelling') {
+      const action = createIconButton({
+        className: 'close-button', label: 'Manage upload', glyph: '×', variant: 'bare', size: 'xs',
+      });
+      action.addEventListener('pointerdown', retainComposerInputFocus);
       action.setAttribute('aria-label', `Cancel upload ${upload.name}`);
       action.disabled = upload.status === 'cancelling';
       action.addEventListener('click', () => {
@@ -1642,15 +1848,64 @@ export function createMobileConversationView({
         upload.controller?.abort();
         renderAttachmentTray();
       });
+      actions.append(action);
     } else {
-      action.setAttribute('aria-label', `Dismiss upload error for ${upload.name}`);
-      action.addEventListener('click', () => {
+      const retry = element('button', 'mobile-conversation-upload-retry', 'Retry');
+      retry.type = 'button';
+      retry.setAttribute('aria-label', `Retry upload ${upload.name}`);
+      retry.addEventListener('pointerdown', retainComposerInputFocus);
+      retry.addEventListener('click', () => void runAttachmentUpload(upload));
+      const dismiss = createIconButton({
+        className: 'close-button', label: `Dismiss upload error for ${upload.name}`,
+        glyph: '×', variant: 'bare', size: 'xs',
+      });
+      dismiss.addEventListener('pointerdown', retainComposerInputFocus);
+      dismiss.addEventListener('click', () => {
         attachmentUploads.delete(upload.id);
         renderAttachmentTray();
       });
+      actions.append(retry, dismiss);
     }
-    item.append(action);
+    item.append(actions);
     return item;
+  }
+
+  function abortAttachmentUploads() {
+    for (const upload of attachmentUploads.values()) upload.controller?.abort();
+    attachmentUploads.clear();
+  }
+
+  async function runAttachmentUpload(upload) {
+    if (!attachmentUploads.has(upload.id)) return;
+    upload.status = 'uploading';
+    upload.error = '';
+    upload.progress = 0;
+    upload.controller = new AbortController();
+    renderAttachmentTray();
+    try {
+      const attachment = await uploadAttachment(upload.sessionName, upload.file, (progress) => {
+        if (!attachmentUploads.has(upload.id)) return;
+        upload.progress = progress;
+        renderAttachmentTray();
+      }, { signal: upload.controller.signal });
+      if (sessionName !== upload.sessionName || generation !== upload.generation ||
+          !attachmentUploads.has(upload.id)) return;
+      attachments.push(attachment);
+      attachmentUploads.delete(upload.id);
+    } catch (error) {
+      if (upload.controller.signal.aborted || error?.name === 'AbortError') {
+        attachmentUploads.delete(upload.id);
+      } else if (sessionName === upload.sessionName && generation === upload.generation &&
+          attachmentUploads.has(upload.id)) {
+        upload.status = 'error';
+        upload.error = error.message || 'Upload failed';
+        state.textContent = upload.error;
+        state.dataset.state = 'error';
+      }
+    } finally {
+      renderAttachmentTray();
+      autoSizeInput();
+    }
   }
 
   function renderAttachmentTray() {
@@ -1659,7 +1914,7 @@ export function createMobileConversationView({
     for (const attachment of attachments) fragment.append(attachmentNode(attachment, { removable: true }));
     for (const upload of attachmentUploads.values()) fragment.append(attachmentUploadNode(upload));
     attachmentTray.replaceChildren(fragment);
-    attachButton.disabled = uploadingAttachments > 0 || attachments.length >= 8;
+    attachButton.disabled = attachmentUploads.size > 0 || attachments.length >= 8;
   }
 
   function reducedMotion() {
@@ -1680,13 +1935,39 @@ export function createMobileConversationView({
     return fallback;
   }
 
+  function disclosureBlockBox(style, collapsed = false) {
+    if (collapsed) {
+      // A bordered box cannot render shorter than its borders even at height
+      // zero. Offset that transient residue so hiding it cannot move the group
+      // in one final frame after the height animation has already settled.
+      const borderHeight = (Number.parseFloat(style.borderTopWidth) || 0) +
+        (Number.parseFloat(style.borderBottomWidth) || 0);
+      return {
+        marginTop: '0px',
+        marginBottom: `${-borderHeight}px`,
+        paddingTop: '0px',
+        paddingBottom: '0px',
+      };
+    }
+    return {
+      marginTop: style.marginTop,
+      marginBottom: style.marginBottom,
+      paddingTop: style.paddingTop,
+      paddingBottom: style.paddingBottom,
+    };
+  }
+
   function animateDisclosure(toggle, panel, open) {
     toggle.setAttribute('aria-expanded', String(open));
     panel.setAttribute('aria-hidden', String(!open));
     panel.inert = !open;
     const active = disclosureMotions.get(panel);
+    const wasHidden = panel.hidden;
+    const currentStyle = wasHidden ? undefined : getComputedStyle(panel);
     const currentHeight = panel.hidden ? 0 : panel.getBoundingClientRect().height;
-    const currentOpacity = panel.hidden ? 0 : Number.parseFloat(getComputedStyle(panel).opacity) || 1;
+    const parsedOpacity = currentStyle ? Number.parseFloat(currentStyle.opacity) : 0;
+    const currentOpacity = Number.isFinite(parsedOpacity) ? parsedOpacity : 1;
+    const currentBox = currentStyle ? disclosureBlockBox(currentStyle) : undefined;
     active?.animation.cancel();
 
     if (open) panel.hidden = false;
@@ -1694,16 +1975,26 @@ export function createMobileConversationView({
       panel.hidden = !open;
       panel.removeAttribute('data-disclosure-motion');
       disclosureMotions.delete(panel);
-      return;
+      return Promise.resolve(open);
     }
 
     const targetHeight = open ? panel.getBoundingClientRect().height : 0;
     const targetOpacity = open ? 1 : 0;
     panel.dataset.disclosureMotion = open ? 'opening' : 'closing';
     const style = getComputedStyle(panel);
+    const targetBox = disclosureBlockBox(style, !open);
+    const startBox = currentBox || disclosureBlockBox(style, true);
     const animation = panel.animate([
-      { height: `${currentHeight}px`, opacity: currentOpacity, transform: open ? 'translateY(-3px)' : 'translateY(0)' },
-      { height: `${targetHeight}px`, opacity: targetOpacity, transform: open ? 'translateY(0)' : 'translateY(-3px)' },
+      {
+        height: `${currentHeight}px`, opacity: currentOpacity,
+        transform: open ? 'translateY(-3px)' : 'translateY(0)',
+        ...startBox,
+      },
+      {
+        height: `${targetHeight}px`, opacity: targetOpacity,
+        transform: open ? 'translateY(0)' : 'translateY(-3px)',
+        ...targetBox,
+      },
     ], {
       duration: motionDuration(panel, '--duration-normal', 220),
       easing: style.getPropertyValue('--ease-out').trim() || 'cubic-bezier(.2, .8, .2, 1)',
@@ -1711,13 +2002,29 @@ export function createMobileConversationView({
     });
     const motion = { animation, open };
     disclosureMotions.set(panel, motion);
-    animation.finished.then(() => {
-      if (disclosureMotions.get(panel) !== motion) return;
+    return animation.finished.then(() => {
+      if (disclosureMotions.get(panel) !== motion) return false;
       if (!open) panel.hidden = true;
       panel.removeAttribute('data-disclosure-motion');
       disclosureMotions.delete(panel);
       animation.cancel();
-    }).catch(() => {});
+      return open;
+    }).catch(() => false);
+  }
+
+  function revealDisclosure(toggle, panel) {
+    requestAnimationFrame(() => {
+      if (!toggle.isConnected || panel.hidden || toggle.getAttribute('aria-expanded') !== 'true') return;
+      if (!disclosureNeedsReveal(panel, messages)) return;
+      const localViewport = panel.closest('.mobile-tool-group-panel:not([hidden])') || messages;
+      const availableHeight = Math.max(0, localViewport.clientHeight - 16);
+      const target = panel.scrollHeight + toggle.offsetHeight > availableHeight ? toggle : panel;
+      target.scrollIntoView({
+        block: target === toggle ? 'start' : 'nearest',
+        inline: 'nearest',
+        behavior: reducedMotion() ? 'auto' : 'smooth',
+      });
+    });
   }
 
   function queueRows() {
@@ -1829,10 +2136,10 @@ export function createMobileConversationView({
     });
   }
 
-  function schedulePendingAcceptanceFailure(pendingText) {
+  function schedulePendingAcceptanceFailure(requestId) {
     clearTimeout(pendingAcceptanceTimer);
     pendingAcceptanceTimer = setTimeout(() => {
-      if (pendingMessage?.text !== pendingText || pendingMessage.status !== 'accepted') return;
+      if (pendingMessage?.requestId !== requestId || pendingMessage.status !== 'accepted') return;
       pendingMessage.status = 'failed';
       renderedSignature = '';
       if (lastConversation) render(lastConversation);
@@ -2025,10 +2332,11 @@ export function createMobileConversationView({
         { onSuccess: () => {
           const pendingText = entry.text || 'Queued message';
           pendingMessage = {
-            text: pendingText, attachments: [], fileMentions: [],
+            requestId: `steer:${entry.id}`, text: pendingText, displayText: pendingText,
+            attachments: [], fileMentions: [],
             sentAt: Date.now(), status: 'accepted', source: 'steer', queueId: entry.id,
           };
-          schedulePendingAcceptanceFailure(pendingText);
+          schedulePendingAcceptanceFailure(`steer:${entry.id}`);
           followStreamTail = true;
           submittedTurnFollow = true;
           renderedSignature = '';
@@ -2107,7 +2415,7 @@ export function createMobileConversationView({
     }
   }
 
-  function uploadedImagePreview(target) {
+  function uploadedMediaPreview(target) {
     const value = String(target || '').trim();
     const uploadId = value.match(/\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})(?:\.[a-z0-9]{1,10})?$/i)?.[1];
     if (uploadId) {
@@ -2123,40 +2431,65 @@ export function createMobileConversationView({
 
   function userMessageContentNode(item) {
     const content = element('div', 'mobile-message-content');
-    const images = (Array.isArray(item.attachments) ? item.attachments : []).flatMap((attachment) => {
-      if (!/^image\/(?:png|jpeg|webp|gif)$/i.test(attachment?.mimeType || '') || !attachment.previewUrl) return [];
-      return [{ name: attachment.name || 'Attached image', url: apiUrl(attachment.previewUrl) }];
+    const mediaItems = (Array.isArray(item.attachments) ? item.attachments : []).flatMap((attachment) => {
+      if (!/^(?:image\/(?:png|jpeg|webp|gif)|video\/)/i.test(attachment?.mimeType || '') || !attachment.previewUrl) return [];
+      return [{ id: attachment.id, name: attachment.name || 'Attachment', mimeType: attachment.mimeType, url: apiUrl(attachment.previewUrl) }];
     });
     let visibleText = String(item.text || '');
-    if (!images.length) {
-      visibleText = visibleText.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (source, label, target) => {
-        const url = uploadedImagePreview(target);
-        if (!url) return source;
-        let fallback = 'Attached image';
-        try { fallback = decodeURIComponent(String(target).split('/').at(-1) || fallback); } catch { /* keep fallback */ }
-        images.push({ name: label.trim() || fallback, url });
-        return '';
-      }).replace(/\n{3,}/g, '\n\n').trim();
-    }
-    if (!images.length) {
+    visibleText = visibleText.replace(/!?\[([^\]\n]*)\]\(([^)\n]+)\)/g, (source, label, target) => {
+      const url = uploadedMediaPreview(target);
+      const fileName = decodeURIComponent(String(target).split('/').at(-1) || 'Attachment');
+      const extension = fileName.split('.').at(-1)?.toLowerCase();
+      const isVideo = /^(?:mov|mp4|m4v|webm|avi|mkv)$/.test(extension || '');
+      const isImage = /^(?:png|jpe?g|webp|gif|svg|avif)$/.test(extension || '');
+      const mimeType = isVideo ? 'video/*' : 'image/*';
+      if (!url || (!isImage && !isVideo)) return source;
+      if (!mediaItems.some((item) => item.url === url)) {
+        mediaItems.push({ name: label.trim() || fileName, mimeType, url });
+      }
+      return '';
+    }).replace(/\n{3,}/g, '\n\n').trim();
+    const attachmentDisplayNames = (Array.isArray(item.attachments) ? item.attachments : [])
+      .map((attachment) => attachment?.name || 'Attachment')
+      .join(', ');
+    if (attachmentDisplayNames && visibleText === attachmentDisplayNames) visibleText = '';
+    if (!mediaItems.length) {
       content.textContent = visibleText;
       return content;
     }
-
     const gallery = element('div', 'mobile-message-user-attachments');
-    for (const image of images) {
-      const link = element('a', 'mobile-message-user-attachment');
-      link.href = image.url;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.setAttribute('aria-label', `View ${image.name}`);
-      const preview = document.createElement('img');
-      preview.src = image.url;
-      preview.alt = image.name;
+    if (mediaItems.length > 1) gallery.dataset.count = String(mediaItems.length);
+    for (const mediaItem of mediaItems.slice(0, 1)) {
+      const trigger = element('button', 'mobile-message-user-attachment');
+      trigger.type = 'button';
+      trigger.setAttribute('aria-label', mediaItems.length > 1
+        ? `View ${mediaItems.length} attachments`
+        : `View ${mediaItem.name}`);
+      const isVideo = /^video\//i.test(mediaItem.mimeType || '');
+      const preview = document.createElement(isVideo ? 'video' : 'img');
+      preview.className = 'mobile-message-user-attachment-media';
+      preview.src = mediaItem.url;
       preview.loading = 'lazy';
-      preview.decoding = 'async';
-      link.append(preview, element('small', '', image.name));
-      gallery.append(link);
+      if (isVideo) {
+        preview.muted = true;
+        preview.playsInline = true;
+        preview.preload = 'metadata';
+        preview.setAttribute('aria-hidden', 'true');
+      } else {
+        preview.alt = mediaItem.name;
+        preview.decoding = 'async';
+      }
+      preview.addEventListener('error', () => {
+        trigger.dataset.preview = 'fallback';
+        preview.remove();
+      }, { once: true });
+      trigger.addEventListener('click', () => openMediaAttachment({
+        selectedId: mediaItem.id,
+        items: mediaItems,
+      }));
+      trigger.append(preview, element('small', '', mediaItem.name));
+      if (mediaItems.length > 1) trigger.append(element('b', 'mobile-message-user-attachment-count', `+${mediaItems.length - 1}`));
+      gallery.append(trigger);
     }
     content.append(gallery);
     if (visibleText) content.append(element('div', 'mobile-message-user-text', visibleText));
@@ -2174,7 +2507,7 @@ export function createMobileConversationView({
       } else {
         const streaming = streamingAssistant(conversation)?.id === item.id;
         if (streaming) {
-          const content = markdownNode(item.text, {
+          const content = markdownNode(normalizeStreamingMarkdownSource(item.text), {
             onFileReference: (reference) => void openFileReference(reference),
           });
           content.dataset.streaming = 'true';
@@ -2194,7 +2527,7 @@ export function createMobileConversationView({
     if (['question', 'permission', 'plan_review'].includes(item.type)) return document.createDocumentFragment();
     if (item.type === 'plan') return document.createDocumentFragment();
     if (item.type === 'goal') return document.createDocumentFragment();
-    if (item.type === 'turn') return document.createDocumentFragment();
+    if (item.type === 'turn') return turnNode(item);
     if (item.type === 'subagent') return document.createDocumentFragment();
     return eventNode(item);
   }
@@ -2203,6 +2536,9 @@ export function createMobileConversationView({
 
   function render(conversation, { animate = false, fromStream = false } = {}) {
     const previousConversation = lastConversation;
+    conversation = preserveNewerStreamingText(previousConversation, conversation, compactMessageId);
+    acknowledgeSubmittedInput(conversation);
+    if (conversation.activity?.active !== true) compactMessageId = undefined;
     lastConversation = conversation;
     const initialThreadRender = !previousConversation ||
       previousConversation.thread?.id !== conversation.thread.id;
@@ -2238,10 +2574,11 @@ export function createMobileConversationView({
       optimisticQueue: [...optimisticQueuedInputs.values()],
       pending: pendingMessage,
       attachments,
-      uploadingAttachments,
+      attachmentUploads: [...attachmentUploads.values()].map(({ id, name, progress, status, error }) =>
+        ({ id, name, progress, status, error })),
       questions: questionStateVersion,
       planReviews: [...pendingPlanReviews.entries()],
-      submittingMessage,
+      submittingMessage: Boolean(submittingRequest),
       cancellingTurn,
     });
     if (signature === renderedSignature) return;
@@ -2295,14 +2632,12 @@ export function createMobileConversationView({
       fragment.append(node);
     }
     if (isRoot) renderSubagentPill(conversation);
-    const pendingAlreadyStored = pendingMessage && conversation.items.some(
-      (item) => item.type === 'message' && item.role === 'user' &&
-        (pendingMessage.text ? item.text.includes(pendingMessage.text) :
-          pendingMessage.attachments?.every((attachment) => item.text.includes(attachment.name))),
-    );
+    const pendingAlreadyStored = pendingMessage && conversation.items.some((item) =>
+      pendingMessageMatchesItem(pendingMessage, item));
     const completedAfterPendingTurn = pendingMessage?.status === 'accepted' &&
       previousConversation?.activity?.active === true && conversation.activity?.active !== true;
     if (pendingAlreadyStored || completedAfterPendingTurn) {
+      if (pendingMessage?.requestId) reconciledPendingRequests.add(pendingMessage.requestId);
       clearTimeout(pendingAcceptanceTimer);
       pendingMessage = undefined;
       pendingQuestions.clear();
@@ -2310,17 +2645,27 @@ export function createMobileConversationView({
     }
     if (pendingMessage) {
       const pending = messageNode({
-        id: 'pending', type: 'message', role: 'user', text: pendingMessage.text,
+        id: 'pending', type: 'message', role: 'user',
+        text: pendingMessage.text || pendingMessage.displayText,
+        attachments: pendingMessage.attachments,
         pendingStatus: pendingMessage.status,
       }, conversation);
       pending.dataset.pending = 'true';
       if (pendingMessage.status === 'failed') {
         pending.querySelector('.mobile-message-author').textContent = 'Not received · tap to retry';
         pending.addEventListener('click', () => {
-          input.value = pendingMessage.text || '';
+          restoreComposerDraft(pendingMessage.text || '');
           attachments = pendingMessage.attachments?.slice() || [];
           mentionedFiles.clear();
           for (const path of pendingMessage.fileMentions || []) mentionedFiles.add(path);
+          retryMessage = {
+            requestId: pendingMessage.requestId,
+            signature: JSON.stringify({
+              text: pendingMessage.text || '',
+              attachmentIds: attachments.map((attachment) => attachment.id),
+              fileMentions: [...mentionedFiles],
+            }),
+          };
           pendingMessage = undefined;
           renderAttachmentTray();
           autoSizeInput();
@@ -2359,6 +2704,7 @@ export function createMobileConversationView({
 
   async function refresh() {
     const currentGeneration = generation;
+    const currentRefreshRevision = ++refreshRevision;
     if (!media.matches || !sessionName) return setAvailable(false);
     const params = new URLSearchParams();
     if (threadId) params.set('thread', threadId);
@@ -2366,7 +2712,7 @@ export function createMobileConversationView({
     const query = `?${params}`;
     try {
       const payload = await api(`/api/conversations/${encodeURIComponent(sessionName)}${query}`);
-      if (currentGeneration !== generation) return;
+      if (currentGeneration !== generation || currentRefreshRevision !== refreshRevision) return;
       const conversation = payload.conversation;
       providerId = conversation.provider.id;
       threadId = conversation.thread.id;
@@ -2383,7 +2729,7 @@ export function createMobileConversationView({
       if (finishingBoot) applyMainScrollGeometryLock();
       startStream();
     } catch (error) {
-      if (currentGeneration !== generation) return;
+      if (currentGeneration !== generation || currentRefreshRevision !== refreshRevision) return;
       if (error.code === 'CONVERSATION_UNAVAILABLE') {
         threadId = undefined;
         if (expectedConversation) {
@@ -2414,6 +2760,46 @@ export function createMobileConversationView({
     updateComposerAction();
   }
 
+  function renderShellMode() {
+    composer.dataset.shell = String(shellMode);
+    shellPrefix.hidden = !shellMode;
+    input.setAttribute('aria-label', shellMode ? 'Shell command' : 'Message');
+    input.placeholder = shellMode ? '' : 'Message Grok…';
+    input.setAttribute('autocapitalize', shellMode ? 'none' : 'sentences');
+    input.spellcheck = !shellMode;
+  }
+
+  function setShellMode(next) {
+    shellMode = Boolean(next);
+    renderShellMode();
+    if (shellMode) closeSuggestions();
+  }
+
+  function syncShellModeFromInput() {
+    const selectionStart = input.selectionStart ?? input.value.length;
+    const selectionEnd = input.selectionEnd ?? selectionStart;
+    const next = shellComposerState(input.value, shellMode);
+    if (next.active === shellMode && next.value === input.value) return false;
+    input.value = next.value;
+    setShellMode(next.active);
+    const removedPrefix = selectionStart > next.value.length || selectionStart !== 0;
+    const start = Math.max(0, selectionStart - (removedPrefix ? 1 : 0));
+    const end = Math.max(start, selectionEnd - (removedPrefix ? 1 : 0));
+    input.setSelectionRange(start, end);
+    return true;
+  }
+
+  function restoreComposerDraft(value) {
+    const restored = shellComposerState(value, false);
+    input.value = restored.value;
+    setShellMode(restored.active);
+  }
+
+  function clearComposerDraft() {
+    input.value = '';
+    setShellMode(false);
+  }
+
   function setComposerExpanded(expanded) {
     const next = Boolean(expanded);
     if (composer.dataset.expanded === String(next)) return;
@@ -2431,26 +2817,57 @@ export function createMobileConversationView({
     // it as a running turn leaves the composer on Stop forever when a replay
     // omits or normalizes the matching user message.
     const pendingDelivery = pendingMessage?.status === 'sending';
-    const turnActive = lastConversation?.activity?.active === true;
+    const providerActivity = lastConversation?.activity;
+    // Once the provider accepts cancellation, its prompt RPC may remain
+    // internally active for a short time so queued sends stay serialized.
+    // That internal drain is not a second stoppable turn: return the composer
+    // to Send while the provider finishes releasing the cancelled request.
+    if (acceptedCancellation && providerActivity?.active !== true) acceptedCancellation = undefined;
+    if (acceptedCancellation && acceptedCancellation.turnId !== undefined &&
+        providerActivity?.turnId !== undefined && acceptedCancellation.turnId !== providerActivity.turnId) {
+      acceptedCancellation = undefined;
+    }
+    const turnActive = providerActivity?.active === true && providerActivity?.cancelRequested !== true &&
+      !acceptedCancellation;
     if (!turnActive) cancellingTurn = false;
     const hasDraft = Boolean(input.value.trim() || attachments.length);
     const switchingSettings = modelBusy || controlBusy;
     const stopAction = turnActive && !hasDraft;
     const waitingAction = pendingDelivery && !turnActive && !hasDraft;
+    const submittingMessage = Boolean(submittingRequest);
     // Changing model or mode only locks submission. It is not a conversation
     // turn, so keep the ordinary Send affordance instead of showing activity.
     const action = switchingSettings ? 'send'
-      : submittingMessage ? 'sending'
-        : cancellingTurn ? 'stopping' : stopAction ? 'stop' : waitingAction ? 'waiting' : 'send';
+      : cancellingTurn ? 'stopping'
+        : stopAction ? 'stop' : submittingMessage ? 'sending' : waitingAction ? 'waiting' : 'send';
     sendButton.dataset.action = action;
     sendButton.textContent = action === 'send' ? '↑' : '';
     sendButton.setAttribute('aria-label', action === 'stop' ? 'Stop response'
       : action === 'stopping' ? 'Stopping response'
         : action === 'sending' ? 'Sending message'
         : action === 'waiting' ? 'Waiting for response' : 'Send message');
-    sendButton.disabled = uploadingAttachments > 0 || switchingSettings ||
+    sendButton.disabled = attachmentUploads.size > 0 || switchingSettings ||
       action === 'sending' || action === 'stopping' || action === 'waiting' ||
       (action === 'send' && !hasDraft);
+  }
+
+  function acknowledgeSubmittedInput(conversation) {
+    const submission = submittingRequest;
+    if (!submission) return;
+    const activity = conversation?.activity || {};
+    const queued = (conversation?.queue || []).some((entry) => entry.id === submission.id);
+    const stored = pendingMessage?.requestId === submission.id &&
+      (conversation?.items || []).some((item) => pendingMessageMatchesItem(pendingMessage, item));
+    const changedTurn = submission.baselineTurnId !== undefined && activity.turnId !== undefined &&
+      submission.baselineTurnId !== activity.turnId;
+    const startedNewTurn = activity.active === true && activity.cancelRequested !== true &&
+      (submission.baselineActive !== true || changedTurn ||
+        (submission.baselineTurnId === undefined && submission.baselineCancelRequested === true));
+    if (!queued && !stored && !startedNewTurn) return;
+    submittingRequest = undefined;
+    if (pendingMessage?.requestId === submission.id && pendingMessage.status === 'sending') {
+      pendingMessage.status = 'accepted';
+    }
   }
 
   composer.addEventListener('submit', async (event) => {
@@ -2462,7 +2879,22 @@ export function createMobileConversationView({
       updateComposerAction();
       try {
         const result = await cancelTurn(sessionName);
-        if (result?.accepted === false) cancellingTurn = false;
+        cancellingTurn = false;
+        if (result?.accepted !== false && lastConversation?.activity?.active === true) {
+          acceptedCancellation = { turnId: lastConversation.activity.turnId };
+          lastConversation = {
+            ...lastConversation,
+            activity: {
+              ...lastConversation.activity,
+              phase: 'stopping',
+              label: 'Stopping…',
+              cancelRequested: true,
+            },
+          };
+          if (rootConversation?.thread?.id === lastConversation.thread?.id) {
+            rootConversation = lastConversation;
+          }
+        }
         void refresh();
       } catch (error) {
         cancellingTurn = false;
@@ -2473,13 +2905,26 @@ export function createMobileConversationView({
       }
       return;
     }
-    const text = input.value.trim();
-    if ((!text && attachments.length === 0) || !sessionName || !providerId || uploadingAttachments) return;
+    const text = shellComposerMessage(input.value, shellMode);
+    if ((!text && attachments.length === 0) || !sessionName || !providerId || attachmentUploads.size) return;
     const sentAttachments = attachments.slice();
     const sentFileMentions = [...mentionedFiles].filter((path) => text.includes(`@${path}`));
     const pendingText = text || sentAttachments.map((attachment) => attachment.name).join(', ');
-    const requestId = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    submittingMessage = true;
+    const requestSignature = JSON.stringify({
+      text,
+      attachmentIds: sentAttachments.map((attachment) => attachment.id),
+      fileMentions: sentFileMentions,
+    });
+    const requestId = retryMessage?.signature === requestSignature
+      ? retryMessage.requestId
+      : crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    retryMessage = undefined;
+    submittingRequest = {
+      id: requestId,
+      baselineActive: lastConversation?.activity?.active === true,
+      baselineCancelRequested: lastConversation?.activity?.cancelRequested === true,
+      baselineTurnId: lastConversation?.activity?.turnId,
+    };
     updateComposerAction();
     let sendRequest;
     try {
@@ -2502,13 +2947,15 @@ export function createMobileConversationView({
       pendingMessage = undefined;
     } else {
       pendingMessage = {
-        text: pendingText, attachments: sentAttachments, fileMentions: sentFileMentions,
+        requestId, text, displayText: pendingText, attachments: sentAttachments,
+        fileMentions: sentFileMentions,
+        baselineItemIds: (lastConversation?.items || []).map((item) => item.id),
         sentAt: Date.now(), status: 'sending',
       };
     }
     followStreamTail = true;
     submittedTurnFollow = true;
-    input.value = '';
+    clearComposerDraft();
     attachments = [];
     mentionedFiles.clear();
     closeSuggestions();
@@ -2545,14 +2992,17 @@ export function createMobileConversationView({
         }
       } else {
         optimisticQueuedInputs.delete(requestId);
-        if (!pendingMessage) {
+        const alreadyReconciled = reconciledPendingRequests.delete(requestId);
+        if (!pendingMessage && !alreadyReconciled) {
           pendingMessage = {
-            text: pendingText, attachments: sentAttachments, fileMentions: sentFileMentions,
+            requestId, text, displayText: pendingText, attachments: sentAttachments,
+            fileMentions: sentFileMentions,
+            baselineItemIds: (lastConversation?.items || []).map((item) => item.id),
             sentAt: Date.now(), status: 'accepted',
           };
         }
-        if (pendingMessage?.text === pendingText) pendingMessage.status = 'accepted';
-        schedulePendingAcceptanceFailure(pendingText);
+        if (pendingMessage?.requestId === requestId) pendingMessage.status = 'accepted';
+        if (pendingMessage?.requestId === requestId) schedulePendingAcceptanceFailure(requestId);
       }
       state.textContent = 'Queued';
       state.dataset.state = 'working';
@@ -2562,13 +3012,13 @@ export function createMobileConversationView({
     } catch (error) {
       submittedTurnFollow = false;
       pendingMessage = undefined;
+      reconciledPendingRequests.delete(requestId);
       optimisticQueuedInputs.delete(requestId);
       attachments = [];
-      uploadingAttachments = 0;
       renderAttachmentTray();
       pendingQuestions.clear();
       pendingPlanReviews.clear();
-      input.value = text;
+      restoreComposerDraft(text);
       attachments = sentAttachments;
       for (const path of sentFileMentions) mentionedFiles.add(path);
       renderAttachmentTray();
@@ -2579,7 +3029,7 @@ export function createMobileConversationView({
       state.dataset.state = 'error';
       input.focus({ preventScroll: true });
     } finally {
-      submittingMessage = false;
+      if (submittingRequest?.id === requestId) submittingRequest = undefined;
       updateComposerAction();
     }
   });
@@ -2595,6 +3045,7 @@ export function createMobileConversationView({
     });
   });
   input.addEventListener('input', () => {
+    syncShellModeFromInput();
     autoSizeInput();
     updateSuggestions();
   });
@@ -2616,53 +3067,62 @@ export function createMobileConversationView({
     setComposerExpanded(restoreFocus);
     if (restoreFocus) input.focus({ preventScroll: true });
   }
-  fileInput.addEventListener('change', async () => {
-    const files = [...fileInput.files].slice(0, Math.max(0, 8 - attachments.length));
-    fileInput.value = '';
-    if (!files.length || !sessionName) {
-      restoreComposerAfterAttachmentPicker();
-      return;
-    }
+  async function enqueueAttachmentFiles(selectedFiles) {
+    const files = [...selectedFiles]
+      .filter((file) => file && typeof file.size === 'number')
+      .slice(0, Math.max(0, 8 - attachments.length - attachmentUploads.size));
+    if (!files.length || !sessionName) return;
+    const uploadSessionName = sessionName;
+    const uploadGeneration = generation;
     const pendingUploads = files.map((file) => ({
-      file,
-      upload: {
         id: crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         name: file.name || 'Attachment', progress: 0, status: 'uploading', error: '',
-        controller: new AbortController(),
-      },
+        controller: new AbortController(), file, sessionName: uploadSessionName, generation: uploadGeneration,
     }));
-    uploadingAttachments += pendingUploads.length;
-    for (const { upload } of pendingUploads) attachmentUploads.set(upload.id, upload);
+    for (const upload of pendingUploads) attachmentUploads.set(upload.id, upload);
     renderAttachmentTray();
     autoSizeInput();
     // The native picker temporarily owns focus. Restore the pre-picker input
     // state while this trusted change event is active so iOS keeps/reopens the
     // keyboard only for people who were already typing.
     restoreComposerAfterAttachmentPicker();
-    for (const { file, upload } of pendingUploads) {
-      try {
-        attachments.push(await uploadAttachment(sessionName, file, (progress) => {
-          upload.progress = progress;
-          renderAttachmentTray();
-        }, { signal: upload.controller.signal }));
-        attachmentUploads.delete(upload.id);
-      } catch (error) {
-        if (upload.controller.signal.aborted || error?.name === 'AbortError') {
-          attachmentUploads.delete(upload.id);
-        } else {
-          upload.status = 'error';
-          upload.error = error.message || 'Upload failed';
-          state.textContent = upload.error;
-          state.dataset.state = 'error';
-        }
-      } finally {
-        uploadingAttachments -= 1;
-        renderAttachmentTray();
-        autoSizeInput();
-      }
+    for (const upload of pendingUploads) await runAttachmentUpload(upload);
+  }
+  fileInput.addEventListener('change', async () => {
+    const files = [...fileInput.files];
+    fileInput.value = '';
+    if (!files.length || !sessionName) {
+      restoreComposerAfterAttachmentPicker();
+      return;
     }
+    await enqueueAttachmentFiles(files);
   });
   fileInput.addEventListener('cancel', restoreComposerAfterAttachmentPicker);
+  root.addEventListener('dragenter', (event) => {
+    if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'copy';
+    root.dataset.dragover = 'true';
+  });
+  root.addEventListener('dragover', (event) => {
+    if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'copy';
+    root.dataset.dragover = 'true';
+  });
+  root.addEventListener('dragleave', (event) => {
+    event.stopPropagation();
+    if (!root.contains(event.relatedTarget)) delete root.dataset.dragover;
+  });
+  root.addEventListener('drop', (event) => {
+    if (!event.dataTransfer?.files?.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    delete root.dataset.dragover;
+    void enqueueAttachmentFiles(event.dataTransfer.files);
+  });
   function retainComposerInputFocus(event) {
     if (document.activeElement !== input) return;
     // Picker controls must remain usable without dismissing the iOS keyboard.
@@ -2718,6 +3178,12 @@ export function createMobileConversationView({
     closeSuggestions();
   });
   input.addEventListener('keydown', (event) => {
+    if (shellMode && event.key === 'Backspace' && !event.isComposing && input.value.length === 0) {
+      event.preventDefault();
+      setShellMode(false);
+      autoSizeInput();
+      return;
+    }
     if (!suggestions.hidden && suggestionItems.length) {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault();
@@ -2827,14 +3293,28 @@ export function createMobileConversationView({
     }
   });
   document.addEventListener('visibilitychange', handleVisibilityChange);
+  document.addEventListener('freeze', suspendForBackground);
+  document.addEventListener('resume', handleOnline);
   window.addEventListener('pagehide', suspendForBackground);
   window.addEventListener('pageshow', handlePageShow);
   window.addEventListener('blur', suspendForBackground);
   window.addEventListener('focus', handleWindowFocus);
   window.addEventListener('online', handleOnline);
+  foregroundProbeTimer = setInterval(probeForegroundLiveness, 2_000);
+  renderShellMode();
   autoSizeInput();
 
   return {
+    async uploadAttachment(nextSessionName, file, onProgress, options) {
+      return uploadAttachment(nextSessionName, file, onProgress, options);
+    },
+    enqueueFiles(selectedFiles) {
+      return enqueueAttachmentFiles(selectedFiles);
+    },
+    setDragOver(next) {
+      if (next) root.dataset.dragover = 'true';
+      else delete root.dataset.dragover;
+    },
     showPending(nextSessionName) {
       if (!media.matches || !nextSessionName) return setAvailable(false);
       if (sessionName === nextSessionName && available) return;
@@ -2862,15 +3342,18 @@ export function createMobileConversationView({
       parentId = undefined;
       providerId = undefined;
       pendingMessage = undefined;
+      reconciledPendingRequests.clear();
       optimisticQueuedInputs.clear();
       cancellingTurn = false;
+      submittingRequest = undefined;
+      acceptedCancellation = undefined;
       historyPrependAnchor = undefined;
       interactionMotionKey = '';
       pendingPlanReviews.clear();
       attachments = [];
-      attachmentUploads.clear();
+      abortAttachmentUploads();
       mentionedFiles.clear();
-      uploadingAttachments = 0;
+      retryMessage = undefined;
       renderAttachmentTray();
       lastConversation = undefined;
       renderedSignature = '';
@@ -2937,14 +3420,17 @@ export function createMobileConversationView({
       parentId = undefined;
       providerId = undefined;
       pendingMessage = undefined;
+      reconciledPendingRequests.clear();
       optimisticQueuedInputs.clear();
       cancellingTurn = false;
+      submittingRequest = undefined;
+      acceptedCancellation = undefined;
       interactionMotionKey = '';
       pendingPlanReviews.clear();
       attachments = [];
-      attachmentUploads.clear();
+      abortAttachmentUploads();
       mentionedFiles.clear();
-      uploadingAttachments = 0;
+      retryMessage = undefined;
       renderAttachmentTray();
       clearTimeout(pendingAcceptanceTimer);
       clearTimeout(suggestionTimer);
@@ -3009,6 +3495,8 @@ export function createMobileConversationView({
       rootThreadId = undefined;
       rootConversation = undefined;
       lastConversation = undefined;
+      submittingRequest = undefined;
+      acceptedCancellation = undefined;
       renderedSignature = '';
       if (!media.matches) return;
       setBooting(true);
@@ -3022,9 +3510,12 @@ export function createMobileConversationView({
     },
     destroy() {
       generation += 1;
+      submittingRequest = undefined;
+      acceptedCancellation = undefined;
       clearTimeout(refreshTimer);
       clearTimeout(foregroundResumeTimer);
       clearTimeout(streamWatchdogTimer);
+      clearInterval(foregroundProbeTimer);
       clearTimeout(pendingAcceptanceTimer);
       clearTimeout(readerScrollGestureTimer);
       releaseMainScrollGeometryLock();
@@ -3033,6 +3524,8 @@ export function createMobileConversationView({
       closeStream();
       document.removeEventListener('pointerdown', dismissModelList);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('freeze', suspendForBackground);
+      document.removeEventListener('resume', handleOnline);
       window.removeEventListener('pagehide', suspendForBackground);
       window.removeEventListener('pageshow', handlePageShow);
       window.removeEventListener('blur', suspendForBackground);

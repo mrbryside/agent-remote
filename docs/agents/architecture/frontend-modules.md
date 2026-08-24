@@ -13,7 +13,9 @@ large block to `public/app.js` or `public/mobile-conversation.js`.
   It owns the live conversation state machine, DOM event wiring, sheets,
   composer orchestration, and rendering order. File presentation, timeline
   events, interactive question/plan cards, pure state, ranking, persistence,
-  and keyed DOM reconciliation belong in focused modules.
+  and keyed DOM reconciliation belong in focused modules. Short histories
+  start at the top of the scroll surface; tail following is owned by scroll
+  state and must not be simulated with a flexible spacer before the timeline.
 
 ## Focused modules
 
@@ -25,6 +27,8 @@ large block to `public/app.js` or `public/mobile-conversation.js`.
 | `public/mobile-activity-state.js` | Per-session Plan/Browser/Agents dismissal persistence and new-activity comparison. |
 | `public/mobile-composer-model.js` | Slash/file completion detection and deterministic command ranking. |
 | `public/mobile-timeline-reconciler.js` | Keyed timeline DOM reuse and streaming-message morph decisions. |
+| `public/mobile-stream-batcher.js` | Visual-cadence coalescing for contiguous compact assistant chunks. |
+| `public/mobile-sheet.js` | Shared compact sheet frame slots, drag-to-dismiss behavior, and geometry reset. |
 | `public/mobile-file-surface.js` | File preview sheet, image/search results, and diff presentation. |
 | `public/mobile-event-renderer.js` | Tool, event, permission, and grouped-tool cards. |
 | `public/mobile-interaction-renderer.js` | Multi-step question and plan-review interaction cards. |

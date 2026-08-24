@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createServer as createHttpServer, request as createHttpRequest } from 'node:http';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -12,6 +12,7 @@ import { createAgentCatalog } from './agents.js';
 import {
   closeTerminalBrowserAgentSession,
   reapStaleTerminalBrowserAgentSessions,
+  terminalBrowserAgentPaths,
 } from './browser-automation.js';
 import { createGrokConversationProvider } from './conversations/grok.js';
 import { createGrokAcpClient } from './conversations/acp-client.js';
@@ -53,6 +54,11 @@ import {
   controlTerminalBrowser,
   createTerminalBrowserLister,
 } from './server/terminal-browser-client.js';
+import {
+  createTerminalBrowserSupervisor,
+  terminalBrowserOwnedListing,
+  terminalBrowserServerEnvironment,
+} from './server/terminal-browser-supervisor.js';
 import { createDevtoolsProxy } from './server/devtools-proxy.js';
 import { createWorkspaceHttpHandler } from './server/workspace-http.js';
 import { installConversationSocket } from './server/conversation-socket.js';
@@ -137,7 +143,7 @@ export function createTerminalServer(options = {}) {
   const rendererCleanups = new Set();
   const rendererDiscoveryAttempts = Number.isInteger(options.rendererDiscoveryAttempts)
     ? Math.max(1, options.rendererDiscoveryAttempts)
-    : 50;
+    : 110;
   const rendererDiscoveryIntervalMs = Number.isInteger(options.rendererDiscoveryIntervalMs)
     ? Math.max(0, options.rendererDiscoveryIntervalMs)
     : 200;
@@ -153,9 +159,9 @@ export function createTerminalServer(options = {}) {
   const sessionRendererSweepIntervalMs = Number.isInteger(options.sessionRendererSweepIntervalMs)
     ? Math.max(0, options.sessionRendererSweepIntervalMs)
     : 10_000;
-  const closeBrowserAutomationSession = options.closeBrowserAutomationSession
+  const closeBrowserAutomationSessionImpl = options.closeBrowserAutomationSession
     ?? closeTerminalBrowserAgentSession;
-  const reapBrowserAutomationSessions = options.reapBrowserAutomationSessions
+  const reapBrowserAutomationSessionsImpl = options.reapBrowserAutomationSessions
     ?? reapStaleTerminalBrowserAgentSessions;
   const projectStore = createProjectStore(config.databaseFile);
   let localControlUrl = '';
@@ -232,10 +238,16 @@ export function createTerminalServer(options = {}) {
     spawn: options.grokAcpSpawn,
     logger: options.grokAcpLogger,
     leaderSocket: config.grokLeaderSocket,
+    // Ephemeral test/preview databases must reap their detached Grok leader;
+    // production keeps the shared leader alive for the managed TUI session.
+    terminateLeaderOnClose: options.grokTerminateLeaderOnClose === true ||
+      resolvePath(config.databaseFile).startsWith(resolvePath(tmpdir()) + '/') ||
+      resolvePath(config.databaseFile).includes('/test-results/'),
     environment: () => ({
       AGENT_REMOTE_WEB: '1',
       AGENT_REMOTE_ACP: '1',
       ...(localControlUrl ? { AGENT_REMOTE_URL: localControlUrl } : {}),
+      AGENT_REMOTE_TOKEN: config.token,
       PATH: `${agentRemoteBin}${delimiter}${process.env.PATH ?? ''}`,
     }),
     defaultPermissionMode: options.grokDefaultPermissionMode ?? configuredGrokPermissionMode(),
@@ -363,7 +375,16 @@ export function createTerminalServer(options = {}) {
     return { ...session, processId };
   }
 
-  async function resolveControlSession({ session, cwd } = {}) {
+  async function resolveControlSession({ threadId, session, cwd } = {}) {
+    if (threadId) {
+      const owners = (await listWorkspaceSessions()).filter((item) =>
+        item.conversationThreadId === threadId);
+      if (owners.length === 1) return { session: owners[0].name };
+      if (owners.length > 1) return { error: 'More than one chat owns that Grok session' };
+      // Never fall through to a stale tmux identity inherited from the shared
+      // leader. A per-tool Grok thread id is authoritative and fails closed.
+      return { error: 'No active chat owns that Grok session' };
+    }
     if (session) return { session };
     if (!cwd) return { session: undefined };
     const requestedCwd = resolvePath(cwd);
@@ -428,10 +449,65 @@ export function createTerminalServer(options = {}) {
     return `'${value.replaceAll("'", `'"'"'`)}'`;
   }
 
-  const listTerminalBrowsers = createTerminalBrowserLister({
-    override: options.listTerminalBrowsers,
+  const terminalBrowserEnvironment = terminalBrowserServerEnvironment({
+    environment: process.env,
+    databaseFile: config.databaseFile,
+  });
+  const terminalBrowserPaths = terminalBrowserAgentPaths({ environment: terminalBrowserEnvironment });
+  const hostTerminalBrowserPaths = terminalBrowserAgentPaths({ environment: process.env });
+  const listAllTerminalBrowsers = createTerminalBrowserLister({
     execFile: execFileAsync,
     command: join(agentRemoteBin, 'terminal-browser'),
+    environment: terminalBrowserEnvironment,
+  });
+  const listTerminalBrowsers = options.listTerminalBrowsers ?? terminalBrowserOwnedListing(
+    listAllTerminalBrowsers,
+    terminalBrowserPaths,
+  );
+  const closeBrowserAutomationSession = options.closeBrowserAutomationSession
+    ? closeBrowserAutomationSessionImpl
+    : async (browserKey) => {
+        const privateClosed = await closeBrowserAutomationSessionImpl(browserKey, {
+          environment: terminalBrowserEnvironment,
+          paths: terminalBrowserPaths,
+        });
+        const hostClosed = terminalBrowserPaths.socketDir === hostTerminalBrowserPaths.socketDir
+          ? false
+          : await closeBrowserAutomationSessionImpl(browserKey, {
+              environment: process.env,
+              paths: hostTerminalBrowserPaths,
+            });
+        return privateClosed || hostClosed;
+      };
+  const reapBrowserAutomationSessions = options.reapBrowserAutomationSessions
+    ? reapBrowserAutomationSessionsImpl
+    : (activeBrowserKeys, cleanupOptions = {}) => reapBrowserAutomationSessionsImpl(activeBrowserKeys, {
+        ...cleanupOptions,
+        environment: terminalBrowserEnvironment,
+        paths: terminalBrowserPaths,
+      });
+  const terminalBrowserSupervisor = createTerminalBrowserSupervisor({
+    override: options.terminalBrowserSupervisor,
+    environment: terminalBrowserEnvironment,
+    command: join(agentRemoteBin, 'terminal-browser'),
+    execFile: execFileAsync,
+    listBrowsers: listTerminalBrowsers,
+    reapAgentSessions: reapBrowserAutomationSessions,
+    paths: terminalBrowserPaths,
+    sweepIntervalMs: options.terminalBrowserSweepIntervalMs,
+  });
+  const recoverTerminalBrowser = options.recoverTerminalBrowser
+    ?? (() => terminalBrowserSupervisor.recover());
+  const executeBrowserAction = options.executeBrowserAction ?? (async (browserKey, actionArgs) => {
+    const { stdout, stderr } = await execFileAsync(
+      join(agentRemoteBin, 'terminal-browser'),
+      ['action', '--browser', browserKey, ...actionArgs],
+      {
+        encoding: 'utf8', timeout: 30_000, maxBuffer: 8 * 1024 * 1024,
+        env: { ...process.env, AGENT_REMOTE_GRAPHICS: '1' },
+      },
+    );
+    return { stdout, stderr };
   });
 
   const rendererSurface = createRendererSurfaceController({
@@ -441,14 +517,17 @@ export function createTerminalServer(options = {}) {
   });
   const {
     broadcastCursor,
+    closeRendererTabs,
     configureRendererViewport,
     connectRendererSurface,
     controlRendererTab,
     rendererForDevtoolsAccess,
     rendererForSession,
+    rendererStateForSession,
     rendererFrameMessage,
     refreshRendererSurface,
     requestRendererViewport,
+    restoreRendererViewport,
     scheduleCursorProbe,
     sendCdp,
     sendRendererFrame,
@@ -465,6 +544,8 @@ export function createTerminalServer(options = {}) {
     rendererCleanups,
     closeBrowserAutomationSession,
     listTerminalBrowsers,
+    recoverTerminalBrowser,
+    terminalBrowserEnvironment,
     rendererSurface,
     shellQuote,
     getLocalPort: () => server.address().port,
@@ -486,6 +567,7 @@ export function createTerminalServer(options = {}) {
     clientContexts,
     rendererSurface,
     controlRendererTab,
+    closeRendererTabs,
     closeRenderer,
   });
 
@@ -525,9 +607,17 @@ export function createTerminalServer(options = {}) {
     clientContexts,
     conversationStreams,
     rendererForSession,
+    rendererStateForSession,
     controlRendererTab,
+    closeRendererTabs,
+    closeRenderer,
+    restoreRendererViewport,
     controlTerminalBrowser,
     browserListing,
+    executeBrowserAction,
+    browserOpenReadyTimeoutMs: Number.isInteger(options.browserOpenReadyTimeoutMs)
+      ? Math.max(100, options.browserOpenReadyTimeoutMs)
+      : 55_000,
   });
 
   const devtoolsClients = new Set();
@@ -554,6 +644,7 @@ export function createTerminalServer(options = {}) {
     serveStaticAsset,
     rendererForDevtoolsAccess,
     proxyDevtoolsAsset,
+    closeRenderer,
   });
 
   const handleHttpFailure = (response) => {
@@ -760,8 +851,13 @@ export function createTerminalServer(options = {}) {
       // housekeeping and must not gate Remote access or make it depend on a
       // user opening the local UI.
       remoteRestore = restoreNamedTunnel().catch(() => {});
+      await terminalBrowserSupervisor.start().catch(() => {});
       const activeBrowserKeys = new Set((await listTerminalBrowsers()).map((browser) => browser.key).filter(Boolean));
-      await reapBrowserAutomationSessions(activeBrowserKeys).catch(() => {});
+      await terminalBrowserSupervisor.sweep(activeBrowserKeys).catch(() => {});
+      const allBrowserKeys = new Set((await listAllTerminalBrowsers()).map((browser) => browser.key).filter(Boolean));
+      await reapStaleTerminalBrowserAgentSessions(allBrowserKeys, {
+        environment: process.env, paths: hostTerminalBrowserPaths,
+      }).catch(() => {});
       return { url: localUrl, localUrl, remoteUrl };
     },
     async close() {
@@ -772,6 +868,7 @@ export function createTerminalServer(options = {}) {
       // A renderer closing concurrently can discover its browser key and add
       // the exact worker cleanup while the first wait is in flight.
       await Promise.allSettled([...browserAgentCleanups]);
+      await terminalBrowserSupervisor.stop().catch(() => {});
       // A browser that has gone to sleep (common on phones) may never answer a
       // WebSocket close handshake. Terminate server-owned sockets during full
       // shutdown so both loopback listeners release their ports deterministically.

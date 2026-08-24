@@ -1,13 +1,13 @@
 import { createConnection } from 'node:net';
 
-export function createTerminalBrowserLister({ override, execFile, command }) {
+export function createTerminalBrowserLister({ override, execFile, command, environment = process.env }) {
   if (override) return override;
   return async function listTerminalBrowsers() {
     try {
       const { stdout } = await execFile(command, ['ls', '--all', '--json'], {
         encoding: 'utf8',
         maxBuffer: 4 * 1024 * 1024,
-        env: { ...process.env, AGENT_REMOTE_GRAPHICS: '1' },
+        env: { ...environment, AGENT_REMOTE_GRAPHICS: '1' },
       });
       const parsed = JSON.parse(stdout);
       return Array.isArray(parsed.browsers) ? parsed.browsers : [];

@@ -9,7 +9,9 @@ function sendJson(socket, payload) {
 
 export function createRendererLifecycle({
   options, config, agentRemoteBin, renderers, browserAgentCleanups, rendererCleanups,
-  closeBrowserAutomationSession, listTerminalBrowsers, rendererSurface, shellQuote,
+  closeBrowserAutomationSession, listTerminalBrowsers, recoverTerminalBrowser,
+  terminalBrowserEnvironment,
+  rendererSurface, shellQuote,
   getLocalPort, isServerClosing, rendererCloseGraceMs, rendererCloseMinimumMs,
   rendererClosePollMs, rendererDiscoveryAttempts, rendererDiscoveryIntervalMs,
   sessionRendererSweepIntervalMs,
@@ -19,6 +21,7 @@ export function createRendererLifecycle({
   } = rendererSurface;
   let sessionRendererSweepTimer;
   let sessionRendererSweepRunning = false;
+  const rendererClosingTasks = new Map();
   function rendererBrowserCandidate(renderer, browsers, previousKeys = new Set()) {
     const claimed = new Set([...renderers.values()]
       .filter((item) => item !== renderer)
@@ -95,10 +98,21 @@ export function createRendererLifecycle({
   }
 
   function trackRendererClose(renderer) {
-    const task = finishRendererClose(renderer)
+    // A replacement renderer may be requested immediately after its pane is
+    // closed. Serialize cleanup by renderer key so the new terminal-browser
+    // cannot reuse the private profile/socket while the old process is still
+    // unregistering it.
+    const previous = rendererClosingTasks.get(renderer.key);
+    const task = (previous ? previous.catch(() => {}) : Promise.resolve())
+      .then(() => finishRendererClose(renderer))
       .catch(() => killRendererTerminal(renderer))
-      .finally(() => rendererCleanups.delete(task));
+      .finally(() => {
+        rendererCleanups.delete(task);
+        if (rendererClosingTasks.get(renderer.key) === task) rendererClosingTasks.delete(renderer.key);
+      });
+    rendererClosingTasks.set(renderer.key, task);
     rendererCleanups.add(task);
+    return task;
   }
 
   async function sweepSessionRenderers() {
@@ -159,20 +173,46 @@ export function createRendererLifecycle({
     const commandName = argv[0].split('/').at(-1);
     const discoversBrowser = commandName === 'terminal-browser';
     renderer.browserLaunchStarted = discoversBrowser;
-    const previous = discoversBrowser
-      ? new Set((await listTerminalBrowsers()).map((browser) => browser.key))
-      : null;
-    renderer.previousBrowserKeys = previous || new Set();
-    if (renderer.closing) return;
-    setRendererState(renderer, discoversBrowser ? 'starting' : 'terminal');
+    const previousClose = rendererClosingTasks.get(renderer.key);
+    if (previousClose) {
+      if (discoversBrowser) setRendererState(renderer, 'starting', 'Finishing the previous browser shutdown…');
+      await previousClose.catch(() => {});
+      if (renderer.closing) return undefined;
+    }
     const command = argv.map(shellQuote).join(' ');
-    renderer.terminal.write(`${discoversBrowser ? 'TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK=1 ' : ''}${command}\r`);
-    if (previous) await discoverRendererSurface(renderer, previous);
+    const launch = async (message) => {
+      const previous = discoversBrowser
+        ? new Set((await listTerminalBrowsers()).map((browser) => browser.key))
+        : null;
+      renderer.previousBrowserKeys = previous || new Set();
+      if (renderer.closing) return undefined;
+      setRendererState(renderer, discoversBrowser ? 'starting' : 'terminal', message);
+      renderer.terminal.write(`${discoversBrowser ? 'TERMINAL_BROWSER_SKIP_GRAPHICS_CHECK=1 ' : ''}${command}\r`);
+      return previous ? discoverRendererSurface(renderer, previous) : undefined;
+    };
+    try {
+      return await launch();
+    } catch (error) {
+      if (!discoversBrowser || renderer.closing || renderer.browserRecoveryAttempted) throw error;
+      renderer.browserRecoveryAttempted = true;
+      // Discovery is deliberately longer than terminal-browser's own bounded
+      // open timeout. By this point its foreground client has returned to the
+      // renderer shell, so a retry cannot be typed into the first process's
+      // stdin. Sending Ctrl-C here is unsafe: if the client already exited it
+      // would kill the profile-free renderer shell itself.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (!await recoverTerminalBrowser()) throw error;
+      try {
+        return await launch('Restarting an unresponsive browser service…');
+      } catch (retryError) {
+        throw new Error(`${retryError.message || 'terminal-browser failed'} after automatic service recovery`);
+      }
+    }
   }
 
   function rendererEnvironment() {
     const environment = {
-      ...process.env,
+      ...terminalBrowserEnvironment,
       PATH: `${agentRemoteBin}${process.platform === 'win32' ? ';' : ':'}${process.env.PATH ?? ''}`,
       AGENT_REMOTE_WEB: '1',
       AGENT_REMOTE_URL: `http://127.0.0.1:${getLocalPort()}`,
@@ -226,8 +266,10 @@ export function createRendererLifecycle({
       stateMessage: undefined,
       browserKey: undefined,
       launchSignature: undefined,
+      launchGeneration: 0,
       browserLaunchStarted: false,
       previousBrowserKeys: new Set(),
+      browserRecoveryAttempted: false,
       agentCleanupStarted: false,
       terminalKilled: false,
       browserSocket: undefined,
@@ -239,8 +281,10 @@ export function createRendererLifecycle({
       lastFrame: undefined,
       frameSequence: 0,
       viewport: undefined,
+      scale: undefined,
       viewportGeneration: 0,
       pendingViewport: undefined,
+      pendingScale: undefined,
       forceViewportConfiguration: false,
       configuringViewport: false,
       screencastStarted: false,
@@ -248,7 +292,12 @@ export function createRendererLifecycle({
       cursorProbePoint: undefined,
       cursorProbeTimer: undefined,
       cursorProbeRunning: false,
+      sharpFrameTimer: undefined,
+      sharpFrameRunning: false,
       refreshing: false,
+      refreshPromise: undefined,
+      pendingBrowserState: undefined,
+      tabControlQueue: undefined,
       tabPoll: undefined,
       devtoolsAccess: randomBytes(24).toString('base64url'),
     };
@@ -273,6 +322,7 @@ export function createRendererLifecycle({
       renderer.exit?.dispose();
       clearInterval(renderer.tabPoll);
       clearTimeout(renderer.cursorProbeTimer);
+      clearTimeout(renderer.sharpFrameTimer);
       for (const client of renderer.clients) {
         sendJson(client, renderer.surface
           ? { type: 'closed', reason: 'Browser process exited' }
@@ -292,6 +342,7 @@ export function createRendererLifecycle({
     cleanUpRendererBrowserAgent(renderer);
     clearInterval(renderer.tabPoll);
     clearTimeout(renderer.cursorProbeTimer);
+    clearTimeout(renderer.sharpFrameTimer);
     if (renderer.cdp && renderer.cdp.readyState < WebSocket.CLOSING) renderer.cdp.close();
     for (const client of renderer.clients) {
       sendJson(client, { type: 'closed', reason });

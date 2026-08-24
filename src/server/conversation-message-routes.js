@@ -1,6 +1,9 @@
 import { resolveProjectFiles } from '../conversations/files.js';
 import { json, readJson } from './http.js';
 
+const inputRequestRetentionMs = 15 * 60_000;
+const maxRememberedInputRequests = 1_000;
+
 function conversationOptions(url) {
   const threadId = url.searchParams.get('thread') || undefined;
   const historyLimitValue = url.searchParams.get('historyLimit');
@@ -102,8 +105,14 @@ export function createConversationMessageRouteHandler({
         attachments: resolvedAttachments.map((attachment) => attachmentView(session.name, attachment)),
       });
       if (requestKey) {
+        while (inputRequests.size >= maxRememberedInputRequests) {
+          inputRequests.delete(inputRequests.keys().next().value);
+        }
         inputRequests.set(requestKey, { signature, delivery });
-        const forget = setTimeout(() => inputRequests.delete(requestKey), 60_000);
+        // Mobile browsers can suspend a tab long enough to miss the delivery
+        // reconciliation window. Retain the original promise so retrying the
+        // same request id remains idempotent after a background/foreground cycle.
+        const forget = setTimeout(() => inputRequests.delete(requestKey), inputRequestRetentionMs);
         forget.unref?.();
         delivery.catch(() => {
           clearTimeout(forget);

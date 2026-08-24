@@ -126,13 +126,44 @@ function toolMatches(update) {
     })).slice(0, 500);
 }
 
+function displayBasename(value) {
+  if (typeof value !== 'string' || !value) return '';
+  return basename(value.replaceAll('\\', '/'));
+}
+
 function toolSubject(update) {
   const input = update.rawInput ?? update._meta?.['x.ai/tool']?.input;
   if (!input || typeof input !== 'object' || Array.isArray(input)) return '';
   const path = input.target_file ?? input.file_path ?? input.path ?? input.target_directory;
-  if (typeof path === 'string' && path) return basename(path);
+  if (typeof path === 'string' && path) return displayBasename(path);
   const value = input.description ?? input.query ?? input.pattern ?? input.url ?? input.command;
   return shortText(value, '', 180);
+}
+
+function formatReadToolTitle(item, update) {
+  if (item.kind !== 'read') return;
+  const input = subagentInput(update);
+  const file = update.rawOutput?.FileContent;
+  const path = file?.absolute_path ?? input.target_file ?? input.file_path ?? input.path ??
+    item.file?.path ?? item.locations?.[0];
+  const subject = shortText(displayBasename(path) || item.subject, '', 180);
+  if (!subject) return;
+  item.subject = subject;
+
+  // Grok's native history derives this range from structured ReadFile data,
+  // not from the raw title. Preserve that compact representation while the
+  // full path remains available in `file` and `locations` for navigation.
+  const offset = finiteTokenCount(file?.offset ?? input.offset);
+  const limit = finiteTokenCount(file?.limit ?? input.limit);
+  const total = finiteTokenCount(file?.total_lines);
+  let range = '';
+  if (offset !== undefined && limit !== undefined && total !== undefined &&
+      offset >= 0 && limit > 0 && total > 0) {
+    const start = Math.min(total, offset + 1);
+    const end = Math.min(total, offset + limit);
+    if (end >= start) range = ` (${start}–${end} of ${total})`;
+  }
+  item.title = `Read ${subject}${range}`;
 }
 
 function skillReadInfo(update, item) {
@@ -315,6 +346,49 @@ function updateValue(record) {
   return update && typeof update === 'object' ? update : undefined;
 }
 
+function recordTimestampMs(record) {
+  const agentTimestamp = Number(record?.params?._meta?.agentTimestampMs);
+  if (Number.isFinite(agentTimestamp) && agentTimestamp > 0) return agentTimestamp;
+  const timestamp = Number(record?.timestamp);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return undefined;
+  return timestamp < 10_000_000_000 ? timestamp * 1_000 : timestamp;
+}
+
+function cancelledTurnItem(updates, index) {
+  const record = updates[index];
+  const update = updateValue(record);
+  if (update?.sessionUpdate !== 'turn_completed') return undefined;
+  const stopReason = shortText(update.stopReason || update.stop_reason, '', 80);
+  if (!/(?:cancel|interrupt|abort)/i.test(stopReason)) return undefined;
+  const completedAt = recordTimestampMs(record);
+  let startedAt;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const candidate = updates[cursor];
+    const kind = updateValue(candidate)?.sessionUpdate;
+    if (kind === 'turn_completed') break;
+    if (kind === 'user_message_chunk') startedAt = recordTimestampMs(candidate) || startedAt;
+    if (kind === 'turn_started') {
+      startedAt = recordTimestampMs(candidate) || startedAt;
+      break;
+    }
+  }
+  const suppliedDuration = Number(update.duration_ms ?? update.durationMs);
+  const durationMs = Number.isFinite(suppliedDuration) && suppliedDuration >= 0
+    ? suppliedDuration
+    : completedAt !== undefined && startedAt !== undefined
+      ? Math.max(0, completedAt - startedAt)
+      : undefined;
+  return {
+    id: `turn-${index}`,
+    type: 'turn',
+    title: 'Turn cancelled by user',
+    status: 'cancelled',
+    stopReason,
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    timestamp: record.timestamp,
+  };
+}
+
 function subagentInput(update) {
   const input = update?.rawInput ?? update?.input ?? update?._meta?.['x.ai/tool']?.input;
   return input && typeof input === 'object' && !Array.isArray(input) ? input : {};
@@ -323,6 +397,21 @@ function subagentInput(update) {
 function toolMeta(update) {
   const meta = update?._meta?.['x.ai/tool'];
   return meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+}
+
+function toolSummary(update) {
+  const meta = toolMeta(update);
+  const inputs = [update?.rawInput, update?.input, meta.input];
+  const candidates = [update?.summary, update?.description];
+  for (const input of inputs) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) continue;
+    candidates.push(input.summary, input.description);
+  }
+  for (const candidate of candidates) {
+    const summary = shortText(candidate, '', 500);
+    if (summary) return summary;
+  }
+  return '';
 }
 
 function isSubagentSpawn(update, { allowTaskKind = true } = {}) {
@@ -635,18 +724,22 @@ function timeline(updates, { turnActive } = {}) {
 
       let item = tools.get(id);
       if (!item) {
+        const summary = toolSummary(update);
         item = {
           id: `tool-${id}`, type: 'tool', toolCallId: id,
           title: shortText(update._meta?.['x.ai/tool']?.label || update.title, 'Tool'),
           name: shortText(update._meta?.['x.ai/tool']?.name, '', 100),
           kind: shortText(update.kind || update._meta?.['x.ai/tool']?.kind, 'tool', 40),
           subject: toolSubject(update),
+          ...(summary ? { summary } : {}),
           status: 'running', timestamp: record.timestamp,
         };
         tools.set(id, item);
         items.push(item);
       }
       if (typeof update.title === 'string') item.title = shortText(update.title, item.title, 500);
+      const summary = toolSummary(update);
+      if (summary) item.summary = summary;
       if (typeof update.kind === 'string' || typeof meta?.kind === 'string') {
         const nextKind = shortText(update.kind || meta?.kind, item.kind, 60);
         // Completion updates commonly report the generic `other` kind. Keep
@@ -673,6 +766,7 @@ function timeline(updates, { turnActive } = {}) {
       const matches = toolMatches(update);
       if (matches.length) item.matches = matches;
       classifySkillRead(item, update);
+      formatReadToolTitle(item, update);
       if (typeof update.status === 'string') {
         const nextStatus = normalizedStatus(update.status, item.status);
         if (!settledTools.has(id) || ['completed', 'failed', 'cancelled'].includes(nextStatus)) {
@@ -996,6 +1090,8 @@ function timeline(updates, { turnActive } = {}) {
     }
     if (kind === 'turn_completed') {
       settleOpenTools();
+      const cancellation = cancelledTurnItem(updates, index);
+      if (cancellation) items.push(cancellation);
       status = 'idle';
       activity = undefined;
       return;
@@ -1039,6 +1135,11 @@ export function createGrokConversationProvider({
     return parsed;
   }
 
+  function turnId(snapshot) {
+    const changedAt = Number(snapshot.turn?.changedAt);
+    return Number.isFinite(changedAt) && changedAt > 0 ? changedAt : undefined;
+  }
+
   async function reconcilePersistedTurn(cwd, threadId, loadedSnapshot) {
     const snapshot = loadedSnapshot ?? await acpClient.loadSession({ sessionId: threadId, cwd });
     const lifecycle = await loadLifecycle({ cwd, sessionId: threadId });
@@ -1065,12 +1166,14 @@ export function createGrokConversationProvider({
     // spinner after Grok has already finished the turn.
     const active = authoritativeActive ?? parsed.status === 'working';
     const cancelRequested = snapshot.turn?.cancelRequested === true;
+    const activeTurnId = turnId(snapshot);
     const activity = active ? {
       active: true,
       phase: cancelRequested ? 'stopping' : parsed.activity?.phase || 'waiting',
       label: cancelRequested ? 'Stopping…' : parsed.activity?.label || 'Waiting for response…',
       canCancel: true,
       cancelRequested,
+      ...(activeTurnId !== undefined ? { turnId: activeTurnId } : {}),
     } : { active: false };
     const detail = snapshot.metadata?._meta?.['x.ai/sessionDetail'] || {};
     const model = includeControls ? modelControls(snapshot.metadata) : undefined;
@@ -1175,6 +1278,7 @@ export function createGrokConversationProvider({
     const parsed = timeline(snapshot.events, { turnActive: snapshot.turn?.active });
     const active = snapshot.turn?.active ?? parsed.status === 'working';
     const cancelRequested = snapshot.turn?.cancelRequested === true;
+    const activeTurnId = turnId(snapshot);
     const detail = snapshot.metadata?._meta?.['x.ai/sessionDetail'] || {};
     const isRoot = threadId === handle.rootThreadId;
     const model = isRoot ? modelControls(snapshot.metadata) : undefined;
@@ -1189,6 +1293,7 @@ export function createGrokConversationProvider({
       label: cancelRequested ? 'Stopping…' : parsed.activity?.label || 'Waiting for response…',
       canCancel: true,
       cancelRequested,
+      ...(activeTurnId !== undefined ? { turnId: activeTurnId } : {}),
     } : { active: false };
     const children = parsed.children.map((child) => ({
       id: child.threadId,
@@ -1235,6 +1340,7 @@ export function createGrokConversationProvider({
         timestamp: snapshot.events?.at(-1)?.timestamp,
       });
     }
+    const activeTurnId = turnId(snapshot);
     return {
       ...previous,
       items,
@@ -1242,11 +1348,12 @@ export function createGrokConversationProvider({
       activity: {
         active: true, phase: 'responding', label: 'Responding…', canCancel: true,
         cancelRequested: false,
+        ...(activeTurnId !== undefined ? { turnId: activeTurnId } : {}),
       },
     };
   }
 
-  function completeLiveTurn(previous) {
+  function completeLiveTurn(previous, snapshot) {
     const settle = (item) => {
       if (item.type === 'thought' && item.status === 'working') return { ...item, status: 'completed' };
       if (item.type === 'tool' && !['completed', 'failed', 'cancelled'].includes(item.status)) {
@@ -1260,9 +1367,12 @@ export function createGrokConversationProvider({
       }
       return item;
     };
+    const cancellation = cancelledTurnItem(snapshot.events || [], Math.max(0, (snapshot.events?.length || 1) - 1));
+    const settledItems = previous.items.map(settle);
+    if (cancellation && !settledItems.some((item) => item.id === cancellation.id)) settledItems.push(cancellation);
     return {
       ...previous,
-      items: previous.items.map(settle),
+      items: settledItems,
       thread: { ...previous.thread, status: 'idle' },
       activity: { active: false },
     };
@@ -1278,6 +1388,7 @@ export function createGrokConversationProvider({
     let latestSignature;
     let contextRefreshesRemaining = 0;
     const subscriptions = new Map();
+    const lastPublishedEvent = new Map();
     const selectedThreadId = options?.threadId || handle.rootThreadId;
 
     const emit = (conversation, stream) => {
@@ -1310,8 +1421,11 @@ export function createGrokConversationProvider({
           // context signals for every model token. This also publishes
           // turn_completed before a slower filesystem poll can leave mobile
           // stuck on Responding.
-          const update = snapshot.events?.at(-1)?.params?.update;
-          const delta = update?.sessionUpdate === 'agent_message_chunk'
+          const event = snapshot.events?.at(-1);
+          const newEvent = lastPublishedEvent.get(id) !== event;
+          lastPublishedEvent.set(id, event);
+          const update = event?.params?.update;
+          const delta = newEvent && update?.sessionUpdate === 'agent_message_chunk'
             ? textContent(update.content) : '';
           // Agent text is the hot path. Mutate the provider-neutral snapshot
           // by the exact ACP suffix so cost stays O(chunk), not O(history),
@@ -1320,11 +1434,11 @@ export function createGrokConversationProvider({
           const conversation = delta
             ? appendLiveAgentChunk(latestConversation, snapshot, delta)
             : update?.sessionUpdate === 'turn_completed'
-              ? completeLiveTurn(latestConversation)
+              ? completeLiveTurn(latestConversation, snapshot)
               : liveConversation(handle, options, snapshot, latestConversation);
-          const stream = update?.sessionUpdate === 'agent_message_chunk'
+          const stream = newEvent && update?.sessionUpdate === 'agent_message_chunk'
             ? { kind: 'agent_message_chunk', delta }
-            : update?.sessionUpdate ? { kind: update.sessionUpdate } : undefined;
+            : newEvent && update?.sessionUpdate ? { kind: update.sessionUpdate } : undefined;
           emit(conversation, stream);
           if (conversation.activity?.active) {
             timer = setTimeout(() => requestPublish(0), 250);
@@ -1395,6 +1509,7 @@ export function createGrokConversationProvider({
       clearTimeout(timer);
       for (const unsubscribe of subscriptions.values()) unsubscribe();
       subscriptions.clear();
+      lastPublishedEvent.clear();
     };
   }
 

@@ -37,3 +37,17 @@ export function composerCompletion(value, caret = value.length) {
   if (file) return { kind: 'file', query: file[1], start: caret - file[1].length - 1, end: caret };
   return undefined;
 }
+
+export function shellComposerState(value, active = false) {
+  const draft = String(value ?? '');
+  if (!active && draft.startsWith('!')) {
+    return { active: true, value: draft.slice(1) };
+  }
+  return { active: Boolean(active), value: draft };
+}
+
+export function shellComposerMessage(value, active = false) {
+  const command = String(value ?? '').trim();
+  if (!command) return '';
+  return active ? `!${command}` : command;
+}

@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { commandExists } from '../src/config.js';
-import { prepareManagedCommand, shellQuote, slugify } from '../src/sessions.js';
+import {
+  managedSessionPath,
+  prepareManagedCommand,
+  shellQuote,
+  slugify,
+} from '../src/sessions.js';
 
 test('quotes command arguments without changing their shell value', () => {
   assert.equal(shellQuote('plain-value'), 'plain-value');
@@ -13,6 +18,19 @@ test('quotes command arguments without changing their shell value', () => {
 test('creates safe readable session slugs', () => {
   assert.equal(slugify('API Agent #1'), 'api-agent-1');
   assert.equal(slugify('ภาษาไทย'), 'session');
+});
+
+test('keeps volatile Codex runtimes out of managed session PATH', () => {
+  assert.equal(managedSessionPath([
+    '/Users/test/.codex/tmp/arg0',
+    '/safe/bin',
+    '/Users/test/.cache/codex-runtimes/runtime/bin',
+    '/Applications/ChatGPT.app/Contents/Resources',
+    '/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin',
+    '/pkg/env/global/bin',
+    '/usr/bin',
+    '/safe/bin',
+  ].join(':')), '/safe/bin:/usr/bin');
 });
 
 test('prepares interactive Grok sessions for the isolated Agent Remote leader', () => {

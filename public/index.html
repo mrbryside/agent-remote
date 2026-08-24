@@ -10,12 +10,12 @@
     <meta name="apple-mobile-web-app-title" content="Agent Remote" />
     <title>Agent Remote</title>
     <script src="/document-boot.js?v=20260821-safe-area"></script>
-    <link rel="manifest" href="/manifest.webmanifest?v=20260821-app-icon" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png" />
-    <link rel="icon" type="image/png" href="/icon-192.png" />
+    <link rel="manifest" href="/manifest.webmanifest?v=20260821-black-app-icon" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icon-180.png?v=20260821-black-app-icon" />
+    <link rel="icon" type="image/png" href="/icon-192.png?v=20260821-black-app-icon" />
     <link rel="stylesheet" href="/vendor/xterm.css" />
     <link rel="stylesheet" href="/tokens.css?v=20260821-mobile-chrome" />
-    <link rel="stylesheet" href="/styles.css?v=20260821-mobile-chrome" />
+    <link rel="stylesheet" href="/styles.css?v=20260822-mobile-sheet-system" />
   </head>
   <body>
     <section class="portrait-lock" role="alert" aria-label="Portrait orientation required">
@@ -127,6 +127,7 @@
                 <div id="mobile-conversation-attachments" class="mobile-conversation-attachments" hidden></div>
                 <div class="mobile-conversation-compose-row">
                   <button id="mobile-conversation-attach" class="ui-icon-button" data-ui-variant="bare" data-ui-size="lg" type="button" aria-label="Attach files">＋</button>
+                  <span id="mobile-conversation-shell-prefix" class="mobile-conversation-shell-prefix" aria-hidden="true" hidden>!</span>
                   <textarea id="mobile-conversation-input" rows="1" maxlength="16384" enterkeyhint="send" autocapitalize="sentences" autocomplete="off" placeholder="Message Grok…" aria-label="Message"></textarea>
                   <button id="mobile-conversation-send" class="ui-icon-button" data-ui-variant="surface" data-ui-size="lg" type="submit" aria-label="Send message">↑</button>
                 </div>
@@ -160,26 +161,38 @@
     </main>
     <div id="sidebar-edge-trigger" class="sidebar-edge-trigger" aria-hidden="true" hidden></div>
 
-    <dialog id="create-dialog">
-      <form id="project-form" method="dialog">
-        <div class="dialog-header">
+    <dialog id="create-dialog" class="mobile-sheet project-sheet" tabindex="-1">
+      <form id="project-form" class="mobile-sheet-panel project-sheet-panel" method="dialog">
+        <button id="project-sheet-handle" class="mobile-sheet-handle project-sheet-handle" type="button" aria-label="Drag down to dismiss project settings"></button>
+        <header class="dialog-header mobile-sheet-header project-sheet-header">
           <div><span class="dialog-kicker">Project settings</span><h2 id="dialog-title">New project</h2></div>
           <button class="ui-icon-button icon-button close-button" data-ui-variant="bare" data-ui-size="lg" value="cancel" aria-label="Close">×</button>
+        </header>
+        <div class="mobile-sheet-body project-sheet-body">
+          <label><span>Project name <small>uses the folder name when empty</small></span><input id="project-name" name="name" placeholder="agent-remote" maxlength="80" autocomplete="off" /></label>
+          <label><span>Agent</span><select id="project-agent" name="agentId" required aria-describedby="project-agent-help"></select><small id="project-agent-help">The launch command is managed by Agent Remote.</small></label>
+          <section class="folder-picker">
+            <div class="folder-heading"><span>Project folder</span><code id="selected-folder">Loading…</code></div>
+            <div id="folder-roots" class="folder-roots"></div>
+            <div class="path-entry"><input id="folder-path" aria-label="Folder path" /><button id="go-folder" type="button" class="quiet-button">Go</button></div>
+            <div class="folder-toolbar">
+              <label class="folder-hidden-toggle"><input id="hide-dot-folders" type="checkbox" checked /><span>Hide .folders</span></label>
+              <button id="show-create-folder" type="button" class="quiet-button" aria-expanded="false" aria-controls="create-folder-entry">+ Folder</button>
+            </div>
+            <div id="create-folder-entry" class="create-folder-entry" hidden>
+              <input id="new-folder-name" aria-label="New folder name" maxlength="255" autocomplete="off" placeholder="New folder" />
+              <button id="confirm-create-folder" type="button" class="primary-button">Create</button>
+              <button id="cancel-create-folder" type="button" class="quiet-button">Cancel</button>
+            </div>
+            <div id="folder-list" class="folder-list"></div>
+          </section>
+          <p id="form-error" class="form-error" role="alert"></p>
         </div>
-        <label><span>Project name <small>uses the folder name when empty</small></span><input id="project-name" name="name" placeholder="agent-remote" maxlength="80" autocomplete="off" /></label>
-        <label><span>Agent</span><select id="project-agent" name="agentId" required aria-describedby="project-agent-help"></select><small id="project-agent-help">The launch command is managed by Agent Remote.</small></label>
-        <section class="folder-picker">
-          <div class="folder-heading"><span>Project folder</span><code id="selected-folder">Loading…</code></div>
-          <div id="folder-roots" class="folder-roots"></div>
-          <div class="path-entry"><input id="folder-path" aria-label="Folder path" /><button id="go-folder" type="button" class="quiet-button">Go</button></div>
-          <div id="folder-list" class="folder-list"></div>
-        </section>
-        <p id="form-error" class="form-error" role="alert"></p>
-        <div class="dialog-actions">
+        <footer class="dialog-actions mobile-sheet-footer project-sheet-footer">
           <span class="dialog-spacer"></span>
           <button value="cancel" class="quiet-button">Cancel</button>
           <button id="save-project" type="submit" class="primary-button">Create project</button>
-        </div>
+        </footer>
       </form>
     </dialog>
 
@@ -215,7 +228,9 @@
           <i data-remote-domain-only aria-hidden="true"></i>
           <button type="button" data-remote-step-target="2" data-remote-domain-only><span>2</span><small>Domain</small></button>
           <i aria-hidden="true"></i>
-          <button type="button" data-remote-step-target="3"><span id="remote-devices-step-number">3</span><small>Devices</small></button>
+          <span id="remote-devices-step-hint" class="remote-step-hint">
+            <button type="button" data-remote-step-target="3"><span id="remote-devices-step-number">3</span><small>Devices</small></button>
+          </span>
         </nav>
 
         <section class="remote-section remote-step" data-remote-step="1" aria-labelledby="remote-connection-heading" tabindex="-1">
@@ -256,7 +271,9 @@
 
         <footer class="remote-wizard-actions">
           <span id="remote-step-caption" class="remote-note" aria-live="polite">Step 1 of 2</span>
-          <button id="remote-next" class="primary-button" type="button">Next: Custom Domain</button>
+          <span id="remote-next-hint" class="remote-next-hint">
+            <button id="remote-next" class="primary-button" type="button">Next: Custom Domain</button>
+          </span>
         </footer>
       </div>
     </dialog>

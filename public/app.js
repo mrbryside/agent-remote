@@ -1,5 +1,6 @@
 import { api, apiUrl, authenticatedFetch } from './api-client.js';
 import { createMobileConversationView } from './mobile-conversation.js';
+import { installMobileSheetDrag, resetMobileSheet } from './mobile-sheet.js';
 import { derivePromptTitle } from './prompt-title.js';
 import { createTerminalSnapshotCache } from './terminal-snapshots.js';
 import { createIcon, createIconButton, installDialogBackdropDismiss } from './ui-components.js';
@@ -19,12 +20,19 @@ const projectList = document.querySelector('#project-list');
 const dialog = document.querySelector('#create-dialog');
 const projectForm = document.querySelector('#project-form');
 const dialogTitle = document.querySelector('#dialog-title');
+const projectSheetHandle = document.querySelector('#project-sheet-handle');
 const projectAgentSelect = document.querySelector('#project-agent');
 const projectNameInput = document.querySelector('#project-name');
 const folderPathInput = document.querySelector('#folder-path');
 const selectedFolder = document.querySelector('#selected-folder');
 const folderRoots = document.querySelector('#folder-roots');
 const folderList = document.querySelector('#folder-list');
+const hideDotFolders = document.querySelector('#hide-dot-folders');
+const showCreateFolderButton = document.querySelector('#show-create-folder');
+const createFolderEntry = document.querySelector('#create-folder-entry');
+const newFolderName = document.querySelector('#new-folder-name');
+const confirmCreateFolderButton = document.querySelector('#confirm-create-folder');
+const cancelCreateFolderButton = document.querySelector('#cancel-create-folder');
 const formError = document.querySelector('#form-error');
 const saveProjectButton = document.querySelector('#save-project');
 const emptyState = document.querySelector('#empty-state');
@@ -69,6 +77,13 @@ const browserCursorValues = new Set([
 ]);
 
 installDialogBackdropDismiss(dialog);
+installMobileSheetDrag({
+  panel: projectForm,
+  handle: projectSheetHandle,
+  onClose: () => dialog.close(),
+  threshold: 64,
+  enabled: () => compactSidebarMedia.matches,
+});
 
 const rootStyles = getComputedStyle(document.documentElement);
 function designToken(name, fallback) {
@@ -115,6 +130,7 @@ let activeProjectId = localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY) || null;
 let activeSession = localStorage.getItem(ACTIVE_SESSION_STORAGE_KEY) || null;
 let editingProjectId = null;
 let currentFolder = '';
+let currentDirectory;
 let firstPromptBuffer = '';
 let firstPromptSession = null;
 let refreshGeneration = 0;
@@ -130,6 +146,7 @@ const pendingProjectDeletes = new Map();
 const pendingProjectClears = new Map();
 const graphicsPanes = new Map();
 const serverRendererKeys = new Set();
+const closingRendererKeys = new Set();
 const terminalRuntimes = new Map();
 const localSessionActivity = new Map();
 const knownSessionIncarnations = new Map();
@@ -138,6 +155,9 @@ const workingSessionNames = new Set();
 const conversationLifecycleObservedAt = new Map();
 let activeTerminalRuntime;
 let terminalRuntimeGeneration = 0;
+let graphicsForegroundPromise;
+let graphicsBackgrounded = false;
+let lastGraphicsForegroundProbeAt = Date.now();
 let workspaceHydrated = false;
 let sidebarPeekCloseTimer;
 const terminalSnapshotCache = createTerminalSnapshotCache({
@@ -292,8 +312,8 @@ const mobileConversation = createMobileConversationView({
     conversationLifecycleObservedAt.set(sessionName, performance.now());
     setSessionWorking(sessionName, status === 'working', { authoritative: true });
   },
-  onBrowserOpen(sessionName, argv) {
-    openGraphicsSplit(argv, 'backend', sessionName);
+  onBrowserOpen(sessionName, argv, options) {
+    openGraphicsSplit(argv, 'backend', sessionName, options);
   },
   onShowBrowser(sessionName) {
     showGraphicsSheet(sessionName);
@@ -305,6 +325,53 @@ const mobileConversation = createMobileConversationView({
     graphicsMobileAgentsButton.hidden = !available;
   },
 });
+
+let desktopFileDropGeneration = 0;
+
+async function uploadDesktopDroppedFiles(fileList) {
+  const session = selectedSession();
+  const files = [...fileList]
+    .filter((file) => file && typeof file.size === 'number')
+    .slice(0, 8);
+  if (!session || session.pending || !files.length) return;
+  const generation = ++desktopFileDropGeneration;
+  const runtime = activeTerminalRuntime;
+  if (!runtime || runtime.name !== session.name || runtime.socket?.readyState !== WebSocket.OPEN) return;
+  workspace.dataset.fileDrop = 'uploading';
+  try {
+    const attachments = [];
+    for (const file of files) {
+      const attachment = await mobileConversation.uploadAttachment(session.name, file);
+      if (generation !== desktopFileDropGeneration || runtime !== activeTerminalRuntime || activeSession !== session.name) return;
+      attachments.push(attachment);
+    }
+    const references = [];
+    for (const attachment of attachments) {
+      const reference = await api(`/api/conversations/${encodeURIComponent(session.name)}/attachments/${encodeURIComponent(attachment.id)}/reference`);
+      if (reference?.path) {
+        references.push(`[${attachment.name || 'Attachment'}](${reference.path})`);
+      }
+    }
+    if (!references.length) throw new Error('Uploaded files have no readable path');
+    // Leave any native terminal search/overlay first. Do not concatenate
+    // Escape with a reference beginning in `[`: ESC+[ is a terminal control
+    // sequence and consumes the opening bracket plus part of the filename.
+    runtime.socket.send(JSON.stringify({ type: 'input', data: '\x1b' }));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    if (generation !== desktopFileDropGeneration || runtime !== activeTerminalRuntime ||
+        activeSession !== session.name || runtime.socket?.readyState !== WebSocket.OPEN) return;
+    runtime.socket.send(JSON.stringify({ type: 'input', data: references.join('\n') }));
+    delete workspace.dataset.fileDrop;
+  } catch (error) {
+    workspace.dataset.fileDrop = 'error';
+    setStatus('error', error?.message || 'Attachment upload failed');
+  } finally {
+    setTimeout(() => {
+      if (workspace.dataset.fileDrop !== 'uploading') delete workspace.dataset.fileDrop;
+    }, 1800);
+  }
+}
+
 const browserMedia = createBrowserMediaController({
   setLoading: setGraphicsLoading,
   onFirstFrame() {
@@ -930,7 +997,9 @@ function connectTerminalRuntime(runtime) {
     if (message.type === 'control' && message.action === 'open-graphics' &&
         Array.isArray(message.argv) && message.argv.length > 0 && message.argv.length <= 100 &&
         message.argv.every((argument) => typeof argument === 'string' && argument.length <= 4096)) {
-      openGraphicsSplit(message.argv, 'backend', runtime.name);
+      openGraphicsSplit(message.argv, 'backend', runtime.name, {
+        reuseExisting: message.reuseExisting === true,
+      });
     }
     if (message.type === 'error') runtime.terminal.writeln(`\r\n\x1b[31m${message.message}\x1b[0m`);
     if (message.type === 'exit') setTerminalRuntimeStatus(runtime, 'disconnected', `Exited (${message.exitCode})`);
@@ -981,9 +1050,11 @@ function fitTerminals(options) {
       }
       const viewportWidth = Math.max(160, Math.floor(pane.viewport.clientWidth));
       const viewportHeight = Math.max(120, Math.floor(pane.viewport.clientHeight));
+      const viewportScale = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
       pane.requestedViewport = { width: viewportWidth, height: viewportHeight };
       pane.host.dataset.requestedViewport = `${viewportWidth}x${viewportHeight}`;
-      const viewportRequest = `${viewportWidth}x${viewportHeight}`;
+      pane.host.dataset.requestedScale = String(viewportScale);
+      const viewportRequest = `${viewportWidth}x${viewportHeight}@${viewportScale}`;
       if (pane.lastViewportRequest !== viewportRequest) {
         pane.lastViewportRequest = viewportRequest;
         // Chromium's live compositor stream owns both motion and idle frames.
@@ -992,6 +1063,7 @@ function fitTerminals(options) {
           type: 'viewport',
           width: viewportWidth,
           height: viewportHeight,
+          scale: viewportScale,
         }));
       }
     }
@@ -1152,11 +1224,23 @@ function setGraphicsLoading(pane, state = 'loading', detail) {
   }
 }
 
+function closeServerRenderer(key) {
+  closingRendererKeys.add(key);
+  serverRendererKeys.delete(key);
+  graphicsOpenGenerations.set(key, (graphicsOpenGenerations.get(key) || 0) + 1);
+  void api(`/api/renderers/${encodeURIComponent(key)}`, { method: 'DELETE', keepalive: true })
+    .catch((error) => {
+      closingRendererKeys.delete(key);
+      showNotice(`Could not close browser pane: ${error.message}`);
+      if (document.visibilityState !== 'hidden') void reconnectGraphicsPanes();
+    });
+}
+
 function disposeGraphicsPane(key, { closeRemote = true } = {}) {
   const pane = graphicsPanes.get(key);
   if (!pane) return;
   graphicsPanes.delete(key);
-  if (closeRemote) serverRendererKeys.delete(key);
+  if (closeRemote) closeServerRenderer(key);
   pane.disposed = true;
   clearTimeout(pane.replacementTimer);
   pane.resizeObserver?.disconnect();
@@ -1164,9 +1248,6 @@ function disposeGraphicsPane(key, { closeRemote = true } = {}) {
   if (pane.pointerAnimationFrame) cancelAnimationFrame(pane.pointerAnimationFrame);
   stopBrowserRecording(pane, { download: false });
   if (pane.devtoolsFrame) pane.devtoolsFrame.src = 'about:blank';
-  if (closeRemote && pane.socket?.readyState === WebSocket.OPEN) {
-    pane.socket.send(JSON.stringify({ type: 'close' }));
-  }
   if (pane.socket && pane.socket.readyState < WebSocket.CLOSING) {
     pane.socket.close(1000, 'Closing browser pane');
   }
@@ -1179,10 +1260,21 @@ function closeGraphicsSplit(name = activeSession) {
   disposeGraphicsPane(graphicsPaneKey(name));
 }
 
-function openGraphicsSplit(argv, transport = 'direct', sessionName = activeSession) {
+function openGraphicsSplit(argv, transport = 'direct', sessionName = activeSession, options = {}) {
   const key = graphicsPaneKey(sessionName);
   if (!key) return;
+  closingRendererKeys.delete(key);
   const previous = graphicsPanes.get(key);
+  if (options.reuseExisting && previous) {
+    clearTimeout(previous.replacementTimer);
+    previous.replacing = false;
+    previous.revealed = true;
+    previous.mobileHidden = false;
+    previous.desktopHidden = false;
+    if (!previous.surfaceReady) setGraphicsLoading(previous);
+    updateGraphicsSplit();
+    return;
+  }
   const previousSocket = previous?.socket;
   const openGeneration = (graphicsOpenGenerations.get(key) || 0) + 1;
   graphicsOpenGenerations.set(key, openGeneration);
@@ -1280,7 +1372,20 @@ function renderBrowserTabs(pane, tabs) {
       });
       close.addEventListener('click', () => {
         if (pane.socket?.readyState === WebSocket.OPEN) {
-          pane.socket.send(JSON.stringify({ type: 'tab-close', tab: Number(item.dataset.tabId) }));
+          const tab = Number(item.dataset.tabId);
+          const closeRendererOnLast = pane.tabs.children.length === 1;
+          if (closeRendererOnLast) {
+            // Closing the final tab is exactly the same lifecycle action as
+            // the pane's close button: remove the pane immediately and ask
+            // the server to tear down its renderer and browser process.
+            disposeGraphicsPane(pane.key);
+            return;
+          }
+          // Reflect the user's click immediately. The renderer serializes and
+          // verifies the daemon mutation; its next surface update restores the
+          // item automatically if the close is rejected.
+          item.remove();
+          pane.socket.send(JSON.stringify({ type: 'tab-close', tab, closeRendererOnLast: false }));
         }
       });
       item.append(select, close);
@@ -1654,10 +1759,14 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
     if (message.type === 'surface') {
       pane.suppressTerminalPreview = true;
       const targetChanged = Boolean(pane.targetId && message.targetId && pane.targetId !== message.targetId);
-      if (!pane.surfaceReady || targetChanged) {
+      if (!pane.surfaceReady) {
         pane.surfaceReady = false;
         setGraphicsLoading(pane);
       }
+      // A tab switch replaces the CDP target, but the existing canvas remains
+      // a valid transition frame. Keep it painted until the new target's first
+      // frame arrives instead of flashing the full opening cover again.
+      pane.surface.dataset.targetChanging = String(targetChanged);
       pane.targetId = message.targetId || '';
       host.dataset.renderMode = 'direct';
       host.dataset.browserKey = message.browserKey || '';
@@ -1723,12 +1832,90 @@ function connectGraphicsPane(key, argv, transport = 'restore') {
 async function restoreGraphicsPanes(livePaneKeys, isCurrent = () => true) {
   const payload = await api('/api/renderers');
   if (!isCurrent()) return;
+  const reportedKeys = new Set(payload.renderers.map((renderer) => renderer.key));
+  for (const key of closingRendererKeys) {
+    if (!reportedKeys.has(key)) closingRendererKeys.delete(key);
+  }
   serverRendererKeys.clear();
   for (const renderer of payload.renderers) {
-    if (livePaneKeys.has(renderer.key)) serverRendererKeys.add(renderer.key);
+    if (livePaneKeys.has(renderer.key) && !closingRendererKeys.has(renderer.key)) {
+      serverRendererKeys.add(renderer.key);
+    }
   }
   const activeKey = graphicsPaneKey();
   if (serverRendererKeys.has(activeKey) && !graphicsPanes.has(activeKey)) connectGraphicsPane(activeKey);
+}
+
+function liveGraphicsPaneKeys() {
+  return new Set(sessions
+    .filter((session) => !session.pending)
+    .map((session) => graphicsPaneKey(session.name)));
+}
+
+function reconnectGraphicsPanes() {
+  if (document.visibilityState === 'hidden') return Promise.resolve();
+  if (graphicsForegroundPromise) return graphicsForegroundPromise;
+  const livePaneKeys = liveGraphicsPaneKeys();
+  const visibility = new Map([...graphicsPanes].map(([key, pane]) => [key, {
+    mobileHidden: pane.mobileHidden,
+    desktopHidden: pane.desktopHidden,
+  }]));
+  for (const [key] of graphicsPanes) {
+    if (!closingRendererKeys.has(key)) disposeGraphicsPane(key, { closeRemote: false });
+  }
+  graphicsForegroundPromise = restoreGraphicsPanes(livePaneKeys)
+    .then(() => {
+      for (const [key, previous] of visibility) {
+        const pane = graphicsPanes.get(key);
+        if (!pane) continue;
+        pane.mobileHidden = previous.mobileHidden;
+        pane.desktopHidden = previous.desktopHidden;
+      }
+      updateGraphicsSplit();
+    })
+    .catch((error) => showNotice(`Could not reconnect browser pane: ${error.message}`))
+    .finally(() => { graphicsForegroundPromise = undefined; });
+  return graphicsForegroundPromise;
+}
+
+function suspendGraphicsForBackground() {
+  graphicsBackgrounded = true;
+}
+
+function resumeGraphicsFromBackground({ force = false } = {}) {
+  if (document.visibilityState === 'hidden') return;
+  if (!graphicsBackgrounded && !force) return;
+  graphicsBackgrounded = false;
+  lastGraphicsForegroundProbeAt = Date.now();
+  void reconnectGraphicsPanes();
+}
+
+function probeGraphicsForegroundLiveness() {
+  const now = Date.now();
+  const resumedAfterFreeze = now - lastGraphicsForegroundProbeAt > 6_000;
+  lastGraphicsForegroundProbeAt = now;
+  if (document.visibilityState !== 'hidden' && (graphicsBackgrounded || resumedAfterFreeze)) {
+    resumeGraphicsFromBackground({ force: true });
+  }
+}
+
+function handleGraphicsVisibilityChange() {
+  if (document.visibilityState === 'hidden') suspendGraphicsForBackground();
+  else resumeGraphicsFromBackground({ force: true });
+}
+
+function handleGraphicsPageShow() {
+  resumeGraphicsFromBackground({ force: true });
+}
+
+function handleGraphicsWindowFocus() {
+  if (graphicsBackgrounded || Date.now() - lastGraphicsForegroundProbeAt > 6_000) {
+    resumeGraphicsFromBackground({ force: true });
+  }
+}
+
+function handleGraphicsOnline() {
+  resumeGraphicsFromBackground({ force: true });
 }
 
 function setStatus(state, text) {
@@ -2611,10 +2798,32 @@ function folderButton(label, path, className = '') {
   return button;
 }
 
+function renderDirectoryList() {
+  folderList.replaceChildren();
+  if (!currentDirectory) return;
+  if (currentDirectory.parent) folderList.append(folderButton('↰  ..', currentDirectory.parent, 'parent'));
+  const directories = hideDotFolders.checked
+    ? currentDirectory.directories.filter((directory) => !directory.startsWith('.'))
+    : currentDirectory.directories;
+  for (const directory of directories) {
+    const child = `${currentDirectory.path.replace(/\/$/, '')}/${directory}`;
+    folderList.append(folderButton(`▸  ${directory}`, child));
+  }
+  if (!directories.length) {
+    const empty = document.createElement('p');
+    empty.className = 'folder-list-empty';
+    empty.textContent = hideDotFolders.checked && currentDirectory.directories.some((directory) => directory.startsWith('.'))
+      ? 'Only hidden folders here'
+      : 'No folders here';
+    folderList.append(empty);
+  }
+}
+
 async function loadDirectory(path) {
   formError.textContent = '';
   try {
     const payload = await api(`/api/directories${path ? `?path=${encodeURIComponent(path)}` : ''}`);
+    currentDirectory = payload;
     currentFolder = payload.path;
     selectedFolder.textContent = currentFolder;
     selectedFolder.title = currentFolder;
@@ -2628,12 +2837,7 @@ async function loadDirectory(path) {
       button.addEventListener('click', () => loadDirectory(root));
       folderRoots.append(button);
     }
-    folderList.replaceChildren();
-    if (payload.parent) folderList.append(folderButton('↰  ..', payload.parent, 'parent'));
-    for (const directory of payload.directories) {
-      const child = `${payload.path.replace(/\/$/, '')}/${directory}`;
-      folderList.append(folderButton(`▸  ${directory}`, child));
-    }
+    renderDirectoryList();
   } catch (error) {
     formError.textContent = error.message;
   }
@@ -2641,7 +2845,10 @@ async function loadDirectory(path) {
 
 async function openProjectDialog(project) {
   editingProjectId = project?.id || null;
+  resetMobileSheet(projectForm);
   projectForm.reset();
+  hideDotFolders.checked = true;
+  setCreateFolderOpen(false);
   formError.textContent = '';
   dialogTitle.textContent = project ? `Edit ${project.name}` : 'New project';
   saveProjectButton.textContent = project ? 'Save changes' : 'Create project';
@@ -2658,7 +2865,8 @@ async function openProjectDialog(project) {
   projectAgentSelect.value = project?.agentId || agents[0]?.id || '';
   await loadDirectory(project?.cwd || currentFolder);
   dialog.showModal();
-  (project ? projectNameInput : projectAgentSelect).focus();
+  if (compactSidebarMedia.matches) dialog.focus({ preventScroll: true });
+  else (project ? projectNameInput : projectAgentSelect).focus();
 }
 
 function projectNameFallback() {
@@ -2760,6 +2968,42 @@ function installHorizontalResizer(element, kind) {
 document.querySelector('#new-project').addEventListener('click', () => openProjectDialog());
 homeButton.addEventListener('click', showHome);
 document.querySelector('#go-folder').addEventListener('click', () => loadDirectory(folderPathInput.value));
+hideDotFolders.addEventListener('change', renderDirectoryList);
+function setCreateFolderOpen(open) {
+  createFolderEntry.hidden = !open;
+  showCreateFolderButton.setAttribute('aria-expanded', String(open));
+  if (open) {
+    newFolderName.value = '';
+    newFolderName.focus();
+  }
+}
+showCreateFolderButton.addEventListener('click', () => setCreateFolderOpen(createFolderEntry.hidden));
+cancelCreateFolderButton.addEventListener('click', () => setCreateFolderOpen(false));
+async function createFolderFromDialog() {
+  const name = newFolderName.value.trim();
+  if (!name || !currentFolder || confirmCreateFolderButton.disabled) return;
+  formError.textContent = '';
+  confirmCreateFolderButton.disabled = true;
+  try {
+    const payload = await api('/api/directories', {
+      method: 'POST',
+      body: JSON.stringify({ path: currentFolder, name }),
+    });
+    setCreateFolderOpen(false);
+    // A newly created folder is normally the intended project root. Enter it
+    // immediately, including dot-folders that the list is currently hiding.
+    await loadDirectory(payload.created);
+  } catch (error) {
+    formError.textContent = error.message;
+  } finally {
+    confirmCreateFolderButton.disabled = false;
+  }
+}
+confirmCreateFolderButton.addEventListener('click', createFolderFromDialog);
+newFolderName.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') { event.preventDefault(); void createFolderFromDialog(); }
+  if (event.key === 'Escape') { event.preventDefault(); setCreateFolderOpen(false); }
+});
 folderPathInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') { event.preventDefault(); loadDirectory(folderPathInput.value); }
 });
@@ -2805,6 +3049,39 @@ terminalElement.addEventListener('paste', (event) => {
   if (text) {
     captureFirstPrompt(text);
     markSessionActive(activeSession, text.includes('\r') || text.includes('\n'));
+  }
+});
+workspace.addEventListener('dragenter', (event) => {
+  if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+  if (compactSidebarMedia.matches && !mobileConversation.isVisibleFor(activeSession)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+  if (compactSidebarMedia.matches) mobileConversation.setDragOver(true);
+  else workspace.dataset.fileDrop = 'ready';
+});
+workspace.addEventListener('dragover', (event) => {
+  if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+  if (compactSidebarMedia.matches && !mobileConversation.isVisibleFor(activeSession)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+  if (compactSidebarMedia.matches) mobileConversation.setDragOver(true);
+  else workspace.dataset.fileDrop = 'ready';
+});
+workspace.addEventListener('dragleave', (event) => {
+  if (compactSidebarMedia.matches) {
+    if (!workspace.contains(event.relatedTarget)) mobileConversation.setDragOver(false);
+  } else if (!workspace.contains(event.relatedTarget)) delete workspace.dataset.fileDrop;
+});
+workspace.addEventListener('drop', (event) => {
+  if (!event.dataTransfer?.files?.length) return;
+  if (compactSidebarMedia.matches && !mobileConversation.isVisibleFor(activeSession)) return;
+  event.preventDefault();
+  if (compactSidebarMedia.matches) {
+    mobileConversation.setDragOver(false);
+    void mobileConversation.enqueueFiles(event.dataTransfer.files);
+  } else {
+    delete workspace.dataset.fileDrop;
+    void uploadDesktopDroppedFiles(event.dataTransfer.files);
   }
 });
 // A stationary tap is text-entry intent; a drag is scrolling/panning intent.
@@ -2885,11 +3162,27 @@ observer.observe(graphicsTerminalElement);
 const poller = setInterval(() => {
   if (!hasPendingMutations()) refreshWorkspace().catch(() => {});
 }, 3000);
+document.addEventListener('visibilitychange', handleGraphicsVisibilityChange);
+document.addEventListener('freeze', suspendGraphicsForBackground);
+document.addEventListener('resume', handleGraphicsOnline);
+window.addEventListener('pagehide', suspendGraphicsForBackground);
+window.addEventListener('pageshow', handleGraphicsPageShow);
+window.addEventListener('focus', handleGraphicsWindowFocus);
+window.addEventListener('online', handleGraphicsOnline);
+const graphicsForegroundProbe = setInterval(probeGraphicsForegroundLiveness, 2_000);
 window.addEventListener('beforeunload', () => {
   compactSidebarMedia.removeEventListener('change', handleCompactSidebarChange);
   visualViewportSync.destroy();
   observer.disconnect();
   clearInterval(poller);
+  clearInterval(graphicsForegroundProbe);
+  document.removeEventListener('visibilitychange', handleGraphicsVisibilityChange);
+  document.removeEventListener('freeze', suspendGraphicsForBackground);
+  document.removeEventListener('resume', handleGraphicsOnline);
+  window.removeEventListener('pagehide', suspendGraphicsForBackground);
+  window.removeEventListener('pageshow', handleGraphicsPageShow);
+  window.removeEventListener('focus', handleGraphicsWindowFocus);
+  window.removeEventListener('online', handleGraphicsOnline);
   workspaceEventSource?.close();
   workspaceEventSource = undefined;
   mobileConversation.destroy();

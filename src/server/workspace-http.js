@@ -1,5 +1,5 @@
-import { browseDirectories } from '../directories.js';
-import { authorized, json, originAllowed } from './http.js';
+import { browseDirectories, createDirectory } from '../directories.js';
+import { authorized, json, originAllowed, readJson } from './http.js';
 import { parseRequestUrl, rejectInvalidRequestTarget } from './request-target.js';
 import { devtoolsBootstrap } from './renderer-protocol.js';
 
@@ -8,7 +8,7 @@ export function createWorkspaceHttpHandler({
   openWorkspaceStream, projectStore, agentCatalog, renderers,
   handleConversationFileRoute, handleConversationControlRoute,
   handleConversationMessageRoute, handleProjectRoute, serveStaticAsset,
-  rendererForDevtoolsAccess, proxyDevtoolsAsset,
+  rendererForDevtoolsAccess, proxyDevtoolsAsset, closeRenderer,
 }) {
   async function handleWorkspaceRequest(request, response, surface = 'local') {
     const url = parseRequestUrl(request);
@@ -84,9 +84,25 @@ export function createWorkspaceHttpHandler({
             renderers: [...renderers.values()].map((renderer) => ({ key: renderer.key })),
           });
         }
+        if (request.method === 'DELETE' && pathname.startsWith('/api/renderers/')) {
+          let key;
+          try { key = decodeURIComponent(pathname.slice('/api/renderers/'.length)); }
+          catch { return json(response, 400, { error: 'Invalid renderer key' }); }
+          if (!key || key.length > 192) return json(response, 400, { error: 'Invalid renderer key' });
+          const renderer = renderers.get(key);
+          const closed = Boolean(renderer && closeRenderer(
+            key, 'Browser pane closed', false, renderer,
+          ));
+          return json(response, 200, { closed });
+        }
         if (request.method === 'GET' && pathname === '/api/directories') {
           const directory = await browseDirectories(url.searchParams.get('path'), config.allowedCwdRoots);
           return json(response, 200, directory);
+        }
+        if (request.method === 'POST' && pathname === '/api/directories') {
+          const body = await readJson(request);
+          const directory = await createDirectory(body.path, body.name, config.allowedCwdRoots);
+          return json(response, 201, directory);
         }
         if (await handleConversationFileRoute({ request, response, url, pathname })) return;
         if (await handleConversationControlRoute({ request, response, pathname })) return;

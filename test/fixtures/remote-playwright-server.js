@@ -10,10 +10,15 @@ import { createTerminalServer } from '../../src/server.js';
 
 const root = resolve('test-results/remote-playwright');
 const databaseFile = resolve(root, 'agent-remote.db');
+const grokLeaderSocket = resolve(root, 'grok-leader.sock');
 const localUrl = 'http://127.0.0.1:3100';
 const publicUrl = 'http://127.0.0.1:3101';
 rmSync(root, { recursive: true, force: true });
 mkdirSync(root, { recursive: true });
+// Never let a developer-shell override make Playwright share the app's
+// terminal-browser daemon. The database-derived runtime belongs only to this
+// fixture and can be stopped without touching a real browser or conversation.
+delete process.env.AGENT_REMOTE_TERMINAL_BROWSER_RUNTIME_DIR;
 
 let now = 1_800_000_000_000;
 let current = { mode: 'none', state: 'stopped' };
@@ -96,7 +101,8 @@ const provisioner = {
 app = createTerminalServer({
   host: '127.0.0.1', port: 3100, remoteHost: '127.0.0.1', remotePort: 3101,
   shell: '/bin/sh', shellArgs: [], tmuxSession: '', tmuxShell: false,
-  databaseFile,
+  databaseFile, grokLeaderSocket,
+  grokTerminateLeaderOnClose: true,
   remotePlatform: 'darwin', remoteTokenStore: tokenStore, remoteProvisioner: provisioner,
   tunnelManager, remotePublicUrl: publicUrl,
   remoteSecureCookies: false, remoteAllowInsecurePublicOrigin: true,

@@ -1,4 +1,5 @@
 import { highlightCodeNode, languageForPath } from './syntax.js';
+import { createMobileSheetFrame, installMobileSheetDrag } from './mobile-sheet.js';
 import { createIconButton } from './ui-components.js';
 
 function normalizedPath(value) {
@@ -90,7 +91,6 @@ export function createMobileFileSurface({
   let title;
   let meta;
   let body;
-  let pointer;
   let closeGeneration = 0;
   let previewGeneration = 0;
 
@@ -152,17 +152,24 @@ export function createMobileFileSurface({
 
   function ensureSheet() {
     if (sheet) return;
-    sheet = element('section', 'mobile-file-sheet');
-    sheet.hidden = true;
-    sheet.tabIndex = -1;
-    sheet.setAttribute('role', 'dialog');
-    sheet.setAttribute('aria-modal', 'true');
-    sheet.setAttribute('aria-label', 'File preview');
-    panel = element('div', 'mobile-file-sheet-panel');
-    const handle = element('button', 'mobile-file-sheet-handle');
-    handle.type = 'button';
-    handle.setAttribute('aria-label', 'Drag down to close file preview');
-    const header = element('header', 'mobile-file-sheet-header');
+    const frame = createMobileSheetFrame({
+      root,
+      element,
+      label: 'File preview',
+      handleLabel: 'Drag down to close file preview',
+      classNames: {
+        sheet: 'mobile-file-sheet',
+        panel: 'mobile-file-sheet-panel',
+        handle: 'mobile-file-sheet-handle',
+        header: 'mobile-file-sheet-header',
+        body: 'mobile-file-sheet-body',
+      },
+    });
+    sheet = frame.sheet;
+    panel = frame.panel;
+    const { handle } = frame;
+    const { header } = frame.slots;
+    body = frame.slots.body;
     const copy = element('span');
     title = element('strong', '', 'File');
     meta = element('small');
@@ -173,37 +180,13 @@ export function createMobileFileSurface({
     });
     closeButton.addEventListener('click', close);
     header.append(copy, closeButton);
-    body = element('div', 'mobile-file-sheet-body');
-    panel.append(handle, header, body);
-    sheet.append(panel);
     sheet.addEventListener('click', (event) => {
       if (event.target === sheet) close();
     });
     sheet.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') close();
     });
-    handle.addEventListener('pointerdown', (event) => {
-      pointer = { id: event.pointerId, startY: event.clientY, distance: 0 };
-      handle.setPointerCapture?.(event.pointerId);
-      panel.dataset.dragging = 'true';
-    });
-    handle.addEventListener('pointermove', (event) => {
-      if (!pointer || event.pointerId !== pointer.id) return;
-      pointer.distance = Math.max(0, event.clientY - pointer.startY);
-      panel.style.setProperty('--mobile-sheet-drag', `${pointer.distance}px`);
-    });
-    const finishDrag = (event) => {
-      if (!pointer || event.pointerId !== pointer.id) return;
-      const shouldClose = pointer.distance > 96;
-      pointer = undefined;
-      panel.dataset.dragSettled = 'true';
-      delete panel.dataset.dragging;
-      if (shouldClose) close();
-      else panel.style.removeProperty('--mobile-sheet-drag');
-    };
-    handle.addEventListener('pointerup', finishDrag);
-    handle.addEventListener('pointercancel', finishDrag);
-    root.append(sheet);
+    installMobileSheetDrag({ panel, handle, onClose: close, threshold: 96 });
   }
 
   async function open(reference, fallback) {
@@ -212,7 +195,10 @@ export function createMobileFileSurface({
     delete sheet.dataset.closing;
     delete panel.dataset.dragSettled;
     panel.style.removeProperty('--mobile-sheet-drag');
+    delete panel.dataset.kind;
     sheet.inert = false;
+    sheet.setAttribute('aria-label', 'File preview');
+    delete body.dataset.kind;
     const generation = ++previewGeneration;
     const candidates = capturedFiles(getConversation()).filter((file) => samePath(file.path, reference.path));
     let file = candidates.at(-1) || fallback;
@@ -237,6 +223,96 @@ export function createMobileFileSurface({
     title.textContent = path.split('/').at(-1) || path;
     meta.textContent = `${path}${reference.startLine ? ` · Lines ${startLine}${endLine !== startLine ? `–${endLine}` : ''}` : ''}`;
     body.replaceChildren(filePreviewNode(file, { path, startLine, endLine, streamId: `file-sheet:${path}` }));
+    animateContent(body);
+  }
+
+  function openMedia({ name = 'Attachment', mimeType = '', url, items = [], selectedId } = {}) {
+    const gallery = (items.length ? items : [{ name, mimeType, url }]).filter((item) => item?.url);
+    if (!gallery.length) return;
+    ensureSheet();
+    closeGeneration += 1;
+    delete sheet.dataset.closing;
+    delete panel.dataset.dragSettled;
+    panel.style.removeProperty('--mobile-sheet-drag');
+    panel.dataset.kind = 'media';
+    sheet.inert = false;
+    const generation = ++previewGeneration;
+    let selectedIndex = Math.max(0, gallery.findIndex((item) => item.id === selectedId));
+    const viewer = element('div', 'mobile-file-media-viewer');
+    viewer.dataset.gallery = String(gallery.length > 1);
+    const stage = element('div', 'mobile-file-media-stage');
+    const strip = element('div', 'mobile-file-media-strip');
+    strip.setAttribute('aria-label', 'Attachment gallery');
+    const thumbnailButtons = [];
+
+    const mediaNode = (item, { thumbnail = false } = {}) => {
+      const isVideo = /^video\//i.test(item.mimeType || '');
+      const media = document.createElement(isVideo ? 'video' : 'img');
+      media.className = thumbnail ? 'mobile-file-media-thumbnail' : 'mobile-file-media';
+      if (isVideo) {
+        media.muted = thumbnail;
+        media.controls = !thumbnail;
+        if (!thumbnail) media.setAttribute('controls', '');
+        media.playsInline = true;
+        media.preload = 'metadata';
+        if (!thumbnail) media.dataset.ready = 'false';
+        media.setAttribute(thumbnail ? 'aria-hidden' : 'aria-label', thumbnail ? 'true' : item.name);
+      } else {
+        media.alt = thumbnail ? '' : item.name;
+        media.decoding = 'async';
+      }
+      media.src = item.url;
+      return media;
+    };
+
+    const showItem = (index) => {
+      if (generation !== previewGeneration || sheet.hidden) return;
+      selectedIndex = index;
+      const item = gallery[index];
+      const isVideo = /^video\//i.test(item.mimeType || '');
+      const media = mediaNode(item);
+      if (isVideo) {
+        const revealVideo = () => { media.dataset.ready = 'true'; };
+        media.addEventListener('loadedmetadata', revealVideo, { once: true });
+        if (media.readyState >= HTMLMediaElement.HAVE_METADATA) revealVideo();
+      }
+      media.addEventListener('error', () => {
+        if (generation !== previewGeneration || selectedIndex !== index || sheet.hidden) return;
+        stage.replaceChildren(element('div', 'mobile-file-media-fallback', item.name));
+      }, { once: true });
+      stage.replaceChildren(media);
+      title.textContent = item.name;
+      meta.textContent = `${isVideo ? 'Video' : 'Image'}${gallery.length > 1 ? ` · ${index + 1} of ${gallery.length}` : ''}`;
+      thumbnailButtons.forEach((button, buttonIndex) => {
+        if (buttonIndex === index) button.setAttribute('aria-current', 'true');
+        else button.removeAttribute('aria-current');
+      });
+      thumbnailButtons[index]?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    };
+
+    if (gallery.length > 1) {
+      gallery.forEach((item, index) => {
+        const thumbnail = element('button', 'mobile-file-media-thumb');
+        thumbnail.type = 'button';
+        thumbnail.setAttribute('aria-label', `View ${item.name}`);
+        const media = mediaNode(item, { thumbnail: true });
+        media.addEventListener('error', () => {
+          media.remove();
+          thumbnail.dataset.preview = 'fallback';
+        }, { once: true });
+        thumbnail.append(media, element('small', '', item.name));
+        thumbnail.addEventListener('click', () => showItem(index));
+        thumbnailButtons.push(thumbnail);
+        strip.append(thumbnail);
+      });
+      viewer.append(stage, strip);
+    } else viewer.append(stage);
+    sheet.hidden = false;
+    sheet.setAttribute('aria-label', 'Media preview');
+    body.dataset.kind = 'media';
+    body.replaceChildren(viewer);
+    sheet.focus({ preventScroll: true });
+    showItem(selectedIndex);
     animateContent(body);
   }
 
@@ -312,5 +388,5 @@ export function createMobileFileSurface({
     return section;
   }
 
-  return { close, open, filePreviewNode, searchMatchesNode, changeNode, changeStatsNode };
+  return { close, open, openMedia, filePreviewNode, searchMatchesNode, changeNode, changeStatsNode };
 }

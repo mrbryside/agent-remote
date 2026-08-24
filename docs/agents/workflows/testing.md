@@ -27,11 +27,14 @@ Playwright runs serially because the tmux fixture, browser renderer, SQLite file
 - Extracted frontend/server module contracts and browser-served module
   reachability: `test/refactored-modules.test.js` and `test/server.test.js`
 - Project/sidebar/terminal UX and responsive behavior: `test/e2e.spec.js`
+- Mobile visual-viewport keyboard geometry and document scroll locking:
+  `test/visual-viewport.test.js` plus the new-conversation coverage in
+  `test/e2e.spec.js`
 - Grok ACP transport ownership, timestamped persisted-turn reconciliation, real active-turn queue/steer/cancel ordering, all four mobile mode mappings, hidden Plan prompt control, and request/response extensions (leader socket, permissions, questions, and Plan Review): `test/grok-acp.test.js`
 - Provider-neutral timeline mapping, child-thread ownership, and interaction projection: `test/conversation-providers.test.js`
 - Real terminal-browser routing (including cwd fallback with tmux and routing environment removed), direct compositor-stream cadence/backpressure, stable frame source during motion, desktop split, mobile sheet persistence, tabs, DevTools, Record, cursor, refresh, and cleanup: `test/terminal-browser.spec.js`
 - Terminal-browser shim reachability, authoritative routing rejection, and session-filtered discovery: `test/terminal-browser-shim.test.js`
-- Browser automation worker path validation, exact-session close, and stale-owner reaping: `test/browser-automation.test.js`
+- Browser automation worker path validation, exact-session close, stale-owner reaping, private daemon isolation, verified hung-daemon recovery, and active-browser protection: `test/browser-automation.test.js` and `test/terminal-browser-supervisor.test.js`
 - Remote configuration: `test/config.test.js`
 - Remote SQLite state and device audit lifecycle: `test/remote-store.test.js`
 - Keychain, Cloudflare API, ownership provisioning, auth, controller, and tunnel state machines: `test/remote-*.test.js`

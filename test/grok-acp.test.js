@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { delimiter } from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { createGrokAcpClient } from '../src/conversations/acp-client.js';
+import {
+  createGrokAcpClient,
+  grokLeaderEnvironmentIsUnsafe,
+} from '../src/conversations/acp-client.js';
 
 function harness() {
   const children = [];
@@ -115,6 +119,130 @@ test('ACP client initializes once, replays history, deduplicates events, and pro
   assert.equal(child.killedWith, 'SIGTERM');
 });
 
+test('ACP leader environment excludes host control state and volatile Codex runtimes', async () => {
+  const fake = harness();
+  const client = createGrokAcpClient({
+    spawn: fake.spawn,
+    environment: () => ({
+      AGENT_REMOTE_WEB: '1',
+      BROWSER_USE_AVAILABLE_BACKENDS: 'chrome,iab',
+      CODEX_PERMISSION_PROFILE: ':danger-full-access',
+      CODEX_SESSION_ID: 'host-task',
+      NODE_REPL_TRUSTED_CODE_PATHS: '/Applications/ChatGPT.app',
+      PATH: [
+        '/safe/bin',
+        '/Users/example/.codex/tmp/arg0',
+        '/Users/example/.cache/codex-runtimes/runtime/bin',
+        '/Applications/ChatGPT.app/Contents/Resources',
+        '/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin',
+        '/pkg/env/global/bin',
+        '/usr/bin',
+        '/safe/bin',
+      ].join(delimiter),
+      TERM: 'dumb',
+    }),
+  });
+  const loading = client.loadSession({ sessionId: 'clean-environment', cwd: '/tmp/project' });
+  const load = await waitForRequest(fake, 'session/load');
+  const spawned = fake.children[0];
+  reply(spawned.child, load.id, {});
+  await loading;
+
+  assert.equal(spawned.options.env.AGENT_REMOTE_WEB, '1');
+  assert.equal(spawned.options.env.CODEX_PERMISSION_PROFILE, undefined);
+  assert.equal(spawned.options.env.CODEX_SESSION_ID, undefined);
+  assert.equal(spawned.options.env.NODE_REPL_TRUSTED_CODE_PATHS, undefined);
+  assert.equal(spawned.options.env.BROWSER_USE_AVAILABLE_BACKENDS, undefined);
+  assert.equal(spawned.options.env.PATH, ['/safe/bin', '/usr/bin'].join(delimiter));
+  assert.equal(spawned.options.env.TERM, 'xterm-256color');
+  await client.close();
+});
+
+test('identifies inherited host control state in an existing Grok leader', () => {
+  assert.equal(grokLeaderEnvironmentIsUnsafe(
+    'grok agent leader PATH=/safe/bin:/usr/bin TERM=xterm-256color',
+  ), false);
+  assert.equal(grokLeaderEnvironmentIsUnsafe(
+    'grok agent leader CODEX_SESSION_ID=old PATH=/usr/bin TERM=xterm-256color',
+  ), true);
+  assert.equal(grokLeaderEnvironmentIsUnsafe(
+    'grok agent leader PATH=/Users/test/.codex/tmp/arg0:/usr/bin TERM=xterm-256color',
+  ), true);
+});
+
+test('replaces an existing unsafe Grok leader before the first ACP session load', async () => {
+  const fake = harness();
+  const inspected = [];
+  const terminated = [];
+  const client = createGrokAcpClient({
+    spawn: fake.spawn,
+    leaderSocket: '/tmp/agent-remote-legacy-environment.sock',
+    leaderEnvironmentIsUnsafe: async (socket) => {
+      inspected.push(socket);
+      return true;
+    },
+    terminateLeader: async (socket) => terminated.push(socket),
+    runnerRecoveryDelayMs: 0,
+  });
+  const loading = client.loadSession({
+    sessionId: '01a015a9-61df-7052-a5d0-17de77a201fa',
+    cwd: '/tmp/project',
+  });
+  const load = await waitForRequest(fake, 'session/load');
+  assert.deepEqual(inspected, ['/tmp/agent-remote-legacy-environment.sock']);
+  assert.deepEqual(terminated, ['/tmp/agent-remote-legacy-environment.sock']);
+  reply(fake.children[0].child, load.id, {});
+  await loading;
+  await client.close();
+});
+
+test('recycles the shared Grok leader after a terminal tool is killed by signal 9', async () => {
+  const fake = harness();
+  const terminated = [];
+  const logs = [];
+  const client = createGrokAcpClient({
+    spawn: fake.spawn,
+    leaderSocket: '/tmp/agent-remote-signal-nine.sock',
+    terminateLeader: async (socket) => terminated.push(socket),
+    runnerRecoveryDelayMs: 0,
+    logger: (message) => logs.push(message),
+  });
+  const sessionId = '01a015a9-61df-7052-a5d0-17de77a201fa';
+  const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  const firstLoad = await waitForRequest(fake, 'session/load');
+  const firstChild = fake.children[0].child;
+  reply(firstChild, firstLoad.id, {});
+  await loading;
+
+  notify(firstChild, sessionId, {
+    sessionUpdate: 'tool_call_update', toolCallId: 'terminal-1', status: 'failed',
+    rawOutput: { output: 'exit: killed (signal 9)' },
+  }, 'signal-nine-tool');
+  notify(firstChild, sessionId, {
+    sessionUpdate: 'turn_completed', stop_reason: 'end_turn',
+  }, 'signal-nine-turn-complete');
+
+  const deadline = Date.now() + 1_000;
+  while (terminated.length === 0) {
+    if (Date.now() > deadline) assert.fail('signal-9 leader recovery did not run');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.deepEqual(terminated, ['/tmp/agent-remote-signal-nine.sock']);
+  assert.equal(firstChild.killedWith, 'SIGTERM');
+  assert.equal(logs.some((message) => /signal 9/.test(message)), true);
+
+  const reloading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  while (fake.requests.filter((request) => request.method === 'session/load').length < 2) {
+    if (Date.now() > deadline + 1_000) assert.fail('ACP client did not reconnect after signal 9');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  const secondLoad = fake.requests.filter((request) => request.method === 'session/load')[1];
+  reply(fake.children[1].child, secondLoad.id, {});
+  await reloading;
+  assert.equal(fake.children.length, 2);
+  await client.close();
+});
+
 test('ACP client starts a fresh prompt after turn completion even while the previous RPC is settling', async () => {
   const fake = harness();
   const client = createGrokAcpClient({ spawn: fake.spawn });
@@ -210,7 +338,7 @@ test('ACP client reconciles a newer persisted completion before queue, steer, an
   });
   assert.deepEqual(client.read(sessionId).queue.map((entry) => entry.id), ['queued']);
   assert.deepEqual(await client.cancel({ sessionId, cwd: '/tmp/project' }), {
-    accepted: true, active: true,
+    accepted: true, active: true, cancelRequested: true,
   });
   const liveBoundary = client.read(sessionId).turn.changedAt;
   client.synchronizeTurn({ sessionId, active: true, changedAt: liveBoundary });
@@ -536,7 +664,7 @@ test('ACP client exposes and cancels an active turn through the standard session
   assert.deepEqual(client.read(sessionId).turn, { active: true, cancelRequested: false, changedAt: 123 });
 
   assert.deepEqual(await client.cancel({ sessionId, cwd: '/tmp/project' }), {
-    accepted: true, active: true,
+    accepted: true, active: true, cancelRequested: true,
   });
   const cancellation = fake.requests.findLast((entry) => entry.method === 'session/cancel');
   assert.deepEqual(cancellation, {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
   closeTerminalBrowserAgentSession,
@@ -11,11 +12,17 @@ function socketEntry(name) {
 }
 
 test('derives the installed terminal-browser agent runtime paths', () => {
+  const distRoot = '/Users/tester/.local/share/terminal-browser/app';
+  const suffix = createHash('sha256').update(distRoot).digest('hex').slice(0, 8);
   assert.deepEqual(terminalBrowserAgentPaths({
     environment: {}, home: '/Users/tester',
   }), {
-    socketDir: '/Users/tester/.local/state/terminal-browser/agent-browser',
-    binary: '/Users/tester/.local/share/terminal-browser/app/agent-browser/bin/agent-browser',
+    distRoot,
+    runtimeDir: `/Users/tester/.local/state/terminal-browser-${suffix}`,
+    instancesDir: `/Users/tester/.local/state/terminal-browser-${suffix}/instances`,
+    socketDir: `/Users/tester/.local/state/terminal-browser-${suffix}/agent-browser`,
+    daemonSocket: `/Users/tester/.local/state/terminal-browser-${suffix}/daemon.sock`,
+    binary: `${distRoot}/agent-browser/bin/agent-browser`,
   });
 });
 

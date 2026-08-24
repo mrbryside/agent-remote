@@ -160,6 +160,7 @@ export function createBrowserMediaController({ setLoading, onFirstFrame }) {
         drawRecordingFrame(pane, pane.frame);
         decoded.close?.();
         pane.surface.dataset.ready = 'true';
+        pane.surface.dataset.targetChanging = 'false';
         pane.surfaceReady = true;
         pane.loading.hidden = true;
         pane.terminalLayer.dataset.surface = 'hidden';

@@ -121,3 +121,65 @@ test('lists only the browser state returned for the resolved agent-remote sessio
     assert.deepEqual(payload.browsers[0].tabs.map((tab) => tab.url), ['https://one.example/']);
   });
 });
+
+test('runs implicit browser actions through the owning backend and returns their output', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'agent-remote-terminal-browser-action-'));
+  const marker = join(directory, 'real-browser-ran');
+  const fakeBrowser = join(directory, 'terminal-browser-real');
+  writeFileSync(fakeBrowser, `#!/bin/sh\ntouch '${marker}'\n`);
+  chmodSync(fakeBrowser, 0o755);
+  try {
+    await withBackend((request, response) => {
+      assert.equal(request.url, '/api/control/browser-action');
+      let source = '';
+      request.setEncoding('utf8');
+      request.on('data', (chunk) => { source += chunk; });
+      request.on('end', () => {
+        const body = JSON.parse(source);
+        assert.deepEqual(body.argv, ['--', 'eval', '424200+42']);
+        assert.equal(body.threadId, 'current-grok-thread');
+        assert.equal(body.session, undefined);
+        assert.equal(body.cwd, undefined);
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ stdout: '424242\n', stderr: '' }));
+      });
+    }, async (url) => {
+      const result = await runShim(['action', '--', 'eval', '424200+42'], {
+        AGENT_REMOTE_URL: url,
+        AGENT_REMOTE_SESSION: 'ar-stale-leader-owner',
+        GROK_SESSION_ID: 'current-grok-thread',
+        TERM_PROGRAM: 'agent-remote',
+        TERMINAL_BROWSER_REAL: fakeBrowser,
+      });
+      assert.equal(result.code, 0);
+      assert.equal(result.stdout, '424242\n');
+      assert.equal(existsSync(marker), false);
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('closes multiple agent-remote browser tabs through one authoritative backend mutation', async () => {
+  await withBackend((request, response) => {
+    assert.equal(request.url, '/api/control/browser-tab');
+    let source = '';
+    request.setEncoding('utf8');
+    request.on('data', (chunk) => { source += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(source);
+      assert.equal(body.action, 'close-tab');
+      assert.deepEqual(body.tabs, [2, 3]);
+      assert.equal(typeof body.cwd, 'string');
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ closed: [2, 3], remaining: 1, rendererClosed: false }));
+    });
+  }, async (url) => {
+    const result = await runShim(['close-tab', '2', '3'], {
+      AGENT_REMOTE_URL: url,
+      TERM_PROGRAM: 'agent-remote',
+    });
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /Closed 2 browser tabs/);
+  });
+});
