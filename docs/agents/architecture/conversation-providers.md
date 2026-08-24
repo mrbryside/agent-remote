@@ -179,6 +179,13 @@ animation during a reparse, and reduced-motion keeps the same DOM contract. A
 completed snapshot becomes authoritative again. Reasoning appends as plain text
 inside one capped vertical panel; it wraps long lines and never owns a second
 horizontal or nested text scroller.
+An ordered full snapshot always supersedes compact frames that have arrived but
+have not painted yet. The client discards that visual backlog and commits the
+snapshot immediately, so `turn_completed`, the Send/Stop control, and canonical
+final Markdown can never wait behind token entrance effects. Final Markdown is
+rebuilt once from the authoritative source while restoring code/table scroll
+positions; it does not morph a partially highlighted open fence into the final
+syntax tree.
 ACP `session/load` can replay a completed turn without replaying Grok's final
 lifecycle notification. When the replay batch reaches its persisted boundary,
 the client settles the live `turn.active` flag together with the synthesized
@@ -229,9 +236,12 @@ while a mobile change affects only the loaded Grok session through ACP. A real
 `current_mode_update` from enter/exit Plan still updates the mobile control.
 Model and mode selectors remain available while a turn streams. A choice made
 during an active turn is projected into the mobile controls immediately but
-retained as pending ACP state; immediately before the next queued
-`session/prompt`, the client applies `session/set_model` and the mobile mode
-contract in order. It never mutates the turn already in progress.
+retained as pending ACP state; as soon as that turn completes, the client
+applies `session/set_model` and the mobile mode contract in order, even when no
+prompt is queued. It never mutates the turn already in progress. Model ids
+observed on actual desktop-originated user-message updates also reconcile stale
+`session/load` metadata, including the local Qwen runtime alias, so resizing
+from the Grok TUI into the native conversation cannot display an older model.
 
 Composer completion also stays behind provider and project boundaries. Slash
 commands come from Grok's live ACP `available_commands_update` notification;

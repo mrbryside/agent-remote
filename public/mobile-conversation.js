@@ -181,7 +181,6 @@ export function createMobileConversationView({
   let selectedChildId;
   let selectedPlanId;
   let sheetReturnFocus;
-  let deferredConversationPayload;
   let compactMessageId;
   const compactStreamBatcher = createCompactStreamBatcher({
     // Safari can defer requestAnimationFrame while native chrome, scrolling,
@@ -191,13 +190,15 @@ export function createMobileConversationView({
     requestFrame: (callback) => setTimeout(callback, 32),
     cancelFrame: (frame) => clearTimeout(frame),
     onFlush: (stream) => {
-      if (!applyStreamDelta(undefined, stream)) schedule(0);
-    },
-    onIdle: () => {
-      if (!deferredConversationPayload) return;
-      const payload = deferredConversationPayload;
-      deferredConversationPayload = undefined;
-      applyFullConversationPayload(payload);
+      try {
+        if (!applyStreamDelta(undefined, stream)) schedule(0);
+      } catch {
+        // Retry from the provider's canonical snapshot. In particular, do not
+        // let one incremental Markdown frame prevent turn_completed from
+        // replacing a streaming code block.
+        renderedSignature = '';
+        schedule(0);
+      }
     },
   });
   let sheetCloseGeneration = 0;
@@ -850,7 +851,6 @@ export function createMobileConversationView({
     clearTimeout(streamWatchdogTimer);
     streamWatchdogTimer = undefined;
     compactStreamBatcher.discard();
-    deferredConversationPayload = undefined;
     compactMessageId = undefined;
     const socket = streamSocket;
     streamSocket = undefined;
@@ -1006,6 +1006,16 @@ export function createMobileConversationView({
 
   function morphStreamingMarkdown(content, fresh, { streaming = true, rawText } = {}) {
     const scroll = captureStreamScroll(content);
+    if (!streaming) {
+      // The highlighted DOM built while a fence is open can contain a mixture
+      // of token spans and raw suffix text. Settle from canonical Markdown in
+      // one pass instead of index-morphing two incompatible syntax trees.
+      content.replaceChildren(...fresh.childNodes);
+      syncAttributes(content, fresh);
+      delete content.__mobileRawText;
+      restoreStreamScroll(content, scroll);
+      return content;
+    }
     const currentChildren = [...content.childNodes];
     const freshChildren = [...fresh.childNodes];
     const sharedLength = Math.min(currentChildren.length, freshChildren.length);
@@ -1018,13 +1028,8 @@ export function createMobileConversationView({
     for (let index = sharedLength; index < currentChildren.length; index += 1) {
       currentChildren[index].remove();
     }
-    if (streaming) {
-      content.dataset.streaming = 'true';
-      content.__mobileRawText = rawText;
-    } else {
-      syncAttributes(content, fresh);
-      delete content.__mobileRawText;
-    }
+    content.dataset.streaming = 'true';
+    content.__mobileRawText = rawText;
     restoreStreamScroll(content, scroll);
     return content;
   }
@@ -1752,14 +1757,9 @@ export function createMobileConversationView({
             setBooting(false);
             return;
           }
-          // ACP can deliver a turn's token frames as one WebSocket burst. Let
-          // the bounded visual queue paint those exact suffixes before the
-          // authoritative completion snapshot settles the message.
-          if (payload.conversation && compactStreamBatcher.hasPending()) {
-            deferredConversationPayload = payload;
-            setBooting(false);
-            return;
-          }
+          // A full snapshot contains every earlier suffix on this ordered
+          // socket. Apply it immediately and discard unpainted compact frames;
+          // lifecycle completion must never wait behind visual token effects.
           applyFullConversationPayload(payload);
           return;
         }
@@ -2643,7 +2643,6 @@ export function createMobileConversationView({
       cancellingTurn,
     });
     if (signature === renderedSignature) return;
-    renderedSignature = signature;
     if (isRoot) {
       title.textContent = conversation.thread.title;
       meta.textContent = [conversation.thread.agentName, conversation.thread.model].filter(Boolean).join(' · ');
@@ -2761,6 +2760,10 @@ export function createMobileConversationView({
       if (sheetMode === 'list') renderSubagentList(conversation);
       else if (sheetMode === 'plan') renderPlanSheet(conversation);
     }
+    // Commit the signature only after every DOM surface succeeds. A failed
+    // Markdown reconciliation can then retry the same authoritative snapshot
+    // instead of leaving the model state newer than the visible UI forever.
+    renderedSignature = signature;
   }
 
   async function refresh() {

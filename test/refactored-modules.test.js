@@ -238,6 +238,36 @@ test('compact stream bursts drain in bounded Markdown line batches before settli
   assert.equal(idle, 1);
 });
 
+test('a failed compact paint cannot strand later chunks or lifecycle settlement', () => {
+  const callbacks = [];
+  const flushed = [];
+  let idle = 0;
+  let failFirstPaint = true;
+  const batcher = createCompactStreamBatcher({
+    requestFrame(callback) { callbacks.push(callback); return callbacks.length; },
+    cancelFrame() {},
+    onFlush(stream) {
+      flushed.push(stream.delta);
+      if (failFirstPaint) {
+        failFirstPaint = false;
+        throw new Error('synthetic Markdown paint failure');
+      }
+    },
+    onIdle() { idle += 1; },
+    maxBreaks: 1,
+    maxChars: 1_000,
+  });
+  batcher.push({
+    kind: 'agent_message_chunk', threadId: 'root', itemId: 'answer', delta: 'first\nsecond',
+  });
+  assert.throws(() => callbacks.shift()(), /synthetic Markdown paint failure/);
+  assert.equal(batcher.hasPending(), true);
+  callbacks.shift()();
+  assert.deepEqual(flushed, ['first\n', 'second']);
+  assert.equal(batcher.hasPending(), false);
+  assert.equal(idle, 1);
+});
+
 test('active fallback snapshots cannot roll streaming assistant text backward', () => {
   const previous = {
     thread: { id: 'root' }, activity: { active: true },

@@ -20,11 +20,17 @@ export function createCompactStreamBatcher({
     }
     const stream = { ...pending, delta: pending.delta.slice(0, length) };
     pending.delta = pending.delta.slice(length);
-    onFlush(stream);
-    if (pending.delta) frame = requestFrame(flush);
-    else {
-      pending = undefined;
-      onIdle();
+    try {
+      onFlush(stream);
+    } finally {
+      // A renderer failure must never strand the remaining token queue. Full
+      // lifecycle snapshots supersede these deltas, but they cannot commit if
+      // the batcher stays permanently pending after one malformed frame.
+      if (pending.delta) frame = requestFrame(flush);
+      else {
+        pending = undefined;
+        onIdle();
+      }
     }
   }
 

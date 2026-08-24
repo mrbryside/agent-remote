@@ -194,6 +194,33 @@ function metadataWithModel(metadata, modelId, effortValue) {
   };
 }
 
+function advertisedModelId(metadata, observedModelId) {
+  if (typeof observedModelId !== 'string' || !observedModelId) return undefined;
+  const models = Array.isArray(metadata?.models?.availableModels)
+    ? metadata.models.availableModels : [];
+  const exact = models.find((model) => model?.modelId === observedModelId);
+  if (exact) return exact.modelId;
+  const normalized = observedModelId.toLowerCase().replace(/-build$/, '');
+  const normalizedMatch = models.find((model) =>
+    String(model?.modelId || '').toLowerCase().replace(/-build$/, '') === normalized);
+  if (normalizedMatch) return normalizedMatch.modelId;
+  if (normalized.startsWith('qwen')) {
+    const qwenModels = models.filter((model) => String(model?.modelId || '').toLowerCase().startsWith('qwen'));
+    if (qwenModels.length === 1) return qwenModels[0].modelId;
+  }
+  return undefined;
+}
+
+function reconcileObservedModel(metadata, events) {
+  if (!metadata) return metadata;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const observed = events[index]?.params?.update?._meta?.modelId;
+    const modelId = advertisedModelId(metadata, observed);
+    if (modelId) return metadataWithModel(metadata, modelId);
+  }
+  return metadata;
+}
+
 function eventRecord(params) {
   const update = params?.update;
   if (!params?.sessionId || !update || typeof update !== 'object') return undefined;
@@ -537,6 +564,9 @@ export function createGrokAcpClient({
       current.pendingSteers.shift();
     }
     current.events.push(record);
+    if (!current.pendingModelId) {
+      current.metadata = reconcileObservedModel(current.metadata, [record]);
+    }
     if (!record.replay && runnerKilledBySignalNine(update)) {
       runnerRecoveryRequested = true;
       logger('Grok command runner reported signal 9; recycling the shared leader after the active turn');
@@ -912,7 +942,7 @@ export function createGrokAcpClient({
     current.loading = request('session/load', { sessionId, cwd, mcpServers: [] }).then((result) => {
       if (loadingGeneration !== generation) throw rpcError('Grok ACP reconnected while loading');
       current.loadedGeneration = generation;
-      current.metadata = result;
+      current.metadata = reconcileObservedModel(result, current.events);
       const sessionMeta = result?._meta || {};
       if (sessionMeta.yoloMode === true) current.permissionMode = 'bypassPermissions';
       else if (sessionMeta.autoMode === true) current.permissionMode = 'auto';
@@ -1042,7 +1072,9 @@ export function createGrokAcpClient({
     const current = state(sessionId);
     if (runnerRecoveryRequested || runnerRecoveryPromise) return;
     if (current.drainingPrompts) return current.drainingPrompts;
-    if (current.activePrompt || current.turnActive || current.queuedPrompts.length === 0) return;
+    const controlsPending = Boolean(current.pendingModelId || current.pendingModeId);
+    if (current.activePrompt || current.turnActive ||
+        (current.queuedPrompts.length === 0 && !controlsPending)) return;
     let controlsFailed = false;
     const draining = (async () => {
       try {

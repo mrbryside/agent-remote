@@ -495,6 +495,73 @@ test('ACP client changes only to an advertised model and updates the session sna
   await client.close();
 });
 
+test('ACP client follows the model that the shared desktop session actually used', async () => {
+  const fake = harness();
+  const client = createGrokAcpClient({ spawn: fake.spawn });
+  const sessionId = '01a015a9-61df-7052-a5d0-17de77a201fb';
+  const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  const load = await waitForRequest(fake, 'session/load');
+  const child = fake.children[0].child;
+  notify(child, sessionId, {
+    sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'desktop turn' },
+    _meta: { modelId: 'grok-4.6' },
+  });
+  reply(child, load.id, {
+    models: {
+      currentModelId: 'qwen-local',
+      availableModels: [
+        { modelId: 'qwen-local', name: 'Qwen Local' },
+        { modelId: 'grok-4.6', name: 'Grok 4.6' },
+      ],
+    },
+    _meta: { 'x.ai/sessionDetail': { currentModelId: 'qwen-local' } },
+  });
+  await loading;
+  assert.equal(client.read(sessionId).metadata.models.currentModelId, 'grok-4.6',
+    'replayed desktop events must override stale session/load metadata');
+
+  notify(child, sessionId, {
+    sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'local turn' },
+    _meta: { modelId: 'qwen3.8-27b' },
+  });
+  assert.equal(client.read(sessionId).metadata.models.currentModelId, 'qwen-local',
+    'the one advertised Qwen entry maps the runtime model alias');
+  await client.close();
+});
+
+test('ACP client commits an active-turn model choice as soon as that turn completes', async () => {
+  const fake = harness();
+  const client = createGrokAcpClient({ spawn: fake.spawn });
+  const sessionId = '01a015a9-61df-7052-a5d0-17de77a201fc';
+  const loading = client.loadSession({ sessionId, cwd: '/tmp/project' });
+  const load = await waitForRequest(fake, 'session/load');
+  const child = fake.children[0].child;
+  reply(child, load.id, {
+    models: {
+      currentModelId: 'qwen-local',
+      availableModels: [
+        { modelId: 'qwen-local', name: 'Qwen Local' },
+        { modelId: 'grok-4.6', name: 'Grok 4.6' },
+      ],
+    },
+    _meta: { 'x.ai/sessionDetail': { currentModelId: 'qwen-local' } },
+  });
+  await loading;
+  notify(child, sessionId, { sessionUpdate: 'turn_started' });
+  assert.equal((await client.setModel({
+    sessionId, cwd: '/tmp/project', modelId: 'grok-4.6',
+  })).pending, true);
+  notify(child, sessionId, { sessionUpdate: 'turn_completed', stop_reason: 'end_turn' });
+  const modelRequest = await waitForRequest(fake, 'session/set_model');
+  assert.deepEqual(modelRequest.params, { sessionId, modelId: 'grok-4.6' });
+  reply(child, modelRequest.id, {});
+  while (client.read(sessionId).metadata.models.currentModelId !== 'grok-4.6') {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(fake.requests.some((entry) => entry.method === 'session/prompt'), false);
+  await client.close();
+});
+
 test('ACP client defers active-turn model and mode choices until before the next prompt', async () => {
   const fake = harness();
   const client = createGrokAcpClient({ spawn: fake.spawn });
