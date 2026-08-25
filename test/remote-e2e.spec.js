@@ -46,6 +46,12 @@ async function clearRemoteCookies(context) {
 test.describe.configure({ mode: 'serial' });
 
 test.describe('Remote gateway browser fixture', () => {
+  test.beforeEach(async ({ request }) => {
+    // Pairing cases intentionally leave Quick running. Reset the shared tunnel
+    // before every serial case so Setup tests never inherit the prior case.
+    await localApi(request, '/api/remote/tunnels/stop', { method: 'POST' });
+  });
+
   test('HTTP public origins are rejected by default and accepted only through the explicit fixture seam', async () => {
     const auth = createRemoteAuth({ store: {} });
     await expect(auth.createPairing(remoteUrl)).rejects.toThrow(/HTTPS origin/i);

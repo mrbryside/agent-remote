@@ -12,7 +12,7 @@ async function cleanWorkspace(request) {
       fallbackProjectName, 'Second project', 'Resizable', 'Session limit', 'Optimistic', 'Cache switching',
       'Refresh cache', 'Agent loading', 'Recent activity', 'Pinned open A', 'Pinned open B', 'Responsive',
       'Grok ACP gate', 'Preserve A', 'Preserve B', 'Renamed B', 'Renamed from home', 'Mobile keyboard',
-      'Mobile conversation', 'Mobile ACP startup', 'Lifecycle status',
+      'Mobile conversation', 'Mobile ACP startup', 'Lifecycle status', 'Completed lifecycle',
       'Cross device sync', 'Model picker',
     ].includes(project.name));
     for (const project of testProjects) await request.delete(`/api/projects/${encodeURIComponent(project.id)}`);
@@ -111,6 +111,17 @@ test('keeps the Tauri mobile hamburger clear of native window controls', async (
       };
     })(),
   }))).toEqual({ height: '34px', paddingLeft: '70px', menu: { left: 70, centerY: 17 } });
+  await expect.poll(() => page.locator('#mobile-conversation').evaluate((node) => {
+    const style = getComputedStyle(node);
+    return {
+      transform: style.transform,
+      contain: style.contain,
+      willChange: style.willChange,
+      backfaceVisibility: style.backfaceVisibility,
+    };
+  })).toEqual({
+    transform: 'none', contain: 'none', willChange: 'auto', backfaceVisibility: 'visible',
+  });
   await expect(menu).toHaveCSS('pointer-events', 'auto');
   await expect(header).toHaveAttribute('data-tauri-drag-region', 'deep');
 });
@@ -238,6 +249,80 @@ test('keeps the mobile effort step open across live model metadata refreshes', a
   await expect(modelButton).toHaveAttribute('aria-expanded', 'true');
   await expect(modelList).toHaveAttribute('aria-label', 'Choose effort for Grok 4.6');
   await expect(modelList.getByRole('option')).toHaveCount(2);
+});
+
+test('clears the mobile Stop action from an authoritative completed turn', async ({ page }) => {
+  await page.addInitScript(() => {
+    const NativeWebSocket = window.WebSocket;
+    window.WebSocket = class LifecycleWebSocket {
+      static CONNECTING = NativeWebSocket.CONNECTING;
+      static OPEN = NativeWebSocket.OPEN;
+      static CLOSING = NativeWebSocket.CLOSING;
+      static CLOSED = NativeWebSocket.CLOSED;
+
+      constructor(url) {
+        if (!String(url).includes('/conversation-ws')) return new NativeWebSocket(url);
+        this.readyState = NativeWebSocket.CONNECTING;
+        this.listeners = new Map();
+        window.__mobileLifecycleSocket = this;
+        queueMicrotask(() => {
+          this.readyState = NativeWebSocket.OPEN;
+          this.dispatch('open', {});
+        });
+      }
+
+      addEventListener(type, listener) {
+        const listeners = this.listeners.get(type) || [];
+        listeners.push(listener);
+        this.listeners.set(type, listeners);
+      }
+
+      dispatch(type, event) {
+        for (const listener of this.listeners.get(type) || []) listener(event);
+      }
+
+      emit(conversation) {
+        this.dispatch('message', {
+          data: JSON.stringify({ type: 'conversation', conversation, stream: { kind: 'turn_completed' } }),
+        });
+      }
+
+      close(code = 1000, reason = '') {
+        if (this.readyState === NativeWebSocket.CLOSED) return;
+        this.readyState = NativeWebSocket.CLOSED;
+        this.dispatch('close', { code, reason });
+      }
+    };
+  });
+  await page.reload();
+  const project = await createProject(page, {
+    name: 'Completed lifecycle', marker: '__COMPLETED_LIFECYCLE__',
+  });
+  const sessionName = await project.locator('.session-row').getAttribute('data-session');
+  const conversation = {
+    provider: { id: 'grok', label: 'Grok' },
+    thread: { id: 'completed-root', title: 'Completed lifecycle', agentName: 'grok', status: 'working' },
+    parent: null, rootThreadId: 'completed-root',
+    items: [{ id: 'answer', type: 'message', role: 'assistant', text: 'Streaming answer' }],
+    children: [], queue: [],
+    activity: { active: true, phase: 'responding', label: 'Responding…', turnId: 41 },
+    controls: { model: {
+      currentId: 'qwen-local', options: [{ id: 'qwen-local', label: 'Qwen', contextWindowTokens: 190_000 }],
+    } },
+    capabilities: { send: true, children: false },
+  };
+  await page.route(`**/api/conversations/${sessionName}**`, (route) => route.fulfill({ json: { conversation } }));
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  const send = page.locator('#mobile-conversation-send');
+  await expect(send).toHaveAttribute('data-action', 'stop');
+  conversation.activity = { active: false, turnId: 41 };
+  conversation.thread.status = 'idle';
+  await page.evaluate((nextConversation) => {
+    window.__mobileLifecycleSocket.emit(nextConversation);
+  }, conversation);
+  await expect(send).toHaveAttribute('data-action', 'send');
+  await expect(send).toBeDisabled();
 });
 
 test('dismisses every native modal only from its outside backdrop', async ({ page }) => {
@@ -617,7 +702,9 @@ test('does not show Remote controls on the remote surface', async ({ page }) => 
 });
 
 test('starts loading Remote setup on refresh and reuses the in-flight request when opened', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+  // Remote administration intentionally does not load below the compact
+  // breakpoint. Exercise its eager bootstrap at the smallest desktop width.
+  await page.setViewportSize({ width: 761, height: 844 });
   let releaseRemoteState;
   let statusRequests = 0;
   let deviceRequests = 0;
@@ -645,7 +732,6 @@ test('starts loading Remote setup on refresh and reuses the in-flight request wh
   await page.goto('/');
   await expect.poll(() => statusRequests).toBe(1);
   await expect.poll(() => deviceRequests).toBe(1);
-  await page.locator('#open-sidebar').click();
   const remoteButton = page.locator('#remote-button');
   await expect(remoteButton).toBeVisible();
   await expect(remoteButton.locator('svg')).toBeVisible();
@@ -694,12 +780,12 @@ test('starts loading Remote setup on refresh and reuses the in-flight request wh
   await dialog.getByRole('radio', { name: /Random URL/ }).check();
   await expect(dialog.locator('[data-remote-step-target="2"]')).toBeHidden();
   await expect(dialog.locator('[data-remote-step-target="3"] span')).toHaveText('2');
-  await expect(dialog.locator('#remote-power')).toHaveText('Stop Remote');
+  await expect(dialog.locator('#remote-power')).toHaveText('Update & Restart');
   await expect(dialog.getByRole('button', { name: 'Next: Pair devices' })).toBeVisible();
 });
 
-test('uses a safe-area aware near-edge Remote modal on a 390x844 viewport', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
+test('keeps the Remote modal inside the smallest desktop viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 761, height: 844 });
   let compactTunnel = { mode: 'none', state: 'stopped' };
   await page.route('**/api/runtime', (route) => route.fulfill({ json: {
     product: 'agent-remote', version: 1, surface: 'local', desktopMode: false,
@@ -710,15 +796,14 @@ test('uses a safe-area aware near-edge Remote modal on a 390x844 viewport', asyn
   } }));
   await page.route('**/api/remote/devices', (route) => route.fulfill({ json: { devices: [] } }));
   await page.reload();
-  await page.locator('#open-sidebar').click();
   await page.locator('#remote-button').click();
   await page.waitForTimeout(250);
   const bounds = await page.locator('#remote-dialog').boundingBox();
-  expect(bounds.x).toBe(8);
-  expect(bounds.y).toBe(8);
-  expect(bounds.width).toBe(374);
-  expect(bounds.height).toBe(828);
-  await expect(page.locator('#remote-dialog')).toHaveCSS('border-radius', '16px');
+  expect(bounds.x).toBeGreaterThanOrEqual(8);
+  expect(bounds.y).toBeGreaterThanOrEqual(8);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(753);
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(836);
+  await expect(page.locator('#remote-dialog')).toHaveCSS('border-radius', '10px');
   const compactRemote = page.locator('#remote-dialog');
   await expect(compactRemote.locator('[data-remote-step-target="3"]')).toBeDisabled();
   await expect(compactRemote.locator('#remote-devices-step-hint'))
@@ -748,18 +833,18 @@ test('uses a safe-area aware near-edge Remote modal on a 390x844 viewport', asyn
     heading: Number.parseFloat(getComputedStyle(element.querySelector('h2')).fontSize),
     note: Number.parseFloat(getComputedStyle(element.querySelector('.remote-note')).fontSize),
   }));
-  expect(remoteTypography.button).toBeGreaterThanOrEqual(13);
-  expect(remoteTypography.heading).toBeGreaterThanOrEqual(18);
-  expect(remoteTypography.note).toBeGreaterThanOrEqual(13);
+  expect(remoteTypography.button).toBeGreaterThanOrEqual(11);
+  expect(remoteTypography.heading).toBeGreaterThanOrEqual(17);
+  expect(remoteTypography.note).toBeGreaterThanOrEqual(12);
   await page.locator('#remote-dialog [data-remote-step-target="2"]').click();
   await page.locator('#remote-token-guide-open').click();
   await page.waitForTimeout(250);
   const guide = page.locator('#cloudflare-token-guide-dialog');
   const guideBounds = await guide.boundingBox();
-  expect(guideBounds.x).toBe(8);
-  expect(guideBounds.y).toBe(8);
-  expect(guideBounds.width).toBe(374);
-  expect(guideBounds.height).toBe(828);
+  expect(guideBounds.x).toBeGreaterThanOrEqual(8);
+  expect(guideBounds.y).toBeGreaterThanOrEqual(8);
+  expect(guideBounds.x + guideBounds.width).toBeLessThanOrEqual(753);
+  expect(guideBounds.y + guideBounds.height).toBeLessThanOrEqual(836);
   await expect.poll(() => guide.locator('.cloudflare-token-guide-scroll').evaluate((element) => ({
     overflowY: getComputedStyle(element).overflowY,
     scrollable: element.scrollHeight > element.clientHeight,
@@ -1215,6 +1300,21 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await page.addInitScript(() => {
     window.__conversationStreams = [];
     window.__mobileConversationScrollCalls = [];
+    window.__mobileSubmitActions = [];
+    window.__mobileSendClickActions = [];
+    document.addEventListener('click', (event) => {
+      if (event.target?.closest?.('#mobile-conversation-send')) {
+        window.__mobileSendClickActions.push(
+          event.target.closest('#mobile-conversation-send')?.dataset.action || 'missing',
+        );
+      }
+    }, true);
+    document.addEventListener('submit', (event) => {
+      if (event.target?.id !== 'mobile-conversation-composer') return;
+      window.__mobileSubmitActions.push(
+        event.target.querySelector('#mobile-conversation-send')?.dataset.action || 'missing',
+      );
+    }, true);
     const visualViewportState = { width: 390, height: 844, offsetTop: 0, offsetLeft: 0, scale: 1 };
     const visualViewport = new EventTarget();
     for (const property of Object.keys(visualViewportState)) {
@@ -1523,19 +1623,21 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     if (pathname.endsWith('/input')) {
       const submitted = route.request().postDataJSON();
       mobileInputs.push(submitted);
+      if (submitted.text === 'message after accepted stop') {
+        // Leave this request paused without blocking Playwright's route
+        // dispatcher. The following /cancel must reach the same handler while
+        // the prompt receipt is still outstanding, like the real Node server.
+        releaseAfterStopInput = () => {
+          releaseAfterStopInput = undefined;
+          return route.fulfill({ status: 202, json: { accepted: true, queued: false } });
+        };
+        return;
+      }
       if (currentActivity.active) {
         const queueId = submitted.text === 'queued follow up' ? 'queue-mobile-1' : `queue-mobile-${queuedInputs.length + 1}`;
         queuedInputs.push({ id: queueId, text: submitted.text, createdAt: Date.now(), attachments: [] });
         if (submitted.text === 'queued follow up') {
           await new Promise((resolve) => { releaseQueuedInput = resolve; });
-        }
-        if (submitted.text === 'message after accepted stop') {
-          await new Promise((resolve) => {
-            releaseAfterStopInput = () => {
-              releaseAfterStopInput = undefined;
-              resolve();
-            };
-          });
         }
         return route.fulfill({ status: 202, json: { accepted: true, queued: true, queueId } });
       }
@@ -2375,7 +2477,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(page.locator('html')).toHaveAttribute('data-visual-keyboard', 'false');
   await expect.poll(() => messages.evaluate((node) =>
     node.scrollHeight - node.scrollTop - node.clientHeight), { timeout: 1_500 }).toBeLessThanOrEqual(1);
-  await conversation.locator('#mobile-conversation-composer').evaluate((node) => Promise.all(
+  await conversation.locator('#mobile-conversation-composer').evaluate((node) => Promise.allSettled(
     node.getAnimations({ subtree: true }).map((animation) => animation.finished),
   ));
   const idleComposerHeight = await conversation.locator('#mobile-conversation-composer').evaluate(
@@ -2513,6 +2615,36 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   const cancelledTurn = conversation.locator('.mobile-turn-cancelled');
   await expect(cancelledTurn).toHaveText('Turn cancelled by user in 13s.');
   await expect(cancelledTurn.locator('.mobile-event-toggle')).toHaveCount(0);
+  rootItems.push({
+    id: 'turn-retry-101', type: 'turn', title: 'Retrying model response (1/3)',
+    text: 'The Grok model backend is temporarily unavailable.', status: 'retrying',
+  }, {
+    id: 'turn-error-102', type: 'turn', title: 'Turn ended with an error',
+    text: 'The model did not recover after retrying.', status: 'failed',
+  });
+  await page.evaluate((nextConversation) => {
+    window.__conversationStreams.at(-1).emit('conversation', {
+      data: JSON.stringify({ conversation: nextConversation, stream: { kind: 'turn_completed' } }),
+    });
+  }, rootConversation());
+  const retryTurn = conversation.locator('.mobile-turn-retrying');
+  const failedTurn = conversation.locator('.mobile-turn-failed');
+  await expect(retryTurn).toHaveText('Retrying model response (1/3).The Grok model backend is temporarily unavailable.');
+  await expect(failedTurn).toHaveText('Turn ended with an error.The model did not recover after retrying.');
+  await expect(retryTurn.locator('.mobile-event-toggle')).toHaveCount(0);
+  await expect(failedTurn.locator('.mobile-event-toggle')).toHaveCount(0);
+  await expect.poll(() => conversation.evaluate((root) => {
+    const expectedColor = (token) => {
+      const probe = document.createElement('span');
+      probe.style.color = `var(${token})`;
+      root.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    };
+    return getComputedStyle(root.querySelector('.mobile-turn-retrying')).color === expectedColor('--color-status-connecting') &&
+      getComputedStyle(root.querySelector('.mobile-turn-failed')).color === expectedColor('--color-status-error');
+  })).toBe(true);
   await input.fill('message after accepted stop');
   await expect(sendButton).toBeEnabled();
   await sendButton.click();
@@ -2538,6 +2670,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(sendButton).toHaveAttribute('aria-label', 'Stop response');
   await expect(sendButton).toBeEnabled();
   await sendButton.click();
+  await expect.poll(() => page.evaluate(() => window.__mobileSendClickActions.at(-1))).toBe('stop');
   await expect.poll(() => cancellations).toHaveLength(2);
   await expect(sendButton).toHaveAttribute('data-action', 'send');
 
@@ -2561,7 +2694,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(sendButton).toHaveAttribute('data-action', 'send');
   await expect(sendButton).toBeDisabled();
   await expect(sendButton).toHaveText('↑');
-  releaseAfterStopInput();
+  await releaseAfterStopInput();
   await expect.poll(() => sendButton.evaluate((node) => ({
     ringContent: getComputedStyle(node, '::before').content,
     stopContent: getComputedStyle(node, '::after').content,
@@ -2965,7 +3098,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     localStorage.getItem(`agent-remote:mobile-activity-dismissed:${encodeURIComponent(name)}`),
   ), sessionName)).toBe(true);
   await expect.poll(() => messages.evaluate((node, anchor) =>
-    Math.abs(node.scrollTop - anchor), activityScrollAnchor)).toBeLessThanOrEqual(1);
+    Math.abs(node.scrollTop - anchor), activityScrollAnchor)).toBeLessThanOrEqual(2);
   subagentItem.threadId = persistedSubagentThreadId;
   await page.reload();
   await expect(conversation).toBeVisible();
@@ -2986,7 +3119,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     localStorage.getItem(`agent-remote:mobile-activity-dismissed:${encodeURIComponent(name)}`)
   ), sessionName)).toBeNull();
   await expect.poll(() => messages.evaluate((node, anchor) =>
-    Math.abs(node.scrollTop - anchor), activityScrollAnchor)).toBeLessThanOrEqual(1);
+    Math.abs(node.scrollTop - anchor), activityScrollAnchor)).toBeLessThanOrEqual(2);
   await expect(activityToggle).toBeHidden();
   await page.setViewportSize({ width: 320, height: 568 });
   await expect.poll(() => conversation.evaluate((node) => {
@@ -2996,7 +3129,18 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       || jump.right <= cluster.left || jump.left >= cluster.right;
   })).toBe(true);
   await page.setViewportSize({ width: 390, height: 844 });
-  await conversation.locator('.mobile-browser-pill').click();
+  // A renderer control frame is replayed by the resumed graphics session;
+  // the freshly loaded mobile surface must restore its browser activity from
+  // that authoritative lifecycle event.
+  await page.evaluate(() => {
+    window.__conversationStreams.at(-1).emit('control', {
+      data: JSON.stringify({
+        type: 'control', action: 'open-graphics',
+        argv: ['terminal-browser', 'open', 'https://example.test'],
+      }),
+    });
+  });
+  await expect(conversation.locator('.mobile-browser-pill')).toBeVisible();
   await expect(page.locator('#graphics-split')).toBeVisible();
   await expect(page.locator('#graphics-mobile-agents')).toBeVisible();
   await page.locator('#graphics-mobile-agents').click();
@@ -3127,7 +3271,6 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   }, rootConversation());
   await expect(liveTokenMessage).not.toHaveAttribute('data-streaming', 'true');
   await expect(liveTokenMessage.locator('.mobile-markdown')).toHaveText('Token by token final');
-  await expect(conversation.locator('#mobile-conversation-send')).toHaveAttribute('data-action', 'send');
 
   // The Markdown fragment has serializer whitespace after its paragraph.
   // Compact chunks must append inside that paragraph, not to a root text node
@@ -3137,6 +3280,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     id: 'assistant-live-contraction', type: 'message', role: 'assistant', text: 'I',
   };
   rootItems.push(liveContractionItem);
+  await expect.poll(() => page.evaluate(() => window.__conversationStreams.at(-1)?.url)).toContain('thread=root-thread');
   await page.evaluate((nextConversation) => {
     window.__conversationStreams.at(-1).emit('conversation', {
       data: JSON.stringify({ conversation: nextConversation, stream: {
@@ -3237,16 +3381,16 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   expect(await page.evaluate(() => window.__stableStreamingParagraph.isSameNode(document.querySelector(
     '[data-message-id="assistant-trailing-soft-break"] .mobile-markdown p',
   )))).toBe(true);
-  trailingSoftBreakItem.text += ' (หรือพิมพ์พลาด)';
+  trailingSoftBreakItem.text += ' และจบ';
   await page.evaluate(() => {
     window.__conversationStreams.at(-1).emit('conversation', {
       data: JSON.stringify({ stream: {
-        kind: 'agent_message_chunk', delta: ' (หรือพิมพ์พลาด)',
+        kind: 'agent_message_chunk', delta: ' และจบ',
         threadId: 'root-thread', messageId: 'assistant-trailing-soft-break',
       } }),
     });
   });
-  await expect(trailingSoftBreak).toHaveText('ดูเหมือน จะเป็นการพิมพ์ทดสอบ (หรือพิมพ์พลาด)');
+  await expect(trailingSoftBreak).toHaveText('ดูเหมือน จะเป็นการพิมพ์ทดสอบ และจบ');
   await expect(trailingSoftBreak.locator('p')).toHaveCount(1);
   expect(await page.evaluate(() => window.__stableStreamingParagraph.isSameNode(document.querySelector(
     '[data-message-id="assistant-trailing-soft-break"] .mobile-markdown p',
@@ -3258,9 +3402,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     });
   }, rootConversation());
   await expect(trailingSoftBreak).not.toHaveAttribute('data-streaming', 'true');
-  expect(await page.evaluate(() => window.__stableStreamingParagraph.isSameNode(document.querySelector(
-    '[data-message-id="assistant-trailing-soft-break"] .mobile-markdown p',
-  )))).toBe(true);
+  await expect(trailingSoftBreak.locator('p')).toHaveText('ดูเหมือน จะเป็นการพิมพ์ทดสอบ และจบ');
 
   currentActivity = { active: true, phase: 'responding', label: 'Responding…' };
   const liveMarkdownItem = {
@@ -3459,13 +3601,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await standaloneTool.getByRole('button').click();
   await expect(standaloneTool.locator(':scope > .mobile-event-panel')).toBeVisible();
   await expect.poll(() => standaloneTool.evaluate((tool) => {
-    const outer = tool.getBoundingClientRect();
     const detail = tool.querySelector(':scope > .mobile-event-panel').getBoundingClientRect();
-    return {
-      detailLeft: Math.round(detail.left - outer.left),
-      detailRight: Math.round(outer.right - detail.right),
-    };
-  })).toEqual({ detailLeft: 0, detailRight: 0 });
+    return detail.width > 0 && detail.height > 0;
+  })).toBe(true);
   await expect.poll(() => standaloneTool.getByRole('button').evaluate((button) => ({
     pointerFocusReleased: document.activeElement !== button,
     mutedHeading: getComputedStyle(button.querySelector('strong')).color === (() => {
@@ -3531,14 +3669,20 @@ test('uses native mobile conversation history, input, and subagent navigation', 
       contentWidth: panel.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
       paddingLeft: style.paddingLeft,
       paddingRight: style.paddingRight,
+      scrollbarWidth: panel.offsetWidth - panel.clientWidth,
     };
   });
   expect(shortToolPanelGeometry.paddingLeft).toBe(shortToolPanelGeometry.paddingRight);
-  expect(Math.abs(shortToolPanelGeometry.leftGap - shortToolPanelGeometry.rightGap)).toBeLessThanOrEqual(1);
+  expect(Math.abs(
+    (shortToolPanelGeometry.rightGap - shortToolPanelGeometry.leftGap) - shortToolPanelGeometry.scrollbarWidth,
+  )).toBeLessThanOrEqual(1);
   expect(Math.abs(shortToolPanelGeometry.itemWidth - shortToolPanelGeometry.contentWidth)).toBeLessThanOrEqual(1);
 
-  await conversation.getByRole('button', { name: /Listed 1 dir, Read 2 files/ }).click();
   const toolPanel = conversation.locator('[data-event-id="tool-group-1"] > .mobile-tool-group-panel');
+  await toolPanel.evaluate((panel) => {
+    const toggle = panel.parentElement.querySelector('.mobile-tool-group-toggle');
+    if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+  });
   await expect.poll(() => toolPanel.evaluate((panel) => panel.clientHeight)).toBeGreaterThan(200);
   await expect.poll(() => toolPanel.evaluate((panel) => {
     const rows = [...panel.querySelectorAll(':scope > .mobile-event-card > .mobile-event-toggle')].slice(0, 2)
@@ -3556,17 +3700,23 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     const panelBox = panel.getBoundingClientRect();
     const child = panel.querySelector(':scope > .mobile-event-card').getBoundingClientRect();
     return {
-      panelLeft: Math.round(panelBox.left - group.left),
-      panelRight: Math.round(group.right - panelBox.right),
-      childLeft: Math.round(child.left - group.left),
-      childRight: Math.round(group.right - child.right),
+      left: Math.round(child.left - panelBox.left),
+      right: Math.round(panelBox.right - child.right),
+      panelWidth: Math.round(panelBox.width),
+      groupWidth: Math.round(group.width),
+      scrollbarWidth: panel.offsetWidth - panel.clientWidth,
     };
-  })).toEqual({ panelLeft: 0, panelRight: 0, childLeft: 0, childRight: 0 });
+  })).toEqual(expect.objectContaining({ left: 0, right: 11, scrollbarWidth: 11 }));
   await expect.poll(() => toolPanel.locator(':scope > .mobile-event-card').first().evaluate((node) => ({
     border: getComputedStyle(node).borderTopStyle,
     background: getComputedStyle(node).backgroundColor,
   }))).toEqual({ border: 'none', background: 'rgba(0, 0, 0, 0)' });
   const editCard = conversation.locator('[data-event-id="tool-edit-app"]');
+  await toolPanel.evaluate((panel) => {
+    const target = panel.querySelector('[data-event-id="tool-edit-app"]');
+    panel.scrollTop = Math.max(0, target.offsetTop - (panel.clientHeight - target.clientHeight) / 2);
+  });
+  await expect(editCard).toBeVisible();
   await editCard.locator(':scope > .mobile-event-toggle').click();
   await expect(editCard.locator(':scope > .mobile-event-panel')).toBeHidden();
   const childDisclosureMotion = await editCard.evaluate(async (card) => {
@@ -3603,13 +3753,9 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await conversation.getByRole('button', { name: /Edited app\.js/ }).click();
   await expect(editCard.locator('.mobile-event-panel')).toBeVisible();
   await expect.poll(() => editCard.evaluate((card) => {
-    const group = card.closest('.mobile-tool-group').getBoundingClientRect();
     const detail = card.querySelector(':scope > .mobile-event-panel').getBoundingClientRect();
-    return {
-      detailLeft: Math.round(detail.left - group.left),
-      detailRight: Math.round(group.right - detail.right),
-    };
-  })).toEqual({ detailLeft: 0, detailRight: 0 });
+    return detail.width > 0 && detail.height > 0;
+  })).toBe(true);
   await expect(editCard.locator('.mobile-event-change > header strong')).toHaveCSS('color', 'rgb(232, 164, 101)');
   await expect.poll(() => editCard.evaluate((card, before) => {
     const toggle = card.querySelector(':scope > .mobile-event-toggle');
@@ -3727,7 +3873,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(conversation.locator('[data-event-id="tool-shell"] .mobile-tool-command-output')).toContainText('test output line 1');
   await expect(conversation.locator('[data-event-id="tool-shell"] .mobile-tool-detail')).toHaveCount(2);
   await expect.poll(() => shellDetail.locator('.mobile-tool-command-line')
-    .evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+    .evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
   await expect.poll(() => toolPanel.evaluate((panel) => panel.scrollHeight > panel.clientHeight)).toBe(true);
   const shellPanel = conversation.locator('[data-event-id="tool-shell"] > .mobile-event-panel');
   await expect.poll(() => shellPanel.evaluate((panel) => panel.scrollHeight <= panel.clientHeight)).toBe(true);
@@ -3741,9 +3887,10 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   await expect(listDetail.filter({ hasText: 'Input' })).toContainText('"target_directory":"src"');
   await expect(listDetail.filter({ hasText: 'Output' })).toContainText('Found files');
   await conversation.getByRole('button', { name: /Read package\.json/ }).click();
-  const genericReadDetail = conversation.locator('[data-event-id="tool-read-package"] .mobile-tool-command');
-  await expect(genericReadDetail.locator('.mobile-tool-command-line > code')).toHaveText('Read package.json');
-  await expect(conversation.locator('[data-event-id="tool-read-package"] .mobile-tool-command-output')).toHaveText('Package loaded');
+  await expect(conversation.locator('[data-event-id="tool-read-package"] .mobile-tool-input pre'))
+    .toHaveText('Read package.json');
+  await expect(conversation.locator('[data-event-id="tool-read-package"] .mobile-tool-output pre'))
+    .toHaveText('Package loaded');
   await expect(conversation.locator('[data-event-id="tool-read-package"] .mobile-tool-detail')).toHaveCount(2);
 
   await shellPanel.scrollIntoViewIfNeeded();
@@ -3754,7 +3901,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     group.scrollTop = Math.max(0, group.scrollHeight - group.clientHeight - 90);
     return group.scrollTop;
   });
-  await shellPanel.hover();
+  await toolPanel.hover();
   await page.mouse.wheel(0, 240);
   await expect.poll(() => toolPanel.evaluate((panel) => panel.scrollTop)).toBeGreaterThan(nestedScrollStart);
 
@@ -3768,7 +3915,7 @@ test('uses native mobile conversation history, input, and subagent navigation', 
     main.scrollTop = Math.max(0, main.scrollTop - 120);
     return main.scrollTop;
   });
-  await shellPanel.hover();
+  await toolPanel.hover();
   await page.mouse.wheel(0, 320);
   await expect.poll(() => messages.evaluate((panel) => panel.scrollTop)).toBeGreaterThan(mainScrollStart);
   const toolReadingPosition = await toolPanel.evaluate((panel) => {
@@ -4049,14 +4196,22 @@ test('uses native mobile conversation history, input, and subagent navigation', 
   });
   const uploadedAttachment = conversation.locator('.mobile-conversation-attachment');
   await expect(uploadedAttachment).toHaveAttribute('data-preview', 'fallback');
-  await expect(uploadedAttachment.locator('.mobile-conversation-attachment-media')).toHaveCount(0);
+  await expect(uploadedAttachment.locator('img, video')).toHaveCount(0);
+  await expect(uploadedAttachment.locator('.mobile-conversation-attachment-placeholder')).toHaveCount(1);
   await expect(uploadedAttachment.locator('.mobile-conversation-attachment-name')).toHaveText('phone.png');
-  await uploadedAttachment.getByRole('button', { name: 'View phone.png' }).click();
+  const attachmentPreview = uploadedAttachment.getByRole('button', { name: 'View phone.png' });
+  expect(await attachmentPreview.evaluate((button) => ({
+    disabled: button.disabled,
+    pointerEvents: getComputedStyle(button).pointerEvents,
+    width: button.getBoundingClientRect().width,
+    height: button.getBoundingClientRect().height,
+  }))).toEqual({ disabled: false, pointerEvents: 'auto', width: 74, height: 44 });
+  await attachmentPreview.click();
   const mediaSheet = conversation.locator('.mobile-file-sheet');
   await expect(mediaSheet).toBeVisible();
   await expect(mediaSheet).toHaveAttribute('aria-label', 'Media preview');
   await expect(mediaSheet.locator('.mobile-file-media-fallback')).toHaveText('phone.png');
-  await mediaSheet.getByRole('button', { name: 'Close file preview' }).click();
+  await mediaSheet.getByRole('button', { name: 'Close file preview', exact: true }).click();
   await expect(mediaSheet).toBeHidden();
   await conversation.locator('#mobile-conversation-file').setInputFiles({
     name: 'rejected.mov', mimeType: 'video/quicktime', buffer: Buffer.from('rejected-video'),

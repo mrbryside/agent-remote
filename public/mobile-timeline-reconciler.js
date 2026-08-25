@@ -10,7 +10,7 @@ function timelineNodeKey(node) {
   return undefined;
 }
 
-function syncAttributes(current, fresh) {
+export function syncAttributes(current, fresh) {
   const preserve = current.hasAttribute('data-disclosure-motion')
     ? new Set(['hidden', 'inert', 'aria-hidden', 'data-disclosure-motion'])
     : undefined;

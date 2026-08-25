@@ -186,6 +186,11 @@ export function createMobileFileSurface({
     sheet.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') close();
     });
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || sheet.hidden) return;
+      event.preventDefault();
+      close();
+    });
     installMobileSheetDrag({ panel, handle, onClose: close, threshold: 96 });
   }
 
@@ -227,7 +232,15 @@ export function createMobileFileSurface({
   }
 
   function openMedia({ name = 'Attachment', mimeType = '', url, items = [], selectedId } = {}) {
-    const gallery = (items.length ? items : [{ name, mimeType, url }]).filter((item) => item?.url);
+    // A tray can be reconciled while the selected upload is still being
+    // represented by an older closure. Keep that directly clicked attachment
+    // in the gallery even if the refreshed collection no longer includes it.
+    // Otherwise a perfectly valid "View …" button becomes a silent no-op.
+    const selected = { id: selectedId, name, mimeType, url };
+    const gallery = items.filter((item) => item?.url);
+    if (selected.url && !gallery.some((item) => item.id === selectedId || item.url === selected.url)) {
+      gallery.unshift(selected);
+    }
     if (!gallery.length) return;
     ensureSheet();
     closeGeneration += 1;

@@ -389,6 +389,72 @@ function cancelledTurnItem(updates, index) {
   };
 }
 
+function turnDuration(updates, index, update) {
+  const completedAt = recordTimestampMs(updates[index]);
+  let startedAt;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const kind = updateValue(updates[cursor])?.sessionUpdate;
+    if (kind === 'turn_completed' || kind === 'turn_failed' || kind === 'turn_error') break;
+    if (kind === 'user_message_chunk') startedAt = recordTimestampMs(updates[cursor]) || startedAt;
+    if (kind === 'turn_started') {
+      startedAt = recordTimestampMs(updates[cursor]) || startedAt;
+      break;
+    }
+  }
+  const suppliedDuration = Number(update.duration_ms ?? update.durationMs);
+  if (Number.isFinite(suppliedDuration) && suppliedDuration >= 0) return suppliedDuration;
+  return completedAt !== undefined && startedAt !== undefined ? Math.max(0, completedAt - startedAt) : undefined;
+}
+
+function failureText(update) {
+  const candidates = [
+    update.error, update.error?.message, update.errorMessage, update.message, update.reason,
+    update.stopReason, update.stop_reason,
+  ];
+  return boundedText(candidates.find((value) => typeof value === 'string' && value.trim()), 8_000);
+}
+
+function failedTurnItem(updates, index) {
+  const record = updates[index];
+  const update = updateValue(record);
+  const kind = update?.sessionUpdate;
+  if (!['turn_completed', 'turn_failed', 'turn_error', 'error'].includes(kind)) return undefined;
+  const stopReason = shortText(update.stopReason || update.stop_reason, '', 160);
+  const failed = kind !== 'turn_completed' ||
+    ['failed', 'error'].includes(String(update.status || '').toLowerCase()) ||
+    /(?:error|fail|exception|reject|timeout|limit)/i.test(stopReason);
+  if (!failed) return undefined;
+  const durationMs = turnDuration(updates, index, update);
+  const text = failureText(update);
+  return {
+    id: `turn-error-${index}`,
+    type: 'turn',
+    title: 'Turn ended with an error',
+    status: 'failed',
+    ...(text ? { text } : {}),
+    ...(stopReason ? { stopReason } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    timestamp: record.timestamp,
+  };
+}
+
+function retryTurnItem(update, index, record) {
+  const attempt = Number(update.attempt);
+  const maxRetries = Number(update.max_retries);
+  const progress = Number.isFinite(attempt) && attempt > 0
+    ? ` (${attempt}${Number.isFinite(maxRetries) && maxRetries > 0 ? `/${maxRetries}` : ''})`
+    : '';
+  const text = failureText(update);
+  return {
+    id: `turn-retry-${index}`,
+    type: 'turn',
+    title: `Retrying model response${progress}`,
+    status: 'retrying',
+    ...(text ? { text } : {}),
+    timestamp: record.timestamp,
+  };
+}
+
 function subagentInput(update) {
   const input = update?.rawInput ?? update?.input ?? update?._meta?.['x.ai/tool']?.input;
   return input && typeof input === 'object' && !Array.isArray(input) ? input : {};
@@ -934,9 +1000,7 @@ function timeline(updates, { turnActive } = {}) {
       return;
     }
     if (kind === 'retry_state') {
-      appendEvent('retry', `Retry ${Number(update.attempt) || 0}/${Number(update.max_retries) || 0}`, index, record, {
-        text: boundedText(update.reason, 8_000), status: 'working',
-      });
+      items.push(retryTurnItem(update, index, record));
       status = 'working';
       activity = { phase: 'retrying', label: 'Retrying…' };
       return;
@@ -1090,8 +1154,16 @@ function timeline(updates, { turnActive } = {}) {
     }
     if (kind === 'turn_completed') {
       settleOpenTools();
-      const cancellation = cancelledTurnItem(updates, index);
-      if (cancellation) items.push(cancellation);
+      const boundary = cancelledTurnItem(updates, index) || failedTurnItem(updates, index);
+      if (boundary) items.push(boundary);
+      status = 'idle';
+      activity = undefined;
+      return;
+    }
+    if (['turn_failed', 'turn_error', 'error'].includes(kind)) {
+      settleOpenTools();
+      const failure = failedTurnItem(updates, index);
+      if (failure) items.push(failure);
       status = 'idle';
       activity = undefined;
       return;

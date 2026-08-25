@@ -181,8 +181,7 @@ export function createMobileInteractionRenderer({
         updateQuestionState(item.questionId, {
           ...pendingQuestions.get(item.questionId), status: 'failed', error: error.message,
         });
-        renderedSignature = '';
-        if (lastConversation) render(lastConversation);
+        rerender();
         void refresh();
       }
     }
@@ -430,4 +429,3 @@ export function createMobileInteractionRenderer({
 
   return { planReviewNode, questionNode };
 }
-

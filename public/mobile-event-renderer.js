@@ -127,7 +127,7 @@ function toolDisplayTitle(item) {
   return genericToolCommand(item);
 }
 
-function planListNode(item) {
+export function planListNode(item) {
   const list = element('ol', 'mobile-plan-list');
   for (const entry of item.entries || []) {
     const row = element('li');
@@ -337,10 +337,16 @@ export function createMobileEventRenderer({
 
   function turnNode(item) {
     const elapsed = compactTurnDuration(item.durationMs);
-    const row = element('article', 'mobile-turn-cancelled',
-      `${item.title || 'Turn cancelled by user'}${elapsed ? ` in ${elapsed}` : ''}.`);
+    const status = item.status || 'cancelled';
+    const row = element('article', [
+      'mobile-turn-boundary', `mobile-turn-${status}`,
+      ...(status === 'cancelled' ? ['mobile-turn-cancelled'] : []),
+    ].join(' '));
+    row.append(element('span', 'mobile-turn-title',
+      `${item.title || 'Turn cancelled by user'}${elapsed ? ` in ${elapsed}` : ''}.`));
+    if (item.text) row.append(element('span', 'mobile-turn-detail', item.text));
     row.dataset.eventId = item.id;
-    row.dataset.state = item.status || 'cancelled';
+    row.dataset.state = status;
     return row;
   }
 

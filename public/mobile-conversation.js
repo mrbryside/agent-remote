@@ -6,13 +6,13 @@ import {
   shellComposerMessage,
   shellComposerState,
 } from './mobile-composer-model.js';
-import { createTimelineReconciler } from './mobile-timeline-reconciler.js';
+import { createTimelineReconciler, syncAttributes } from './mobile-timeline-reconciler.js';
 import { createCompactStreamBatcher, preserveNewerStreamingText } from './mobile-stream-batcher.js';
 import { createMobileSheetFrame, installMobileSheetDrag } from './mobile-sheet.js';
 import {
   createMobileFileSurface,
 } from './mobile-file-surface.js';
-import { createMobileEventRenderer } from './mobile-event-renderer.js';
+import { createMobileEventRenderer, planListNode } from './mobile-event-renderer.js';
 import { createMobileInteractionRenderer } from './mobile-interaction-renderer.js';
 import { pendingMessageMatchesItem } from './mobile-pending-message.js';
 import { createIcon, createIconButton } from './ui-components.js';
@@ -429,15 +429,21 @@ export function createMobileConversationView({
     });
   }
 
-  function holdMainScrollGeometry({ recapture = false, settle = 260 } = {}) {
+  function holdMainScrollGeometry({ recapture = false, settle = 260, preserveBottom = true } = {}) {
     if (!mainScrollGeometryLock || recapture) {
       mainScrollGeometryLock = captureMainScrollAnchor();
+      if (!preserveBottom) mainScrollGeometryLock.atBottom = false;
     }
+    // The browser's own scroll anchoring can apply a second correction after
+    // a flex sibling (composer/activity pill) changes size. Suspend it while
+    // this explicit anchor owns the geometry, then restore the stylesheet.
+    messages.style.overflowAnchor = 'none';
     clearTimeout(mainScrollGeometryUnlockTimer);
     mainScrollGeometryUnlockTimer = setTimeout(() => {
       applyMainScrollGeometryLock();
       mainScrollGeometryLock = undefined;
       mainScrollGeometryUnlockTimer = undefined;
+      messages.style.removeProperty('overflow-anchor');
     }, settle);
     // Force the post-mutation layout to reconcile in the same task, then keep
     // correcting before paint while the composer/visual viewport animates.
@@ -451,6 +457,7 @@ export function createMobileConversationView({
     cancelAnimationFrame(mainScrollGeometryFrame);
     mainScrollGeometryFrame = undefined;
     mainScrollGeometryLock = undefined;
+    messages.style.removeProperty('overflow-anchor');
   }
 
   const mainScrollGeometryObserver = new ResizeObserver(() => {
@@ -462,6 +469,9 @@ export function createMobileConversationView({
   });
   mainScrollGeometryObserver.observe(composer);
   mainScrollGeometryObserver.observe(scrollShell);
+  // Activity pills alter the flex height of the message viewport itself. Watch
+  // it too so hiding/showing a pill keeps a reader's anchored history in place.
+  mainScrollGeometryObserver.observe(messages);
 
   function scrollIdentity(viewport) {
     const owner = viewport.closest('[data-message-id], [data-event-id]');
@@ -1355,6 +1365,13 @@ export function createMobileConversationView({
         first.focus();
       }
     });
+    // A stream reconciliation can replace the previously focused control
+    // inside this sheet. Keep Escape reliable even after that focus is gone.
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || sheet.hidden) return;
+      event.preventDefault();
+      closeSheet();
+    });
     installMobileSheetDrag({ panel: sheetPanel, handle: sheetHandle, onClose: closeSheet, threshold: 54 });
   }
 
@@ -1443,7 +1460,7 @@ export function createMobileConversationView({
     }, 360));
   }
 
-  function renderSubagentPill(conversation) {
+  function renderSubagentPill(conversation, { preserveReaderPosition = false } = {}) {
     if (!subagentPillHost) {
       subagentPillHost = element('div', 'mobile-subagent-pill-host');
       scrollShell.after(subagentPillHost);
@@ -1475,7 +1492,15 @@ export function createMobileConversationView({
     const willShowHost = !booting && !pillDismissed && Boolean(items.length || browserAvailable || plan);
     const preserveScroll = available && messages.childElementCount > 0 &&
       !subagentPillHost.hidden !== willShowHost;
-    if (preserveScroll) holdMainScrollGeometry({ settle: 220 });
+    // Explicitly opening/closing activity chrome must preserve the reader's
+    // exact position—even within the ordinary near-bottom follow threshold.
+    // A freshly rendered activity pill, by contrast, should keep a
+    // tail-following reader pinned to the latest output.
+    if (preserveScroll) holdMainScrollGeometry({
+      recapture: preserveReaderPosition,
+      settle: 220,
+      preserveBottom: !preserveReaderPosition,
+    });
     if (booting) {
       subagentPillHost.replaceChildren();
       subagentPillHost.hidden = true;
@@ -1552,7 +1577,7 @@ export function createMobileConversationView({
 
   activityToggle.addEventListener('click', () => {
     clearActivityDismissal();
-    renderSubagentPill(rootConversation || { items: [] });
+    renderSubagentPill(rootConversation || { items: [] }, { preserveReaderPosition: true });
   });
 
   function openSheet() {
@@ -1732,10 +1757,24 @@ export function createMobileConversationView({
     streamSocket = socket;
     armStreamWatchdog(socket);
     socket.addEventListener('message', (event) => {
-      if (socket !== streamSocket) return;
-      armStreamWatchdog(socket);
       try {
         const payload = JSON.parse(event.data);
+        const previousActivity = lastConversation?.activity;
+        const nextActivity = payload.conversation?.activity;
+        const sameTurn = previousActivity?.turnId === undefined || nextActivity?.turnId === undefined ||
+          previousActivity.turnId === nextActivity.turnId;
+        // A phone can open a replacement socket while the old one is carrying
+        // the final turn_completed frame. Keep that one authoritative terminal
+        // snapshot: otherwise the visible answer is complete but Stop stays
+        // stuck until a refresh or layout change. Do not accept ordinary stale
+        // stream updates, nor a completion for a different known turn.
+        const staleTerminalSnapshot = socket !== streamSocket &&
+          payload.type === 'conversation' && payload.stream?.kind === 'turn_completed' &&
+          payload.conversation && !payload.conversation.parent &&
+          payload.conversation.thread?.id === threadId &&
+          previousActivity?.active === true && nextActivity?.active !== true && sameTurn;
+        if (socket !== streamSocket && !staleTerminalSnapshot) return;
+        if (socket === streamSocket) armStreamWatchdog(socket);
         if (payload.type === 'heartbeat') return;
         if (payload.type === 'conversation') {
           // A socket event is newer than any HTTP snapshot already in flight.
@@ -1841,8 +1880,10 @@ export function createMobileConversationView({
         preview.append(element('span', 'mobile-conversation-attachment-media mobile-conversation-attachment-placeholder'));
       };
       media.addEventListener('error', showNameOnly, { once: true });
-      preview.addEventListener('pointerdown', retainComposerInputFocus);
-      preview.addEventListener('click', () => openMediaAttachment({
+      const openPreview = () => openMediaAttachment({
+        name,
+        mimeType,
+        url: previewUrl,
         selectedId: attachment.id,
         items: attachments
           .filter((value) => /^(?:image|video)\//i.test(value.mimeType || '') && value.previewUrl)
@@ -1852,7 +1893,19 @@ export function createMobileConversationView({
             mimeType: value.mimeType || '',
             url: apiUrl(value.previewUrl),
           })),
-      }));
+      });
+      // On a phone, letting this press move focus away from the composer can
+      // resize the visual viewport before its click is dispatched. Open from
+      // the primary press while preserving the keyboard; a keyboard/program-
+      // matic activation still arrives as a detail-less click.
+      preview.addEventListener('pointerdown', (event) => {
+        if (event.isPrimary === false || event.button !== 0) return;
+        event.preventDefault();
+        openPreview();
+      });
+      preview.addEventListener('click', (event) => {
+        if (event.detail === 0) openPreview();
+      });
       preview.append(media);
       item.append(preview, nameLabel);
     } else {
@@ -2934,39 +2987,53 @@ export function createMobileConversationView({
     }
   }
 
+  async function requestTurnCancellation() {
+    if (!sessionName || cancellingTurn || modelBusy || controlBusy) return;
+    cancellingTurn = true;
+    updateComposerAction();
+    try {
+      const result = await cancelTurn(sessionName);
+      cancellingTurn = false;
+      if (result?.accepted !== false && lastConversation?.activity?.active === true) {
+        acceptedCancellation = { turnId: lastConversation.activity.turnId };
+        lastConversation = {
+          ...lastConversation,
+          activity: {
+            ...lastConversation.activity,
+            phase: 'stopping',
+            label: 'Stopping…',
+            cancelRequested: true,
+          },
+        };
+        if (rootConversation?.thread?.id === lastConversation.thread?.id) {
+          rootConversation = lastConversation;
+        }
+      }
+      void refresh();
+    } catch (error) {
+      cancellingTurn = false;
+      state.textContent = error.message || 'Stop failed';
+      state.dataset.state = 'error';
+    } finally {
+      updateComposerAction();
+    }
+  }
+
+  // Mobile WebKit can suppress a second native form submission while the
+  // previous async submit is still awaiting its delivery receipt. Handle the
+  // visible Stop control directly so cancellation remains tappable, while the
+  // form submit path below still supports keyboard/requestSubmit activation.
+  sendButton.addEventListener('click', (event) => {
+    if (sendButton.dataset.action !== 'stop') return;
+    event.preventDefault();
+    void requestTurnCancellation();
+  });
+
   composer.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (modelBusy || controlBusy) return;
     if (sendButton.dataset.action === 'stop') {
-      if (!sessionName || cancellingTurn) return;
-      cancellingTurn = true;
-      updateComposerAction();
-      try {
-        const result = await cancelTurn(sessionName);
-        cancellingTurn = false;
-        if (result?.accepted !== false && lastConversation?.activity?.active === true) {
-          acceptedCancellation = { turnId: lastConversation.activity.turnId };
-          lastConversation = {
-            ...lastConversation,
-            activity: {
-              ...lastConversation.activity,
-              phase: 'stopping',
-              label: 'Stopping…',
-              cancelRequested: true,
-            },
-          };
-          if (rootConversation?.thread?.id === lastConversation.thread?.id) {
-            rootConversation = lastConversation;
-          }
-        }
-        void refresh();
-      } catch (error) {
-        cancellingTurn = false;
-        state.textContent = error.message || 'Stop failed';
-        state.dataset.state = 'error';
-      } finally {
-        updateComposerAction();
-      }
+      await requestTurnCancellation();
       return;
     }
     const text = shellComposerMessage(input.value, shellMode);
@@ -3196,6 +3263,13 @@ export function createMobileConversationView({
   }
   modelButton.addEventListener('pointerdown', retainComposerInputFocus);
   modeButton.addEventListener('pointerdown', retainComposerInputFocus);
+  // A pointer press must not focus the send/stop control: its focusin handler
+  // expands the composer between down and up, moving the target under the
+  // pointer. Keep the current focus so the tap is delivered reliably; keyboard
+  // focus/activation is unaffected.
+  const retainComposerFocusForSend = (event) => event.preventDefault();
+  sendButton.addEventListener('pointerdown', retainComposerFocusForSend);
+  sendButton.addEventListener('mousedown', retainComposerFocusForSend);
   modelList.addEventListener('pointerdown', retainComposerInputFocus);
   modeList.addEventListener('pointerdown', retainComposerInputFocus);
   modelButton.addEventListener('click', () => {
@@ -3324,6 +3398,11 @@ export function createMobileConversationView({
   }, { passive: true });
   jumpToLatest.addEventListener('click', () => {
     followStreamTail = true;
+    // A pending keyboard/viewport animation can leave a smooth scroll queued
+    // against an obsolete range. Commit the latest position synchronously so
+    // one explicit tap always lands at the newest turn, then retain the
+    // ordinary smooth-scroll request for engines that can animate it.
+    messages.scrollTop = messages.scrollHeight;
     messages.scrollTo({
       top: messages.scrollHeight,
       behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',

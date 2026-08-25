@@ -143,14 +143,17 @@ test('Grok provider maps a managed tmux process to messages and subagents', asyn
   for (const type of ['thought', 'tool_group', 'plan', 'goal', 'event', 'task', 'subagent']) {
     assert.ok(result.items.some((item) => item.type === type), `missing ${type} event`);
   }
-  assert.ok(!result.items.some((item) => item.type === 'turn'));
+  assert.ok(!result.items.some((item) => item.type === 'turn' && item.status !== 'retrying'));
   assert.deepEqual(result.items.filter((item) => item.type === 'recap').map(({ id, text, auto, status }) => ({
     id, text, auto, status,
   })), [{ id: 'recap-16', text: 'Work so far', auto: true, status: 'completed' }]);
   assert.equal(result.recap.text, 'Work so far');
-  for (const kind of ['hook', 'retry']) {
-    assert.ok(result.items.some((item) => item.type === 'event' && item.kind === kind), `missing ${kind} event`);
-  }
+  assert.ok(result.items.some((item) => item.type === 'event' && item.kind === 'hook'), 'missing hook event');
+  assert.deepEqual(result.items.filter((item) => item.type === 'turn' && item.status === 'retrying').map((item) => ({
+    title: item.title, status: item.status, text: item.text,
+  })), [{
+    title: 'Retrying model response (1/3)', status: 'retrying', text: 'Temporary failure',
+  }]);
   assert.ok(!result.items.some((item) => item.type === 'event' && ['mode', 'unknown'].includes(item.kind)));
   const hookEvents = result.items.filter((item) => item.type === 'event' && item.kind === 'hook');
   assert.equal(hookEvents.length, 1);
@@ -1224,7 +1227,7 @@ test('Grok provider exposes turn lifecycle status and renders only cancelled tur
   } } });
   assert.equal(await registry.status(session), 'working');
   const working = await registry.read(session);
-  assert.ok(!working.items.some((item) => item.type === 'turn'));
+  assert.ok(!working.items.some((item) => item.type === 'turn' && item.status !== 'retrying'));
   assert.deepEqual(working.activity, {
     active: true, phase: 'waiting', label: 'Waiting for response…', canCancel: true, cancelRequested: false,
   });
@@ -1257,7 +1260,7 @@ test('Grok provider exposes turn lifecycle status and renders only cancelled tur
   assert.equal(await registry.status(session), 'idle');
   const cancelled = await registry.read(session);
   assert.deepEqual(cancelled.activity, { active: false });
-  assert.deepEqual(cancelled.items.filter((item) => item.type === 'turn').map((item) => ({
+  assert.deepEqual(cancelled.items.filter((item) => item.type === 'turn' && item.status === 'cancelled').map((item) => ({
     title: item.title,
     status: item.status,
     stopReason: item.stopReason,
@@ -1267,6 +1270,21 @@ test('Grok provider exposes turn lifecycle status and renders only cancelled tur
     status: 'cancelled',
     stopReason: 'cancelled',
     durationMs: 1_000,
+  }]);
+
+  data.acpClient.append(data.parentId, { timestamp: 10, params: { update: {
+    sessionUpdate: 'turn_started',
+  } } });
+  data.acpClient.append(data.parentId, { timestamp: 12, params: { update: {
+    sessionUpdate: 'turn_completed', stop_reason: 'model_error', error: 'The model backend is unavailable',
+  } } });
+  data.snapshots.get(data.parentId).turn = { active: false, cancelRequested: false };
+  const failed = await registry.read(session);
+  assert.deepEqual(failed.items.filter((item) => item.type === 'turn' && item.status === 'failed').map((item) => ({
+    title: item.title, status: item.status, text: item.text, durationMs: item.durationMs,
+  })), [{
+    title: 'Turn ended with an error', status: 'failed',
+    text: 'The model backend is unavailable', durationMs: 2_000,
   }]);
 
   // Grok can flush a final tool update after its authoritative turn boundary.
