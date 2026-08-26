@@ -95,7 +95,7 @@ test.describe('Remote gateway browser fixture', () => {
   test('quick local connect creates a QR, pairs remotely, and exposes the full app without local administration', async ({ page, request }) => {
     const pairing = await startQuickAndCreatePairing(request);
     expect(pairing.qrDataUrl).toMatch(/^data:image\/png;base64,/);
-    expect(pairing.pairUrl).toMatch(/^http:\/\/127\.0\.0\.1:3101\/pair#/);
+    expect(pairing.pairUrl).toMatch(/^http:\/\/127\.0\.0\.1:3101\/p#[A-Za-z0-9_-]{22}$/);
 
     const before = (await (await localApi(request, '/api/remote/devices')).json()).devices;
     await page.goto(pairing.pairUrl);

@@ -3,6 +3,7 @@ import { remoteError } from './errors.js';
 
 const COOKIE_NAME = '__Host-agent_remote';
 const PAIRING_TTL_MS = 120_000;
+const PAIRING_SECRET_BYTES = 16;
 const CHALLENGE_TTL_MS = 60_000;
 const SESSION_TTL_MS = 43_200_000;
 const AUTH_WINDOW_MS = 60_000;
@@ -241,9 +242,9 @@ export function createRemoteAuth({
         || url.username || url.password || url.search || url.hash) {
         throw new TypeError('publicUrl must be an HTTPS origin');
       }
-      const secretBytes = randomBytes(32);
-      if (!secretBytes || typeof secretBytes.length !== 'number' || secretBytes.length !== 32) {
-        throw new TypeError('randomBytes must return 32 bytes');
+      const secretBytes = randomBytes(PAIRING_SECRET_BYTES);
+      if (!secretBytes || typeof secretBytes.length !== 'number' || secretBytes.length !== PAIRING_SECRET_BYTES) {
+        throw new TypeError(`randomBytes must return ${PAIRING_SECRET_BYTES} bytes`);
       }
       const secret = base64url(secretBytes);
       const createdAt = currentTime();
@@ -251,7 +252,7 @@ export function createRemoteAuth({
         secretHash: await sha256(secretBytes),
         expiresAt: createdAt + PAIRING_TTL_MS,
       };
-      url.pathname = `${url.pathname.replace(/\/$/, '')}/pair`;
+      url.pathname = `${url.pathname.replace(/\/$/, '')}/p`;
       url.hash = secret;
       return { pairUrl: url.toString(), expiresAt: pairing.expiresAt };
     },

@@ -131,14 +131,14 @@ test('infers stable browser device names for automatic pairing', () => {
   assert.equal(inferBrowserDeviceName({ userAgent: '', platform: '' }), 'Paired device');
 });
 
-test('removes the pairing fragment before the pair request and recognises missing or expired pairing links', () => {
+test('removes the compact pairing fragment before the pair request and recognises missing or expired pairing links', () => {
   const historyCalls = [];
-  const location = { href: 'https://term.example.test/pair#secret', pathname: '/pair', search: '' };
+  const location = { href: 'https://term.example.test/p#secret', pathname: '/p', search: '' };
   const history = { replaceState: (...args) => historyCalls.push(args) };
   assert.equal(extractPairingSecret({ location, history }), 'secret');
-  assert.deepEqual(historyCalls, [[null, '', '/pair']]);
-  assert.equal(extractPairingSecret({ location: { href: 'https://term.example.test/pair', pathname: '/pair', search: '' }, history }), undefined);
-  assert.equal(extractPairingSecret({ location: { href: 'https://term.example.test/pair#bad secret', pathname: '/pair', search: '' }, history }), undefined);
+  assert.deepEqual(historyCalls, [[null, '', '/p']]);
+  assert.equal(extractPairingSecret({ location: { href: 'https://term.example.test/p', pathname: '/p', search: '' }, history }), undefined);
+  assert.equal(extractPairingSecret({ location: { href: 'https://term.example.test/p#bad secret', pathname: '/p', search: '' }, history }), undefined);
 });
 
 test('pairs only after the credential is ready, silently signs a returning challenge, and logs out', async () => {
@@ -203,11 +203,12 @@ test('gateway serves the three entry assets before authentication and forwards a
     });
     return result;
   };
-  const [entry, pair, script, styles, application] = await Promise.all([
-    fetchGateway('/'), fetchGateway('/pair'), fetchGateway('/remote-entry.js'), fetchGateway('/remote-entry.css'), fetchGateway('/app.js'),
+  const [entry, compactPair, legacyPair, script, styles, application] = await Promise.all([
+    fetchGateway('/'), fetchGateway('/p'), fetchGateway('/pair'), fetchGateway('/remote-entry.js'), fetchGateway('/remote-entry.css'), fetchGateway('/app.js'),
   ]);
   assert.match(entry.body, /Remote access is locked/);
-  assert.match(pair.body, /Remote access is locked/);
+  assert.match(compactPair.body, /Remote access is locked/);
+  assert.match(legacyPair.body, /Remote access is locked/);
   assert.match(script.headers['content-type'], /^text\/javascript/);
   assert.match(styles.headers['content-type'], /^text\/css/);
   assert.equal(application.status, 401);

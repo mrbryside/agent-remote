@@ -305,7 +305,7 @@ export function createRemoteGateway({
       if ((request.method === 'GET' || request.method === 'HEAD') && await sendEntryAsset(response, request.method, pathname)) {
         return;
       }
-      if ((request.method === 'GET' || request.method === 'HEAD') && pathname === '/pair') {
+      if ((request.method === 'GET' || request.method === 'HEAD') && (pathname === '/p' || pathname === '/pair')) {
         await sendEntryAsset(response, request.method, '/remote-entry.html');
         return;
       }

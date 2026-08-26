@@ -216,8 +216,9 @@ function ui() {
 
 export async function boot({ fetchFn = globalThis.fetch, location = globalThis.location, history = globalThis.history, indexedDB = globalThis.indexedDB } = {}) {
   const view = ui();
-  const secret = location.pathname === '/pair' ? extractPairingSecret({ location, history }) : undefined;
-  if (location.pathname === '/pair') {
+  const isPairingLink = location.pathname === '/p' || location.pathname === '/pair';
+  const secret = isPairingLink ? extractPairingSecret({ location, history }) : undefined;
+  if (isPairingLink) {
     if (!secret) return view.lock('This pairing link has expired or was already used. Create a new QR on the Mac.');
     view.connecting();
     try {

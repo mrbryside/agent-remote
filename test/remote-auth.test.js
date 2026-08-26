@@ -45,9 +45,9 @@ test('pairing hashes secrets, replaces previous sessions, expires them, and cons
     const first = await auth.createPairing('https://term.example.test');
     const second = await auth.createPairing('https://term.example.test');
     assert.equal(first.expiresAt, 121_000);
-    assert.match(first.pairUrl, /^https:\/\/term\.example\.test\/pair#[A-Za-z0-9_-]+$/);
+    assert.match(first.pairUrl, /^https:\/\/term\.example\.test\/p#[A-Za-z0-9_-]{22}$/);
     assert.deepEqual(digestInputs[0], Buffer.from(secretFromPairUrl(first.pairUrl), 'base64url'));
-    assert.equal(digestInputs[0].length, 32);
+    assert.equal(digestInputs[0].length, 16);
     const { jwk } = await publicKey();
     await assert.rejects(
       auth.pair({ secret: secretFromPairUrl(first.pairUrl), deviceName: 'Phone', publicKeyJwk: jwk }),
