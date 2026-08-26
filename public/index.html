@@ -257,9 +257,9 @@
 
         <section class="remote-section remote-step remote-pair-step" data-remote-step="3" aria-labelledby="remote-pair-heading" tabindex="-1" hidden>
           <div class="remote-section-heading"><div><span id="remote-pair-kicker" class="dialog-kicker">3 · Pair devices</span><h3 id="remote-pair-heading">Scan devices locally</h3></div></div>
-          <p class="remote-note remote-pair-intro">Pair as many browser profiles as you need. Create and scan one QR code per device, then create another QR to add the next one. Anyone who sees an active QR can pair before it expires.</p>
+          <p class="remote-note remote-pair-intro">Pair as many browser profiles as you need. Scan the QR on the other device, or copy its one-time link to transfer privately. Anyone who gets an active QR or link can pair before it expires.</p>
           <div class="remote-pairing">
-            <div class="remote-pairing-actions"><button id="remote-pair" class="primary-button" type="button">Create QR code</button><p id="remote-pairing-countdown" class="remote-note" aria-live="polite">Create one QR code for each device you want to pair.</p></div>
+            <div class="remote-pairing-actions"><div class="remote-pairing-buttons"><button id="remote-pair" class="primary-button" type="button">Create QR code</button><button id="remote-pair-copy" class="quiet-button remote-pair-copy" type="button" disabled>Copy one-time link</button></div><p id="remote-pairing-countdown" class="remote-note" aria-live="polite">Create one QR code for each device you want to pair.</p></div>
             <div class="remote-qr-slot"><img id="remote-qr" alt="Pair a remote device" hidden /><span aria-hidden="true">QR appears here</span></div>
           </div>
         </section>

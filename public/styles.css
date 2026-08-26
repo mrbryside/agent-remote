@@ -496,6 +496,9 @@ button.remote-close-icon:hover { border-color: transparent; background: transpar
 .remote-pair-intro { max-width: 62ch; }
 .remote-pairing { display: grid; grid-template-columns: minmax(0, 1fr) 148px; align-items: center; gap: clamp(20px, 4vw, 36px); height: 166px; padding: 16px 18px; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-md); background: var(--color-surface); }
 .remote-pairing-actions { display: grid; min-width: 0; align-self: start; justify-items: start; gap: 9px; margin-top: 26px; }
+.remote-pairing-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.remote-pair-copy { visibility: hidden; }
+.remote-pairing[data-pairing="true"] .remote-pair-copy { visibility: visible; }
 .remote-pairing-actions .remote-note { max-width: 36ch; }
 .remote-qr-slot { display: grid; width: 132px; height: 132px; place-items: center; justify-self: end; }
 .remote-qr-slot > * { grid-row: 1; grid-column: 1; }

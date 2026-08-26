@@ -435,7 +435,9 @@ test('keeps Remote configuration separate from the header Start and Stop control
     await route.fulfill({ json: { tunnel } });
   });
   await page.route('**/api/remote/pairing-sessions', (route) => route.fulfill({ status: 201, json: {
-    qrDataUrl: 'data:image/png;base64,iVBORw0KGgo=', expiresAt: Date.now() + 120_000,
+    qrDataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+    pairUrl: 'https://example.trycloudflare.com/pair#one-time-secret',
+    expiresAt: Date.now() + 120_000,
   } }));
   await page.reload();
   const remoteButton = page.locator('#remote-button');
@@ -651,6 +653,18 @@ test('keeps Remote configuration separate from the header Start and Stop control
   await pairAction.click();
   await expect(remoteDialog.locator('#remote-qr')).toBeVisible();
   await expect(remoteDialog.getByText('QR appears here')).toBeHidden();
+  const copyPairingLink = remoteDialog.getByRole('button', { name: 'Copy one-time link' });
+  await expect(copyPairingLink).toBeVisible();
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: async (text) => { document.documentElement.dataset.copiedPairingLink = text; } },
+    });
+  });
+  await copyPairingLink.click();
+  await expect.poll(() => page.locator('html').getAttribute('data-copied-pairing-link'))
+    .toBe('https://example.trycloudflare.com/pair#one-time-secret');
+  await expect(remoteDialog.getByText(/transfer it only through a private channel/i)).toBeVisible();
   const pairActionAfterQr = await pairAction.boundingBox();
   const pairingAfterQr = await remoteDialog.locator('.remote-pairing').boundingBox();
   expect(Math.abs((pairActionAfterQr.x - pairingAfterQr.x) - (pairActionBeforeQr.x - pairingBeforeQr.x))).toBeLessThan(1);

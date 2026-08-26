@@ -76,7 +76,9 @@ export async function bootstrapRemoteControl() {
     poll: undefined,
     hostnameTimer: undefined,
     countdownTimer: undefined,
+    copiedTimer: undefined,
     expiresAt: undefined,
+    pairUrl: undefined,
     previousFocus: undefined,
     deviceCount: 0,
     managingDevices: false,
@@ -111,6 +113,7 @@ export async function bootstrapRemoteControl() {
   const qr = $('#remote-qr');
   const countdown = $('#remote-pairing-countdown');
   const pairButton = $('#remote-pair');
+  const copyPairButton = $('#remote-pair-copy');
   const devices = $('#remote-devices');
   const clearDevices = $('#remote-clear-devices');
   const manageDevices = $('#remote-manage-devices');
@@ -534,6 +537,7 @@ export async function bootstrapRemoteControl() {
     pairButton.title = pairButton.disabled && tunnelState !== 'running'
       ? 'Start Remote before creating a pairing QR code.'
       : '';
+    renderPairingControls();
     renderPowerButton();
     renderWizard();
   }
@@ -637,17 +641,48 @@ export async function bootstrapRemoteControl() {
     state.countdownTimer = undefined;
   }
 
+  function pairingIsActive() {
+    return Boolean(state.pairUrl) && Number.isFinite(state.expiresAt) && state.expiresAt > Date.now();
+  }
+
+  function renderPairingControls() {
+    const hasPairing = Boolean(state.pairUrl);
+    const active = pairingIsActive();
+    pairButton.closest('.remote-pairing').dataset.pairing = String(hasPairing);
+    copyPairButton.disabled = state.busy || !active;
+    copyPairButton.title = !hasPairing
+      ? 'Create a QR code before copying its one-time pairing link.'
+      : !active
+        ? 'This one-time pairing link has expired. Create a new QR code.'
+        : 'Copy the one-time pairing link for a private transfer.';
+  }
+
+  function resetCopyButtonLabel() {
+    clearTimeout(state.copiedTimer);
+    state.copiedTimer = undefined;
+    copyPairButton.textContent = 'Copy one-time link';
+  }
+
   function renderCountdown() {
-    if (!state.expiresAt) { setText(countdown, 'Create a QR code when you are ready to pair a device.'); return; }
+    if (!state.expiresAt) {
+      setText(countdown, 'Create a QR code when you are ready to pair a device.');
+      renderPairingControls();
+      return;
+    }
     const seconds = Math.max(0, Math.ceil((state.expiresAt - Date.now()) / 1_000));
     setText(countdown, seconds ? `QR code expires in ${seconds}s.` : 'This QR code has expired. Create a new one.');
+    renderPairingControls();
     if (!seconds) stopCountdown();
   }
 
   function setPairing(pairing) {
     state.expiresAt = Number(pairing.expiresAt);
+    state.pairUrl = typeof pairing.pairUrl === 'string' && pairing.pairUrl.startsWith('https://')
+      ? pairing.pairUrl
+      : undefined;
     qr.src = pairing.qrDataUrl;
     qr.hidden = false;
+    resetCopyButtonLabel();
     renderCountdown();
     stopCountdown();
     state.countdownTimer = setInterval(renderCountdown, 1_000);
@@ -657,11 +692,49 @@ export async function bootstrapRemoteControl() {
     clearTimeout(state.hostnameTimer);
     state.hostnameTimer = undefined;
     stopCountdown();
+    resetCopyButtonLabel();
     state.expiresAt = undefined;
+    state.pairUrl = undefined;
     qr.hidden = true;
     qr.removeAttribute('src');
     renderCountdown();
     renderWizard();
+  }
+
+  async function copyPairingLink() {
+    if (!pairingIsActive()) {
+      showAlert('This one-time pairing link has expired. Create a new QR code.', 'error');
+      renderPairingControls();
+      return;
+    }
+    try {
+      let copied = false;
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(state.pairUrl);
+          copied = true;
+        } catch {
+          // The local Tauri webview and older browsers can reject the async clipboard API.
+        }
+      }
+      if (!copied) {
+        const field = document.createElement('textarea');
+        field.value = state.pairUrl;
+        field.setAttribute('readonly', '');
+        field.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+        document.body.append(field);
+        field.select();
+        copied = document.execCommand('copy');
+        field.remove();
+      }
+      if (!copied) throw new Error('Clipboard access was denied.');
+      resetCopyButtonLabel();
+      copyPairButton.textContent = 'Copied';
+      state.copiedTimer = setTimeout(resetCopyButtonLabel, 2_000);
+      showAlert('One-time pairing link copied. Transfer it only through a private channel before it expires.', 'success');
+    } catch {
+      showAlert('Could not copy the pairing link. Create a new QR code and scan it instead.', 'error');
+    }
   }
 
   async function refreshStatus({ devices: includeDevices = false } = {}) {
@@ -914,6 +987,7 @@ export async function bootstrapRemoteControl() {
   });
   $('#remote-open-url').addEventListener('click', () => window.open(url.value, '_blank', 'noopener,noreferrer'));
   pairButton.addEventListener('click', () => void run(async () => { setPairing(await api('/api/remote/pairing-sessions', { method: 'POST' })); }));
+  copyPairButton.addEventListener('click', () => void copyPairingLink());
   clearDevices.addEventListener('click', () => {
     if (!confirm('Revoke every paired device? This removes the entire list and closes all remote access immediately.')) return;
     void run(async () => {
