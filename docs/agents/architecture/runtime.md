@@ -26,7 +26,7 @@
   backend incarnation changed. Resume, reopen, tray Show, and app focus all
   trigger an immediate probe. Native resume also tells the loaded frontend to
   reconcile workspace, terminal, conversation, renderer, and Remote status.
-- `src/sessions.js` creates and discovers only tmux sessions carrying the `@agent_remote` marker. Those sessions outlive browser connections.
+- `src/sessions.js` creates and discovers only tmux sessions carrying the `@agent_remote` marker. Those sessions outlive browser connections. Finder gives a macOS app a minimal system `PATH`, so the Tauri wrapper preserves that path and appends standard Apple Silicon Homebrew plus user Grok/terminal tool directories before it launches its Node sidecar; it never runs a login shell or user shell profile just to discover commands.
 - `src/agents.js` owns the project-agent catalog. Project APIs accept an agent ID, and only the server resolves it to a launch command. Browser responses never expose those commands.
 - `public/app.js` composes mounted xterm runtimes, optimistic project/chat UI,
   session switching, and per-session browser panes. `public/browser-media.js`

@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
+    env,
     error::Error,
+    ffi::OsString,
     io::{self, BufRead, BufReader, Read, Write},
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
@@ -203,6 +205,43 @@ fn server_path() -> DesktopResult<PathBuf> {
     }
 }
 
+// Apps opened through Finder receive only macOS's minimal PATH. Keep the
+// inherited order, then add the conventional locations for the tools that the
+// persistent chat runtime needs. This is intentionally not a login shell: a
+// user shell profile must not run while launching a background app sidecar.
+fn command_search_path(inherited: Option<OsString>, home: Option<&Path>) -> OsString {
+    let mut entries = inherited
+        .as_deref()
+        .map(env::split_paths)
+        .map(Iterator::collect::<Vec<_>>)
+        .unwrap_or_default();
+    let mut candidates = vec![
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/local/sbin"),
+    ];
+    if let Some(home) = home {
+        candidates.extend([
+            home.join(".grok/bin"),
+            home.join(".local/bin"),
+            home.join(".cargo/bin"),
+            home.join(".bun/bin"),
+        ]);
+    }
+    for candidate in candidates {
+        if !entries.contains(&candidate) {
+            entries.push(candidate);
+        }
+    }
+    env::join_paths(entries).unwrap_or_else(|_| OsString::from("/usr/bin:/bin:/usr/sbin:/sbin"))
+}
+
+fn desktop_command_path() -> OsString {
+    let home = env::var_os("HOME").map(PathBuf::from);
+    command_search_path(env::var_os("PATH"), home.as_deref())
+}
+
 fn stop_child_gracefully(mut child: Child) {
     #[cfg(unix)]
     {
@@ -279,6 +318,7 @@ fn spawn_owned_backend(state: &DesktopState) -> DesktopResult<String> {
     let cloudflared = cloudflared_path()?;
     let mut child = Command::new(&server)
         .env("AGENT_REMOTE_DESKTOP", "1")
+        .env("PATH", desktop_command_path())
         .env("CLOUDFLARED_BIN", &cloudflared)
         .env("HOST", "127.0.0.1")
         .env("PORT", "3000")
@@ -671,5 +711,23 @@ mod tests {
             ),
             PathBuf::from("/Applications/Agent Remote.app/Contents/MacOS/agent-remote-server")
         );
+    }
+
+    #[test]
+    fn expands_the_finder_path_for_homebrew_and_agent_tools() {
+        let path = command_search_path(
+            Some(OsString::from("/usr/bin:/bin:/usr/sbin:/sbin")),
+            Some(Path::new("/Users/agent")),
+        );
+        let entries = env::split_paths(&path).collect::<Vec<_>>();
+        assert_eq!(entries[..4], [
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+            PathBuf::from("/usr/sbin"),
+            PathBuf::from("/sbin"),
+        ]);
+        assert!(entries.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(entries.contains(&PathBuf::from("/Users/agent/.grok/bin")));
+        assert!(entries.contains(&PathBuf::from("/Users/agent/.local/bin")));
     }
 }

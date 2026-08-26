@@ -52,6 +52,9 @@ test('Tauri desktop contract is a local Apple Silicon wrapper', () => {
   assert.match(source, /\.env\("REMOTE_HOST", "127\.0\.0\.1"\)/);
   assert.match(source, /\.env\("REMOTE_PORT", "3001"\)/);
   assert.match(source, /AGENT_REMOTE_PARENT_PID/);
+  assert.match(source, /\.env\("PATH", desktop_command_path\(\)\)/);
+  assert.match(source, /\.grok\/bin/);
+  assert.match(source, /\/opt\/homebrew\/bin/);
   assert.match(source, /start_backend_supervisor/);
   assert.match(source, /RunEvent::Resumed/);
   assert.match(source, /RunEvent::Reopen/);
