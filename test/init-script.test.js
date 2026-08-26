@@ -27,8 +27,19 @@ test('init script is valid POSIX shell and documents custom install modes', asyn
   assert.match(stdout, /--source-dir <folder>/);
   assert.match(stdout, /--app-bundle <path>/);
   assert.match(stdout, /--dmg <path>/);
+  assert.match(stdout, /approve dependency setup/);
+  assert.match(stdout, /tmux is installed automatically/);
   assert.match(stdout, /prebuilt, checksum-verified Tauri app/);
   assert.match(stdout, /Paths beginning[\s\S]*with ~\//);
+});
+
+test('init script installs tmux and only bootstraps Homebrew with consent', async () => {
+  const installerSource = await readFile(installer, 'utf8');
+  assert.match(installerSource, /ensure_tmux\(\)/);
+  assert.match(installerSource, /\"\$brew_path\" install tmux/);
+  assert.match(installerSource, /confirm_homebrew_install\(\)/);
+  assert.match(installerSource, /--yes to approve automatic setup/);
+  assert.match(installerSource, /raw\.githubusercontent\.com\/Homebrew\/install\/HEAD\/install\.sh/);
 });
 
 test('prebuilt release fits raw GitHub hosting and matches the installer checksum', async () => {

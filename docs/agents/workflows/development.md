@@ -20,6 +20,12 @@ checkout, or an on-device build. It supports an interactive choice of
 non-interactive `--install-dir`, positional destination, and
 `AGENT_REMOTE_INSTALL_DIR` forms. `--dmg` installs a local release and
 `--dmg-url` plus `--dmg-sha256` supports an alternate verified release.
+Before installing the app, it verifies `tmux`: existing installations are
+reused, Homebrew installs `tmux` when available, and a missing Homebrew is
+bootstrapped only after an interactive confirmation (or when `--yes` explicitly
+approves unattended dependency setup). Node, Rust, Xcode, and `cloudflared` are
+not normal-installer dependencies because the packaged app bundles its Node and
+Cloudflare runtime.
 
 Source building is developer-only and must be explicit through
 `--build-from-source` or `--source-dir`. A source directory either uses an Agent

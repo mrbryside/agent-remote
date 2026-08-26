@@ -24,6 +24,7 @@ source_tmp=""
 install_tmp=""
 dmg_tmp=""
 mount_point=""
+homebrew_install_tmp=""
 
 usage() {
   cat <<'EOF'
@@ -44,13 +45,16 @@ Options:
   --app-bundle <path>     Developer/test mode: install a built app directly.
   --branch <name>         Git branch to clone (default: main).
   --repo-url <url>        Source repository to clone.
-  --yes                   Replace an existing installation without prompting.
+  --yes                   Replace an existing installation and approve dependency setup.
   --no-launch             Do not open Agent Remote after installation.
   -h, --help              Show this help.
 
 The normal path downloads a prebuilt, checksum-verified Tauri app and requires
 no Node.js, Rust, or Xcode installation. The destination may also be set with
 AGENT_REMOTE_INSTALL_DIR. Paths beginning with ~/ and spaces are supported.
+tmux is installed automatically when Homebrew is available. If Homebrew is
+missing, the interactive installer asks before installing it; --yes accepts
+that dependency setup for unattended installs.
 EOF
 }
 
@@ -151,11 +155,18 @@ cleanup() {
   if [ -n "$dmg_tmp" ] && [ -d "$dmg_tmp" ]; then
     rm -rf "$dmg_tmp"
   fi
+  if [ -n "$homebrew_install_tmp" ] && [ -f "$homebrew_install_tmp" ]; then
+    rm -f "$homebrew_install_tmp"
+  fi
 }
 trap cleanup EXIT INT TERM
 
 has_tty() {
   [ -t 1 ] && [ -r /dev/tty ] && [ -w /dev/tty ]
+}
+
+has_interactive_input() {
+  [ -r /dev/tty ] && [ -w /dev/tty ]
 }
 
 choose_install_dir() {
@@ -196,6 +207,73 @@ is_source_root() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is required. $2"
+}
+
+find_command_or_standard_path() {
+  command_name="$1"
+  command_path="$(command -v "$command_name" 2>/dev/null || true)"
+  if [ -n "$command_path" ] && [ -x "$command_path" ]; then
+    printf '%s\n' "$command_path"
+    return
+  fi
+
+  for command_path in "/opt/homebrew/bin/$command_name" "/usr/local/bin/$command_name"; do
+    if [ -x "$command_path" ]; then
+      printf '%s\n' "$command_path"
+      return
+    fi
+  done
+  return 1
+}
+
+confirm_homebrew_install() {
+  [ "$assume_yes" -eq 1 ] && return
+  has_interactive_input \
+    || die "tmux requires Homebrew. Install Homebrew manually, or rerun init.sh with --yes to approve automatic setup."
+
+  echo "Agent Remote needs tmux for persistent chats." > /dev/tty
+  echo "Homebrew is not installed. Install Homebrew and tmux now? [Y/n]: " > /dev/tty
+  read -r install_homebrew < /dev/tty
+  case "$install_homebrew" in
+    ''|y|Y|yes|YES) ;;
+    *) die "tmux was not installed; installation cancelled" ;;
+  esac
+}
+
+install_homebrew() {
+  confirm_homebrew_install
+  require_command /usr/bin/curl "Homebrew setup requires macOS curl."
+  homebrew_install_tmp="$(mktemp "${TMPDIR:-/tmp}/agent-remote-homebrew.XXXXXX")"
+  echo "Installing Homebrew so Agent Remote can install tmux..."
+  /usr/bin/curl -fsSL --proto '=https' --tlsv1.2 \
+    https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh \
+    -o "$homebrew_install_tmp" \
+    || die "failed to download the official Homebrew installer"
+  NONINTERACTIVE=1 /bin/bash "$homebrew_install_tmp" \
+    || die "Homebrew installation failed"
+  rm -f "$homebrew_install_tmp"
+  homebrew_install_tmp=""
+}
+
+ensure_tmux() {
+  tmux_path="$(find_command_or_standard_path tmux || true)"
+  if [ -n "$tmux_path" ]; then
+    echo "Using tmux at $tmux_path"
+    return
+  fi
+
+  brew_path="$(find_command_or_standard_path brew || true)"
+  if [ -z "$brew_path" ]; then
+    install_homebrew
+    brew_path="$(find_command_or_standard_path brew || true)"
+  fi
+  [ -n "$brew_path" ] || die "Homebrew was installed but could not be found"
+
+  echo "Installing tmux for persistent Agent Remote chats..."
+  "$brew_path" install tmux || die "failed to install tmux with Homebrew"
+  tmux_path="$(find_command_or_standard_path tmux || true)"
+  [ -n "$tmux_path" ] || die "tmux installation completed but tmux could not be found"
+  echo "Installed tmux at $tmux_path"
 }
 
 prepare_source() {
@@ -418,9 +496,6 @@ install_bundle() {
   fi
 
   echo "Installed Agent Remote to $destination"
-  if ! command -v tmux >/dev/null 2>&1; then
-    echo "Warning: tmux is not installed. Install it with 'brew install tmux' for persistent terminal sessions."
-  fi
   if [ "$launch_app" -eq 1 ]; then
     /usr/bin/open "$destination"
     echo "Opened Agent Remote."
@@ -431,6 +506,7 @@ install_bundle() {
 [ "$(uname -m)" = "arm64" ] || die "Agent Remote currently supports Apple Silicon Macs only"
 require_command /usr/bin/ditto "This installer requires macOS ditto."
 require_command /usr/bin/plutil "This installer requires macOS plutil."
+ensure_tmux
 
 choose_install_dir
 if [ -n "$app_bundle" ]; then

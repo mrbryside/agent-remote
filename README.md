@@ -32,8 +32,10 @@ curl -fsSL https://raw.githubusercontent.com/mrbryside/agent-remote/main/init.sh
 The normal installer requires only macOS 13+ on Apple Silicon; users do not
 need Node.js, Rust, Xcode, or a source checkout. Use `--no-launch` when the app
 should not open after installation. `tmux` remains a machine dependency for
-persistent terminal sessions; install it with `brew install tmux` if the
-installer prints that warning. The desktop app adds the standard Homebrew and
+persistent terminal sessions, so the installer checks it before copying the
+app and installs it with Homebrew when needed. If Homebrew is missing, an
+interactive run asks before bootstrapping it; `--yes` explicitly approves that
+step for an unattended install. The desktop app adds the standard Homebrew and
 per-user Grok tool directories to its sidecar search path, so Finder launches
 find an already-installed `tmux` and `grok` too. The app bundles its own Node
 runtime and pinned `cloudflared`.
